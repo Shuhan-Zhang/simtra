@@ -17,6 +17,7 @@ import {
   abTopMovers, isCrossBreakdown, normalizeBreakdowns, pct, signedPp,
 } from "./ab-analysis.js";
 import * as api from "./api.js";
+import { snapshotAudience, describeAudience, audienceHeader, audienceScope } from "./audience.js";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -33,6 +34,7 @@ const els = {
   summary: $("summary"),
   summaryLabel: $("summary-label"),
   summaryText: $("summary-text"),
+  summaryAudience: $("summary-audience"),
   progress: $("progress"),
   progressFill: $("progress-fill"),
   progressLabel: $("progress-label"),
@@ -105,6 +107,18 @@ const SF_FALLBACK = { slug: "sf", display: "San Francisco", bbox: { ...MAP.bbox 
 
 const citySlug = () => state.city?.slug || "sf";
 
+function currentAudience() {
+  return snapshotAudience({
+    city: state.city, filters: state.filters,
+    sourceRecords: state.filterSourceRecords, residents: state.residents,
+  });
+}
+
+function setRunAudience(audience) {
+  const info = describeAudience(audience);
+  els.summaryAudience.textContent = [info.title, info.qualification, info.location].filter(Boolean).join(" · ");
+}
+
 const FILTER_OCCUPATION_LABEL = {
   management_business: "management / business",
   software_tech: "software / tech",
@@ -161,6 +175,8 @@ function syncFilterButton() {
   els.filterBtn.setAttribute("aria-label", els.filterBtn.title);
   els.filterCount.textContent = String(count);
   count ? show(els.filterCount) : hide(els.filterCount);
+  els.returnBtn.querySelector("span").textContent = count ? "audience overview" : "whole city";
+  els.returnBtn.setAttribute("aria-label", count ? "Return to the sampled audience overview" : "Return to the whole city");
 }
 
 // fetch LLM chatter for the residents now on screen (sparse, batched, best-effort)
@@ -286,20 +302,26 @@ function setIdleStatus() {
   const n = state.residents.toLocaleString();
   const display = (state.city?.display || "san francisco").toLowerCase();
   const kd = state.city?.knowledge_date;
-  const summary = filterSummary();
-  // the clock = the date up to which the residents know the news (their knowledge cutoff)
-  const detail = summary
-    ? `<span class="status-clock">filtered: ${escapeHtml(summary)}</span>`
-    : kd
-      ? `<span class="status-clock">residents know the news up to ${escapeHtml(fmtDate(kd))}</span>`
-      : "";
-  if (window.innerWidth < 560) {
-    els.status.innerHTML = `${n}${summary ? " filtered" : ""} residents`; // compact on phones
+  const audience = describeAudience(currentAudience());
+  els.status.classList.toggle("status--audience", !!audience.filterCount);
+  if (audience.filterCount) {
+    els.status.innerHTML = `<span class="status-audience-label">Current audience · ${audience.filterCount} filters</span>
+      <strong class="status-persona">${escapeHtml(audience.title)}</strong>
+      ${audience.qualification ? `<span class="status-persona-detail">${escapeHtml(audience.qualification)}</span>` : ""}
+      <span class="status-persona-detail">${escapeHtml(audience.location)}</span>
+      <span class="status-sample">${n} simulated residents in this audience</span>`;
   } else {
-    els.status.innerHTML = `${escapeHtml(display)} · ${n} residents${detail}`;
+    const clock = kd ? `<span class="status-clock">residents know the news up to ${escapeHtml(fmtDate(kd))}</span>` : "";
+    els.status.innerHTML = `${escapeHtml(display)} · ${n} simulated residents${clock}`;
   }
   show(els.status);
 }
+
+// The audience can wrap to several lines. Keep news below it at every viewport.
+function positionContext() {
+  $("ui").style.setProperty("--context-bottom", `${Math.ceil(els.status.getBoundingClientRect().bottom) + 10}px`);
+}
+new ResizeObserver(positionContext).observe(els.status);
 
 function fmtDate(iso) {
   const d = new Date(iso);
@@ -514,7 +536,7 @@ async function applyPopulationFilters(filters) {
     if (count) {
       const source = sim?.source_records;
       toast(source
-        ? `Filtered sample ready · ${source.toLocaleString()} Census records matched`
+        ? `Filtered sample ready · ${source.toLocaleString()} Census ${source === 1 ? "record" : "records"} matched`
         : "Filtered sample ready");
     } else {
       toast("Showing the whole city.");
@@ -583,6 +605,7 @@ async function onSelectCity(slug) {
 // keep the status text right-sized across orientation changes
 window.addEventListener("resize", () => {
   if (state.phase === "idle" || state.phase === "results") setIdleStatus();
+  positionContext();
 });
 
 // random points inside the map bbox, for the offline preview only
@@ -678,6 +701,9 @@ async function runPrediction(question) {
   if (!question) return;
   if (state.phase === "error" || !state.simId) { toast("Predictions need the backend — it's currently unreachable."); return; }
 
+  const audience = currentAudience();
+  setRunAudience(audience);
+
   cleanupBranch();
   const myReq = ++state.reqId;
   state.abort = new AbortController();
@@ -735,7 +761,7 @@ async function runPrediction(question) {
     }, signal);
     if (myReq !== state.reqId) return;
 
-    state.lastResult = { ...result, framing, question: pollQuestion };
+    state.lastResult = { ...result, framing, question: pollQuestion, audience };
 
     // p_yes drives the on-map green/red reveal for both paths; for options it is the
     // winning option's share, so the crowd still visualizes the result's strength.
@@ -823,6 +849,9 @@ async function runMarketingTest() {
   if (input.marketingText.length > 4000) { setMarketingError("Planned post copy must be at most 4,000 characters."); return; }
   if (state.phase === "error" || !state.mainBranch) { setMarketingError("Marketing tests need the backend — it's currently unreachable."); return; }
 
+  const audience = currentAudience();
+  setRunAudience(audience);
+
   state.lastMarketingInput = input;
   const myReq = ++state.reqId;
   state.abort = new AbortController();
@@ -897,7 +926,7 @@ async function runMarketingTest() {
     if (completedBranch) api.deleteBranch(completedBranch);
     closeMarketing(false);
 
-    state.lastResult = { ...result, kind: "marketing", framing: parsed.framing, question: pollQuestion };
+    state.lastResult = { ...result, kind: "marketing", framing: parsed.framing, question: pollQuestion, audience };
     const exposed = result.exposed || {};
     const verdicts = assignVerdicts(map.agents, exposed.p_yes, `${pollQuestion}\n${input.marketingText}`, map.proj.planarSize);
     map.setRationales(exposed.sample_rationales || []);
@@ -964,6 +993,8 @@ async function runAbTest() {
   }
 
   state.lastAbInput = input;
+  const audience = currentAudience();
+  setRunAudience(audience);
   closeAbTest(false);
   const myReq = ++state.reqId;
   state.abort = new AbortController();
@@ -987,13 +1018,13 @@ async function runAbTest() {
       population: "all",
     }, signal);
     if (myReq !== state.reqId) return;
-    state.lastResult = result;
+    state.lastResult = { ...result, audience };
     const verdicts = assignVerdicts(map.agents, result.a_share, input.question, map.proj.planarSize);
     map.setRationales(result.sample_rationales || []);
     els.progress.classList.remove("indeterminate");
     els.progressLabel.textContent = `0 / ${map.agents.length.toLocaleString()} responses`;
     map.onProgress = onRevealProgress;
-    map.onRevealComplete = () => { if (myReq === state.reqId) showAbResults(result); };
+    map.onRevealComplete = () => { if (myReq === state.reqId) showAbResults(state.lastResult); };
     state.phase = "reveal";
     map.startReveal(verdicts, TIMING.revealMs);
   } catch (err) {
@@ -1028,11 +1059,10 @@ function formatPct(value) {
 
 function hydraMeta(result) {
   const hydra = result?.hydra;
-  if (!hydra) return "";
-  const status = hydra.status === "connected" ? "connected" : hydra.status || "disabled";
+  if (!hydra || hydra.status !== "connected" || !Number(hydra.chunks)) return "";
   const sourceTitles = (hydra.sources || []).map((source) => source.title).filter(Boolean);
   const sourceText = sourceTitles.length ? ` · ${sourceTitles.slice(0, 3).join(", ")}` : "";
-  return `<div class="res-meta res-hydra">HydraDB ${escapeHtml(status)} · ${Number(hydra.chunks || 0)} evidence chunks${escapeHtml(sourceText)}</div>`;
+  return `<div class="res-meta res-hydra">Additional source context${escapeHtml(sourceText)}</div>`;
 }
 
 function showMarketingResults(result) {
@@ -1054,6 +1084,7 @@ function showMarketingResults(result) {
   const n = exposed.n_agents ?? map.agents.length;
 
   els.resultCard.innerHTML = `
+    ${audienceHeader(result.audience, n)}
     <div class="res-q">${escapeHtml(result.question || exposed.question || "")}</div>
     <div class="res-cf-headline">
       <span class="res-cf-delta ${deltaClass}">${signedDelta}</span>
@@ -1071,15 +1102,18 @@ function showMarketingResults(result) {
         <span class="res-cf-ci">95% CI ${formatPct(exposed.ci_low)}–${formatPct(exposed.ci_high)}</span>
       </div>
     </div>
-    <div class="res-meta">${n.toLocaleString()} synthetic residents · map shows exposed arm</div>
+    <div class="res-scope">${audienceScope(result.audience)} · same audience in both arms</div>
     ${hydraMeta(exposed)}
     <div class="res-cf-note">Model-based comparison under simulated exposure of every sampled resident to the planned copy—not an estimate of organic reach. Each arm has its own 95% CI; no separate CI was estimated for the delta, so treat small shifts cautiously.</div>
-    ${rationales.length ? `<div class="res-why"><div class="res-why-label">what exposed residents said</div><ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul></div>` : ""}
+    ${rationales.length ? `<div class="res-why"><div class="res-why-label">simulated responses after exposure</div><ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul></div>` : ""}
     <div class="res-actions"><button id="res-edit-marketing" class="btn btn-primary">Edit test</button><button id="res-dismiss" class="btn">Dismiss</button></div>`;
   show(els.resultCard);
   $("res-edit-marketing").addEventListener("click", () => openMarketing({ preserve: true }));
   $("res-dismiss").addEventListener("click", dismissResults);
-  requestAnimationFrame(() => $("res-edit-marketing").focus());
+  requestAnimationFrame(() => {
+    els.resultCard.scrollTop = 0;
+    $("res-edit-marketing").focus({ preventScroll: true });
+  });
 }
 
 function showResults(result) {
@@ -1116,10 +1150,11 @@ function showResults(result) {
 
   const renderPanel = () => {
     els.resultCard.innerHTML = `
+      ${audienceHeader(result.audience, n)}
       <div class="res-q">${escapeHtml(result.question || "")}</div>
       <div class="res-headline">
         <span class="res-pct">${pct}<span class="res-pct-sym">%</span></span>
-        <span class="res-verb">${belief ? "likely" : "vote yes"}</span>
+        <span class="res-verb">${belief ? "answer yes" : "vote yes"}</span>
       </div>
       <div class="res-bar">
         <div class="res-bar-yes" style="width:${pct}%"></div>
@@ -1129,11 +1164,12 @@ function showResults(result) {
         <span><i class="dot yes"></i>${belief ? "yes" : "support"} ${pct}%</span>
         <span><i class="dot no"></i>${belief ? "no" : "oppose"} ${noPct}%</span>
       </div>
-      <div class="res-meta">${n.toLocaleString()} synthetic residents · 95% CI ${ciLow}–${ciHigh}%</div>
+      <div class="res-scope">${audienceScope(result.audience)}</div>
+      <div class="res-meta">Model estimate · 95% interval ${ciLow}–${ciHigh}%</div>
       ${hydraMeta(result)}
       ${breakdowns.length ? abAdvancedSection({ a_share: yesShare }, segments, breakdowns) : ""}
       ${rationales.length ? `<div class="res-why">
-        <div class="res-why-label">what people said</div>
+        <div class="res-why-label">simulated responses from this audience</div>
         <ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>
       </div>` : ""}
       <div class="res-actions">
@@ -1189,18 +1225,20 @@ function showOptionResults(result) {
   }).join("");
 
   els.resultCard.innerHTML = `
+    ${audienceHeader(result.audience, n)}
     <div class="res-q">${escapeHtml(result.question || "")}</div>
     <div class="res-options">${rows}</div>
-    <div class="res-meta">${n.toLocaleString()} synthetic residents</div>
+    <div class="res-scope">${audienceScope(result.audience)}</div>
     ${hydraMeta(result)}
     ${rationales.length ? `<div class="res-why">
-      <div class="res-why-label">what people said</div>
+      <div class="res-why-label">simulated responses from this audience</div>
       <ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>
     </div>` : ""}
     ${RESULT_ACTIONS}
   `;
   show(els.resultCard);
   wireResultActions();
+  requestAnimationFrame(() => { els.resultCard.scrollTop = 0; });
 }
 
 const AB_DIM_LABEL = {
@@ -1317,7 +1355,7 @@ function abSegmentRow(segment, showDimension) {
       <span class="ab-a" style="width:${a}%"></span><span class="ab-b" style="width:${b}%"></span>
     </div>
     <div class="ab-group-meta">
-      <span class="ab-swing lean-${lean}">${signedPp(segment.swingPp)} pp vs city</span>
+      <span class="ab-swing lean-${lean}">${signedPp(segment.swingPp)} pp vs overall audience</span>
       <span>${Math.round(segment.weight).toLocaleString()} weighted · ${segment.n.toLocaleString()} agents</span>
       ${thin ? `<span class="ab-thin">thin sample</span>` : ""}
     </div>
@@ -1357,8 +1395,8 @@ function abHeatmap(breakdown, overallAShare) {
     </table>
   </div>
   <div class="ab-matrix-key">
-    <span><i class="dot ab-a-dot"></i>leans ${abPanel.labels.a} vs city</span>
-    <span><i class="dot ab-b-dot"></i>leans ${abPanel.labels.b} vs city</span>
+    <span><i class="dot ab-a-dot"></i>leans ${abPanel.labels.a} vs overall audience</span>
+    <span><i class="dot ab-b-dot"></i>leans ${abPanel.labels.b} vs overall audience</span>
     <span class="ab-thin">shaded stripe = thin sample (&lt;${AB_MIN_SEGMENT_N} agents)</span>
   </div>`;
 }
@@ -1382,9 +1420,9 @@ function abPanelBody(result, segments, breakdowns) {
   if (abPanel.view === "movers") {
     const movers = abTopMovers(segments);
     if (!movers.length) {
-      return `<p class="ab-empty">No segment reached ${AB_MIN_SEGMENT_N} simulated agents, so no group is stable enough to rank.</p>`;
+      return `<p class="ab-empty">No group has at least ${AB_MIN_SEGMENT_N} simulated residents to display.</p>`;
     }
-    return `<p class="ab-lede">Segments that diverge most from the city-wide ${pct(overall)}% ${abPanel.labels.a}.</p>
+    return `<p class="ab-lede">Groups within this sample that differ most from the overall audience's ${pct(overall)}% ${abPanel.labels.a}.</p>
       ${movers.map((segment) => abSegmentRow(segment, true)).join("")}`;
   }
   if (abPanel.view === "cross") {
@@ -1392,7 +1430,7 @@ function abPanelBody(result, segments, breakdowns) {
     if (!crosses.length) return `<p class="ab-empty">No cross-tabs in this result.</p>`;
     const active = crosses.find((b) => b.dimension === abPanel.cross) || crosses[0];
     return `${abChips(crosses, active.dimension, "cross")}
-      <p class="ab-lede">${abPanel.labels.a} share in each cell, versus the city-wide ${pct(overall)}%.</p>
+      <p class="ab-lede">${abPanel.labels.a} share in each cell, versus the overall audience's ${pct(overall)}%.</p>
       ${abHeatmap(active, overall)}`;
   }
   const singles = breakdowns.filter((b) => !isCrossBreakdown(b));
@@ -1450,16 +1488,18 @@ function showAbResults(result) {
 
   const renderPanel = () => {
     els.resultCard.innerHTML = `
+      ${audienceHeader(result.audience, result.n_agents)}
       <div class="res-q">${escapeHtml(result.question || "")}</div>
       <div class="ab-headline"><strong>${winner}</strong><span>${marginText}</span></div>
       <div class="ab-split ab-overall" role="img" aria-label="Variant A ${aPct} percent, Variant B ${bPct} percent">
         <span class="ab-a" style="width:${aPct}%"></span><span class="ab-b" style="width:${bPct}%"></span>
       </div>
       <div class="res-legend ab-legend"><span><i class="dot ab-a-dot"></i>Variant A ${aPct}%</span><span><i class="dot ab-b-dot"></i>Variant B ${bPct}%</span></div>
-      <div class="res-meta">${result.n_agents.toLocaleString()} synthetic residents · A 95% CI ${pct(aCi[0])}–${pct(aCi[1])}% · ${Math.round(result.n_eff || 0).toLocaleString()} effective sample</div>
+      <div class="res-scope">${audienceScope(result.audience)}</div>
+      <div class="res-meta">A · 95% model interval ${pct(aCi[0])}–${pct(aCi[1])}%</div>
       ${hydraMeta(result)}
       ${breakdowns.length ? abAdvancedSection(result, segments, breakdowns) : ""}
-      ${rationales.length ? `<div class="res-why"><div class="res-why-label">what people said</div><ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul></div>` : ""}
+      ${rationales.length ? `<div class="res-why"><div class="res-why-label">simulated responses from this audience</div><ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul></div>` : ""}
       <p class="ab-note">Simulated, PUMS-weighted preference under full exposure. Segment and cross-tab figures are model estimates with no per-group significance test — read them as direction, not proof. Not causal proof or organic reach.</p>
       <div class="res-actions"><button id="res-edit-ab" class="btn btn-primary">Edit test</button><button id="res-dismiss" class="btn">Dismiss</button></div>`;
     $("res-edit-ab").addEventListener("click", openAbTest);
@@ -1726,7 +1766,9 @@ async function showAbDemo() {
   try {
     const res = await fetch("fixtures/ab-sample.json");
     if (!res.ok) throw new Error(`fixture ${res.status}`);
-    showAbResults(await res.json());
+    const result = await res.json();
+    result.audience = snapshotAudience({ city: { display: "San Francisco" }, residents: result.n_agents });
+    showAbResults(result);
   } catch (err) {
     console.error(err);
     toast(`Couldn't load the A/B demo fixture: ${err.message}`);

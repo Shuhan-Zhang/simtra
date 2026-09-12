@@ -12,7 +12,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400..700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://use.typekit.net/bsk0vur.css" />
 
-  <link rel="stylesheet" href="styles.css?v=ui-overhaul-2" />
+  <link rel="stylesheet" href="styles.css?v=audience-2" />
   <link rel="preconnect" href="https://sf-digital-twin-tp.fly.dev" />
 </head>
 <body>
@@ -67,6 +67,7 @@
       <!-- query summary + response progress (loading state, bottom-center) -->
       <div id="summary" class="summary hidden" aria-live="polite">
         <div id="summary-label" class="summary-label">PREDICTING</div>
+        <div id="summary-audience" class="summary-audience"></div>
         <div id="summary-text" class="summary-text"></div>
         <div id="progress" class="progress">
           <div class="progress-track"><div id="progress-fill" class="progress-fill"></div></div>
@@ -262,6 +263,6 @@
     <div id="toast" class="toast hidden" role="alert" aria-live="assertive"></div>
   </div>
 
-  <script type="module" src="src/app.js"></script>
+  <script type="module" src="src/app.js?v=audience-2"></script>
 </body>
 </html>
