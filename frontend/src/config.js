@@ -30,12 +30,22 @@ export const SIM = {
   tick_seconds: 30,
 };
 
+// Today's date as YYYY-MM-DD (UTC).
+export function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 // Local demo defaults to Gemini; callers can select another configured backend
 // model with `?model=...`. Production keeps its existing model.
+// The local as-of date is today (override with `?as_of=YYYY-MM-DD`): persona
+// memory recalls only events dated on or before the poll date, so a live local
+// poll must be dated today to see what was just posted. Production keeps its
+// pinned date.
+const AS_OF_OVERRIDE = /^\d{4}-\d{2}-\d{2}$/.test(QUERY.get("as_of") || "") ? QUERY.get("as_of") : null;
 export const PREDICT = {
   branch_ticks: 2,
-  as_of_date: "2026-06-13",
-  model: QUERY.get("model") || (LOCAL_BACKEND ? "gemini-3.5-flash" : "claude-sonnet-4-6"),
+  as_of_date: AS_OF_OVERRIDE || (LOCAL_BACKEND ? today() : "2026-06-13"),
+  model: QUERY.get("model") || (LOCAL_BACKEND ? "gemini-3.5-flash-lite" : "claude-sonnet-4-6"),
 };
 
 // Animation timing (ms).

@@ -33,6 +33,11 @@ pub struct Population {
     pub n: usize,
     /// The city this population belongs to (drives seeding + prompt context).
     pub profile: Arc<CityProfile>,
+    /// Canonical description of the demographic filters the source records were
+    /// narrowed by before sampling; empty for the unfiltered population. Part of the
+    /// population's identity for the memory layer, since the same (city, seed, n)
+    /// yields different residents under different filters.
+    pub filter_key: String,
 }
 
 impl Population {
@@ -100,6 +105,7 @@ pub fn build_population_with(
         seed,
         n,
         profile,
+        filter_key: String::new(),
     }
 }
 
@@ -398,32 +404,56 @@ fn pretty_race(r: &str) -> &'static str {
     }
 }
 
-/// Coarse occupation bucket from 2018 OCCP code ranges.
-pub fn occupation_label(occp: u32, esr: u8) -> String {
+/// Stable key for the coarse occupation bucket derived from 2018 OCCP ranges.
+/// Kept separate from the prose label so API filters do not depend on copy.
+pub fn occupation_key(occp: u32, esr: u8) -> &'static str {
     if esr == 3 {
-        return "currently unemployed".to_string();
+        return "unemployed";
     }
     if matches!(esr, 6 | 0) || occp == 0 {
-        return "not in the workforce".to_string();
+        return "not_in_workforce";
     }
-    let s = match occp {
-        10..=960 => "a manager or business professional",
-        1000..=1240 => "a software engineer / tech worker",
-        1300..=1560 => "an engineer",
-        1600..=1980 => "a scientist or analyst",
-        2000..=2060 => "a social-services worker",
-        2100..=2180 => "a lawyer or legal worker",
-        2200..=2555 => "a teacher or educator",
-        2600..=2920 => "an artist, designer, or media worker",
-        3000..=3550 => "a healthcare professional",
-        3600..=4655 => "a service worker",
-        4700..=5940 => "a sales or office worker",
-        6000..=7630 => "a construction or trades worker",
-        7700..=9760 => "a production or transportation worker",
-        9800..=9830 => "in the military",
+    match occp {
+        10..=960 => "management_business",
+        1000..=1240 => "software_tech",
+        1300..=1560 => "engineer",
+        1600..=1980 => "science_analysis",
+        2000..=2060 => "social_services",
+        2100..=2180 => "legal",
+        2200..=2555 => "education",
+        2600..=2920 => "arts_media",
+        3000..=3550 => "healthcare",
+        3600..=4655 => "service",
+        4700..=5940 => "sales_office",
+        6000..=7630 => "construction_trades",
+        7700..=9760 => "production_transportation",
+        9800..=9830 => "military",
+        _ => "other",
+    }
+}
+
+/// Human-readable occupation label used in persona prose.
+pub fn occupation_label(occp: u32, esr: u8) -> String {
+    match occupation_key(occp, esr) {
+        "unemployed" => "currently unemployed",
+        "not_in_workforce" => "not in the workforce",
+        "management_business" => "a manager or business professional",
+        "software_tech" => "a software engineer / tech worker",
+        "engineer" => "an engineer",
+        "science_analysis" => "a scientist or analyst",
+        "social_services" => "a social-services worker",
+        "legal" => "a lawyer or legal worker",
+        "education" => "a teacher or educator",
+        "arts_media" => "an artist, designer, or media worker",
+        "healthcare" => "a healthcare professional",
+        "service" => "a service worker",
+        "sales_office" => "a sales or office worker",
+        "construction_trades" => "a construction or trades worker",
+        "production_transportation" => "a production or transportation worker",
+        "military" => "in the military",
         _ => "a worker",
-    };
-    s.to_string()
+    }
+    .to_string()
 }
 
 fn sample_work_cell(tiles: &TilesDb, rec: &PumsRecord, rng: &mut impl Rng, profile: &CityProfile) -> Cell {
