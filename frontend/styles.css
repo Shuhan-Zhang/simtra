@@ -339,6 +339,7 @@ body {
   box-shadow: var(--sh-2);
   transition: width var(--t-mid) var(--ease), box-shadow var(--t) var(--ease);
 }
+.ask-head { display: flex; align-items: center; padding: 2px 0 0 2px; }
 .ask-main { display: flex; align-items: center; gap: var(--s-2); min-height: calc(var(--ctl) - 2 * var(--s-2)); }
 /* who gets asked: a chip at the head of the box, blue when a filter is on */
 .audience-chip {
@@ -423,10 +424,12 @@ body {
 .ask[data-state="idle"] .ask-enter, .ask[data-state="idle"] .ask-search, .ask[data-state="idle"] .ask-label { display: none; }
 .ask[data-state="idle"] .ask-input { display: block; opacity: 1; pointer-events: none; margin-top: 4px; }
 .ask[data-state="idle"] .audience-chip { display: inline-flex; }
+.ask[data-state="idle"] .ask-head, .ask[data-state="input"] .ask-head { display: flex; }
+.ask[data-state="busy"] .ask-head { display: none; }
+.ask { gap: var(--s-2); }
 .ask[data-state="idle"] .ask-send { display: flex; }
 .ask[data-state="input"] { width: min(620px, 90vw); border-radius: var(--r-xl); }
 .ask[data-state="input"] .ask-main { align-items: flex-start; }
-.ask[data-state="input"] .audience-chip { margin-top: 2px; }
 .ask[data-state="input"] .ask-label, .ask[data-state="input"] .ask-search { display: none; }
 .ask[data-state="input"] .ask-input { opacity: 1; pointer-events: auto; margin-top: 4px; }
 .ask[data-state="input"] .ask-send { display: flex; }
