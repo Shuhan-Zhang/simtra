@@ -30,7 +30,7 @@ async (page) => {
     await page.getByRole('group',{name:'Ask a verified data question'}).click();
     await page.getByRole('textbox',{name:'Verified data question',exact:true}).fill(question);
     const pending=page.waitForResponse(r=>r.url()===api+'/data-query');
-    await page.getByRole('button',{name:'Submit question'}).click();
+    await page.getByRole('button',{name:'Send',exact:true}).click();
     const response=await (await pending).json();
     await page.locator('#verified-heading').waitFor();
     return response;

@@ -88,6 +88,27 @@
 
 /* ── composer: an inset well in the ask box's idiom ───────────────────── */
 .fp-composer { padding: var(--s-4); border-bottom: var(--hair) solid var(--sep); }
+/* quick filters over the log */
+.fp-views { display: flex; gap: var(--s-1); padding: var(--s-3) var(--s-4) 0; }
+.fp-view {
+  border: 0; padding: 5px 11px; border-radius: var(--r-full);
+  background: transparent; color: var(--ink-2);
+  font-family: var(--font); font-size: var(--fs-footnote); font-weight: var(--fw-med); line-height: 1;
+  cursor: pointer; transition: background var(--t) var(--ease), color var(--t) var(--ease);
+}
+.fp-view:hover { background: var(--fill); color: var(--ink); }
+.fp-view[aria-selected="true"] { background: var(--ink); color: #fff; }
+.fp-view-n { color: inherit; opacity: .6; font-variant-numeric: var(--nums); }
+/* kind chip: detected from the text, tap to change */
+.fp-kind {
+  border: 0; flex: none; padding: 0 12px; height: 36px; border-radius: var(--r-full);
+  background: var(--fill); color: var(--ink-2);
+  font-family: var(--font); font-size: var(--fs-footnote); font-weight: var(--fw-med); line-height: 1;
+  cursor: pointer; transition: background var(--t) var(--ease), color var(--t) var(--ease);
+}
+.fp-kind:hover { background: var(--fill-hi); color: var(--ink); }
+.fp-kind[data-kind="incident"] { color: var(--no); }
+.fp-kind[data-kind="policy"] { color: var(--accent); }
 .fp-form { display: flex; flex-direction: column; gap: var(--s-2); }
 .fp-text, .fp-select, .fp-date-input {
   font-family: var(--font); color: var(--ink);

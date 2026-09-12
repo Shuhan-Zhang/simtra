@@ -38,7 +38,7 @@ async (page) => {
     await page.getByRole('group',{name:'Ask a prediction question'}).click();
     await page.getByRole('textbox',{name:'Predict anything',exact:true}).fill(fixture.question);
     check(await page.locator('#ask-input').inputValue()===fixture.question,'composer value before submit');
-    await page.getByRole('button',{name:'Submit question'}).click();
+    await page.getByRole('button',{name:'Send',exact:true}).click();
     await page.locator('#verified-heading').waitFor();
   };
   try {

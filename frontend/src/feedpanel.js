@@ -14,6 +14,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { BASE, today } from "./config.js";
+import { detectKind, nextKind } from "./detect-kind.js";
 import { buildEvidenceChartModel } from "./evidence-chart.js";
 import { createPersonaChart } from "./persona-chart.js?v=3";
 import { buildVerifiedDataModel, renderVerifiedData, bindVerifiedData, verifiedMapSelection } from "./verified-data.js";
@@ -25,6 +26,8 @@ const LINEAGE_LIMIT = 100;
 const PREVIEW_POSTS = 5;   // event posts near the top fetch their comment previews lazily
 const PREVIEW_N = 3;
 const COLLAPSE_KEY = "simtra.feed.collapsed";
+const VIEW_KEY = "simtra.feed.view";
+const VIEWS = [["all", "All"], ["news", "News"], ["asks", "Asks"], ["data", "Data"]];
 const TEST_KINDS = {
   poll: "poll",
   ab_test: "A/B test",
@@ -148,6 +151,8 @@ const state = {
   busy: 0,              // in-flight reacts (pauses refresh)
   autoCollapsed: false, // folded away while a result card is up; not persisted
   collapsed: false,
+  view: "all",           // quick filter over the log: all | news | asks | data
+  kindManual: false,     // the poster picked the kind by hand; stop auto-detecting
   refreshTimer: null,
   loadSeq: 0,
   root: null,
@@ -178,20 +183,19 @@ function build(root) {
       <div class="fp-status" aria-live="polite"></div>
     </div>
     <div id="fp-body" class="fp-body">
+      <div class="fp-views" role="tablist" aria-label="Show">
+        ${VIEWS.map(([v, label]) => `<button type="button" role="tab" class="fp-view" data-view="${v}" aria-selected="${v === "all"}">${label}<span class="fp-view-n"></span></button>`).join("")}
+      </div>
       <div class="fp-composer">
         <form class="fp-form fp-form-post" data-mode="post">
           <textarea class="fp-text" name="text" rows="2" maxlength="2000" required
-                    placeholder="Add something the residents will remember…"
+                    placeholder="What happened? Residents will remember it."
                     aria-label="What happened"></textarea>
           <div class="fp-row">
-            <select class="fp-select" name="kind" aria-label="Kind of event">
-              <option value="news">news</option>
-              <option value="policy">policy</option>
-              <option value="incident">incident</option>
-              <option value="rumor">rumor</option>
-            </select>
+            <button class="fp-kind" type="button" data-kind="news" title="Detected from the text · tap to change"
+                    aria-label="Kind: news. Tap to change.">news</button>
             <input class="fp-date-input" type="date" name="as_of_date" aria-label="Date it happened" />
-            <button class="fp-primary" type="submit">Remember</button>
+            <button class="fp-primary" type="submit">Post</button>
           </div>
           <div class="fp-error" role="alert"></div>
         </form>
@@ -206,10 +210,44 @@ function build(root) {
     status: q(".fp-status"),
     body: q("#fp-body"),
     formPost: q(".fp-form-post"),
+    kind: q(".fp-kind"),
+    views: q(".fp-views"),
     notice: q(".fp-notice"),
     thread: q(".fp-thread"),
   };
   state.el.formPost.elements.as_of_date.value = today();
+  const text = state.el.formPost.elements.text;
+  text.addEventListener("input", () => { if (!state.kindManual) setKind(detectKind(text.value)); if (!text.value.trim()) state.kindManual = false; });
+  state.el.kind.addEventListener("click", () => { state.kindManual = true; setKind(nextKind(state.el.kind.dataset.kind)); });
+  state.el.views.addEventListener("click", (e) => {
+    const b = e.target.closest(".fp-view");
+    if (b) setView(b.dataset.view);
+  });
+}
+
+function setKind(kind) {
+  const b = state.el.kind;
+  b.dataset.kind = kind;
+  b.textContent = kind;
+  b.setAttribute("aria-label", `Kind: ${kind}. Tap to change.`);
+}
+
+// quick filters over the log; "news" also shows the city's baseline headlines
+const VIEW_OF = { event: "news", test: "asks", data_query: "data" };
+function inView(item) { return state.view === "all" || VIEW_OF[item.type] === state.view; }
+function setView(view) {
+  state.view = VIEWS.some(([v]) => v === view) ? view : "all";
+  try { localStorage.setItem(VIEW_KEY, state.view); } catch { /* ignore */ }
+  syncViews();
+  renderThread();
+}
+function syncViews() {
+  const counts = { all: state.items.length, news: 0, asks: 0, data: 0 };
+  for (const i of state.items) counts[VIEW_OF[i.type]] = (counts[VIEW_OF[i.type]] || 0) + 1;
+  for (const b of state.el.views.querySelectorAll(".fp-view")) {
+    b.setAttribute("aria-selected", b.dataset.view === state.view ? "true" : "false");
+    b.querySelector(".fp-view-n").textContent = counts[b.dataset.view] ? ` ${counts[b.dataset.view]}` : "";
+  }
 }
 
 // ── public api ─────────────────────────────────────────────────────────────
@@ -245,6 +283,7 @@ export function initFeedPanel({
   build(root);
 
   try { state.collapsed = localStorage.getItem(COLLAPSE_KEY) === "1"; } catch { /* private mode */ }
+  try { const v = localStorage.getItem(VIEW_KEY); if (VIEWS.some(([k]) => k === v)) state.view = v; } catch { /* private mode */ }
   applyCollapsed();
   state.el.collapse.addEventListener("click", () => {
     state.autoCollapsed = false;
@@ -394,7 +433,9 @@ function renderThread() {
   const { thread } = state.el;
   const seen = new Set();
   const frag = document.createDocumentFragment();
+  syncViews();
   for (const item of state.items) {
+    if (!inView(item)) continue;
     seen.add(item.id);
     let post = state.posts.get(item.id);
     if (!post) {
@@ -412,14 +453,16 @@ function renderThread() {
   }
   for (const id of [...state.posts.keys()]) if (!seen.has(id)) state.posts.delete(id);
   // the city's baseline headlines: what residents already know, as plain posts
-  const news = state.getNews() || [];
+  const news = state.view === "all" || state.view === "news" ? (state.getNews() || []) : [];
   for (const a of news.slice(0, 6)) frag.appendChild(newsPost(a));
-  if (!state.items.length && !news.length) {
+  if (!frag.childElementCount) {
     const empty = document.createElement("div");
     empty.className = "fp-empty";
     empty.textContent = state.memoryOff
       ? "Nothing to remember while persona memory is off."
-      : "The residents remember nothing yet. Add an event and see how they take it.";
+      : state.view === "asks" ? "No questions asked yet. Ask the city something from the box below."
+      : state.view === "data" ? "No data queries yet. Try \"show the age distribution\"."
+      : "The residents remember nothing yet. Post an event and see how they take it.";
     frag.appendChild(empty);
   }
   thread.replaceChildren(frag);
@@ -825,14 +868,16 @@ async function postEvent(ev) {
   err.textContent = "";
   const text = f.elements.text.value.trim();
   const as_of_date = f.elements.as_of_date.value || today();
-  const kind = f.elements.kind.value || "news";
+  const kind = state.el.kind.dataset.kind || detectKind(text);
   if (!text) { err.textContent = "Write what happened first."; f.elements.text.focus(); return; }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(as_of_date)) { err.textContent = "Pick a valid date."; return; }
   const btn = f.querySelector(".fp-primary");
-  btn.disabled = true; btn.textContent = "Remembering…";
+  btn.disabled = true; btn.textContent = "Posting…";
   try {
     const { event } = await api.postEvent(state.getCity(), { text, as_of_date, kind });
     f.elements.text.value = "";
+    state.kindManual = false; setKind("news");
+    if (state.view !== "all" && state.view !== "news") setView("all");
     const item = { type: "event", ...event, reaction_count: 0, sentiment: {}, reactions: [] };
     state.items = [item, ...state.items.filter((e) => e.id !== item.id)];
     renderThread();
@@ -841,7 +886,7 @@ async function postEvent(ev) {
   } catch (e) {
     err.textContent = friendly(e);
   } finally {
-    btn.textContent = "Remember";
+    btn.textContent = "Post";
     syncHeader();
   }
 }

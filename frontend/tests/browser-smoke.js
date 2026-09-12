@@ -111,16 +111,20 @@ async (page) => {
     await page.evaluate(async()=>{const {state}=await import('/src/app.js');const api=await import('/src/api.js');await api.deleteBranch(state.branchId);});
     check(!(await summary()).active && await page.locator('#evidence-panel').count()===0,'deleting branch clears chart');await report('deleting prediction branch clears selection');
     await page.getByRole('button',{name:'Dismiss',exact:true}).click();
-    await page.getByRole('button',{name:'Test two variants'}).click();
+    // A/B is a mode of the one composer: open it, pick A/B, fill the question and variants, send.
+    await page.getByRole('group',{name:'Ask a prediction question'}).click();
+    await page.getByRole('radio',{name:'A/B',exact:true}).click();
     await page.getByLabel('Evaluation question',{exact:true}).fill('Which transit message is clearer?');
     await page.getByLabel('Variant A',{exact:true}).fill('More frequent buses.');await page.getByLabel('Variant B',{exact:true}).fill('Shorter commutes.');
-    await page.getByRole('button',{name:'Run test',exact:true}).click();await page.locator('#result-card').waitFor({state:'visible'});
+    await page.getByRole('button',{name:'Send',exact:true}).click();await page.locator('#result-card').waitFor({state:'visible'});
     check(await page.locator('.ab-headline').isVisible(),'A/B result');await openChart();await choose('gender','women');
     check((await page.locator('button[data-key="women"]').innerText()).includes('Variant A: 60.0%'),'A/B chart shares');await report('A/B result and chart');
     await page.getByRole('button',{name:'Dismiss',exact:true}).click();
-    await page.getByRole('button',{name:'Test planned marketing'}).click();
-    await page.locator('#marketing-question').fill('Should the city expand public transit?');await page.locator('#marketing-copy').fill('More frequent buses for every neighborhood.');
-    await page.locator('#marketing-submit').click();await page.locator('#result-card').waitFor({state:'visible',timeout:15000});
+    // the post test is the third composer mode
+    await page.getByRole('group',{name:'Ask a prediction question'}).click();
+    await page.getByRole('radio',{name:'Post test',exact:true}).click();
+    await page.getByLabel('Target question',{exact:true}).fill('Should the city expand public transit?');await page.locator('#marketing-copy').fill('More frequent buses for every neighborhood.');
+    await page.getByRole('button',{name:'Send',exact:true}).click();await page.locator('#result-card').waitFor({state:'visible',timeout:15000});
     check(await page.locator('.res-cf-grid').isVisible(),'counterfactual result');await openChart();await choose('gender','women');check((await summary()).active,'exposed chart selection');await report('counterfactual result and exposed-arm chart');
     const positions=await page.evaluate(async()=>{const {map}=await import('/src/app.js');const before=map.agents.map(a=>[a.wx,a.wy,a.frameClock]);map._draw(performance.now()+5000);return {reduced:map.reducedMotion,frozen:JSON.stringify(before)===JSON.stringify(map.agents.map(a=>[a.wx,a.wy,a.frameClock]))};});
     check(positions.reduced && positions.frozen,'reduced motion map frozen',positions);await report('reduced-motion map and reveal',positions);
