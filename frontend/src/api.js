@@ -6,6 +6,12 @@
 import { BASE, SIM, PREDICT } from "./config.js";
 
 async function req(path, { method = "GET", body, timeout = 30000, signal } = {}) {
+  if (isDemo && path === "/data-query") return {
+    status:"unsupported", question:body.question, answer:null, chart:null, query_spec:null,
+    geography:null, source:null, method:null,
+    limitations:["Offline simulation demo has no verified-data query service."],
+  };
+  if (isDemo) return demoRequest(path, { method, body, signal });
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeout);
   // honor an external abort signal (user cancellation) in addition to the timeout
@@ -38,6 +44,10 @@ async function req(path, { method = "GET", body, timeout = 30000, signal } = {})
     clearTimeout(t);
   }
 }
+
+// Schema 1.0 statistical queries never call parse/poll or use preview fixtures.
+export const dataQuery = (city, question, signal) =>
+  req("/data-query", { method:"POST", body:{city, question}, signal, timeout:60000 });
 
 export const health = () => req("/health", { timeout: 8000 });
 
@@ -211,6 +221,49 @@ export const counterfactual = (branchId, payload, signal) =>
     signal,
   });
 
-export const deleteBranch = (branchId) =>
-  req(`/branches/${encodeURIComponent(branchId)}`, { method: "DELETE", timeout: 15000 })
+export const deleteBranch = (branchId) => {
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("simtra:branch-deleted", { detail: { branchId } }));
+  return req(`/branches/${encodeURIComponent(branchId)}`, { method: "DELETE", timeout: 15000 })
     .catch(() => {}); // best-effort cleanup
+};
+
+// Explicit offline demo. Every demographic and PWGTP value is from the saved
+// backend response; probabilities are fixed test responses, never live answers.
+export const isDemo = typeof location !== "undefined" && new URLSearchParams(location.search).get("demo") === "1";
+let demoData, demoSequence = 0;
+async function demoRequest(path, { method, body, signal }) {
+  signal?.throwIfAborted();
+  demoData ||= fetch(new URL("../fixtures/evidence-demo.json", import.meta.url)).then(async (r) => {
+    if (!r.ok) throw new Error(`Demo fixture unavailable: ${r.status}`);
+    return r.json();
+  });
+  const data = await demoData;
+  signal?.throwIfAborted();
+  const url = new URL(path, "http://local.invalid");
+  const route = decodeURIComponent(url.pathname);
+  const slug = route.match(/demo:([^/:]+)/)?.[1] || body?.city || "sf";
+  const row = data.cities.find((entry) => entry.city.slug === slug);
+  if (!row) throw new Error(`No committed demo snapshot for ${slug}`);
+  let result;
+  if (route === "/cities") result = { cities: data.cities.map((r) => r.city) };
+  else if (route.endsWith("/news")) result = { articles: [] };
+  else if (route.endsWith("/chatter")) result = { chatter: {} };
+  else if (route.endsWith("/parse")) {
+    const options = /which|choose|prioriti[sz]e/i.test(body.question);
+    result = { supported: true, framing: options ? "options" : "vote", question: body.question,
+      description: "Offline fixture demonstration; saved outcomes do not answer this question.",
+      ...(options ? { options: row.options.p_distribution.map(([label]) => label) } : {}) };
+  } else if (route === "/simulations") result = { simulation_id: `demo:${slug}`, main_branch: `demo:${slug}:main` };
+  else if (route.startsWith("/simulations/") && route.endsWith("/branches")) result = { branch_id: `demo:${slug}:prediction:${++demoSequence}` };
+  else if (route.endsWith("/agents")) {
+    const offset = Number(url.searchParams.get("offset") || 0), limit = Number(url.searchParams.get("limit") || 1000);
+    result = { agents: row.agents.slice(offset, offset + limit), total_matched: row.agents.length };
+  } else if (route.endsWith("/poll")) result = body.framing === "options" ? row.options : row.binary;
+  else if (route.endsWith("/counterfactual")) result = { baseline: row.binary, exposed: row.binary, delta: 0, fixture_mode: true };
+  else if (route.endsWith("/ab-test")) result = { ...row.binary, ...body, a_share: row.binary.p_yes, b_share: 1-row.binary.p_yes,
+    a_ci: [row.binary.ci_low,row.binary.ci_high], b_ci: [1-row.binary.ci_high,1-row.binary.ci_low], winner: "a", margin_pp: (2*row.binary.p_yes-1)*100,
+    breakdowns: row.binary.option_breakdowns.map((b) => ({ ...b, groups: b.groups.map((g) => ({ ...g, a_share:g.shares[0], b_share:g.shares[1] })) })) };
+  else if (method === "DELETE") result = { deleted: true };
+  else throw new Error(`Unsupported offline fixture route: ${method} ${route}`);
+  return structuredClone(result);
+}

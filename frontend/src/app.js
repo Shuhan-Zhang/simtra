@@ -17,8 +17,10 @@ import {
   abTopMovers, isCrossBreakdown, normalizeBreakdowns, pct, signedPp,
 } from "./ab-analysis.js";
 import * as api from "./api.js";
+import { buildEvidenceChartModel, renderEvidenceChart, bindEvidenceChart, reduceEvidenceSelection } from "./evidence-chart.js";
+import { buildVerifiedDataModel, renderVerifiedData, bindVerifiedData, reduceVerifiedSelection, verifiedMapSelection } from "./verified-data.js";
 import { snapshotAudience, describeAudience, audienceHeader, audienceScope } from "./audience.js";
-import { initFeedPanel, refreshFeedPanel } from "./feedpanel.js?v=2";
+import { initFeedPanel, refreshFeedPanel } from "./feedpanel.js?v=3";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -85,15 +87,18 @@ const els = {
   charCard: $("char-card"),
 };
 
-const map = new SFMap(els.canvas);
+export const map = new SFMap(els.canvas);
+const motionPreference = matchMedia("(prefers-reduced-motion: reduce)");
+map.reducedMotion = motionPreference.matches;
+motionPreference.addEventListener("change", (event) => { map.reducedMotion = event.matches; });
 const show = (el) => el.classList.remove("hidden");
 const hide = (el) => el.classList.add("hidden");
 
-const state = {
-  phase: "booting",
+export const state = {
+  phase: "booting", queryMode: "simulation",
   simId: null, mainBranch: null, branchId: null,
   lastResult: null, lastAbInput: null, lastMarketingInput: null, reqId: 0, abort: null,
-  residents: SIM.n,
+  residents: SIM.n, rawResidents: [],
   cities: [],            // [{slug, display, bbox, ...}] from GET /cities
   city: null,            // the active city object (falls back to a synthetic "sf")
   switching: false,      // true while a city swap is re-creating the simulation
@@ -182,7 +187,7 @@ function syncFilterButton() {
 
 // fetch LLM chatter for the residents now on screen (sparse, batched, best-effort)
 async function requestChatter(ids) {
-  if (!state.mainBranch || !ids?.length) return;
+  if (state.queryMode === "verified" || !state.mainBranch || !ids?.length) return;
   const branch = state.mainBranch;
   try {
     const data = await api.getChatter(branch, ids);
@@ -198,12 +203,144 @@ const inputOpen = () => els.ask.dataset.state === "input";
 
 function setAsk(s) {
   els.ask.dataset.state = s;
-  els.askLabel.textContent = s === "busy" ? "predicting…" : "ask";
+  els.askLabel.textContent = s === "busy" ? (state.queryMode === "verified" ? "querying data…" : "predicting…") : "ask";
 }
 
 function cleanupBranch() {
+  resetEvidence();
   if (state.branchId) { api.deleteBranch(state.branchId); state.branchId = null; }
 }
+
+
+// The app owns selection lifetime; the lane modules remain pure render/query tools.
+const verified = { model:null, selection:{segments:[]}, combine:false, dispose:null };
+const evidence = { model: null, selection: { segments: [] }, dimension: "gender", combine: false, open: false, residentId: null, dispose: null };
+function resetEvidence() {
+  verified.dispose?.(); verified.dispose = null;
+  verified.model = null; verified.selection = {segments:[]}; verified.combine = false;
+  evidence.dispose?.(); evidence.dispose = null;
+  evidence.model = null; evidence.selection = { segments: [] };
+  evidence.dimension = "gender"; evidence.combine = false; evidence.open = false; evidence.residentId = null;
+  map.clearSegmentSelection();
+}
+function clearEvidenceSelection() {
+  verified.selection = {segments:[]};
+  if (verified.model && $("verified-host")) renderActiveVerified();
+  evidence.selection = { segments: [] }; evidence.residentId = null;
+  map.clearSegmentSelection();
+  if (evidence.model && $("evidence-host")) renderActiveEvidence();
+}
+window.addEventListener("simtra:branch-deleted", ({ detail }) => {
+  if (detail.branchId === state.branchId) { resetEvidence(); $("evidence-panel")?.remove(); }
+});
+function evidenceLabel(dimension, key) {
+  key = typeof key === "string" ? key : "Unknown";
+  if (dimension.includes("_x_")) return dimension.split("_x_").map((axis,i) => evidenceLabel(axis, key.split("|")[i])).join(" · ");
+  if (dimension === "age") return `Age ${key.replaceAll("-", "–")}`;
+  return abGroupLabel(dimension, key);
+}
+function attachEvidence(result, ab = false) {
+  evidence.dispose?.();
+  // Adapt the A/B transport and evidence envelope without altering lane data.
+  const poll = ab ? { ...result, breakdowns: {}, p_distribution: [["Variant A",result.a_share],["Variant B",result.b_share]],
+    option_breakdowns: (result.breakdowns || []).map((b) => ({ ...b, groups: b.groups.map((g) => ({...g,shares:[g.a_share,g.b_share]})) })) } : result;
+  const source = poll.evidence?.population_source;
+  const adapted = { ...poll, evidence: { ...poll.evidence,
+    ...(source ? { population_source: { ...source, limitations: poll.evidence.limitations } } : {}),
+    context_citations: poll.evidence?.context_sources || poll.evidence?.context_citations || [] } };
+  const model = buildEvidenceChartModel(adapted);
+  // Legacy aliases are the same demographic, not additional clauses.
+  const aliases = { educ:"education", income_q:"income", puma:"geography" };
+  model.breakdowns = model.breakdowns.filter((b) => !aliases[b.dimension] || !model.breakdowns.some((other) => other.dimension === aliases[b.dimension]))
+    .map((b) => ({...b,dimension:aliases[b.dimension] || b.dimension,groups:b.groups.map((g) => ({...g,dimension:aliases[g.dimension] || g.dimension}))}));
+  evidence.model = model;
+  if (!model.breakdowns.some((b) => b.dimension === evidence.dimension)) evidence.dimension = model.breakdowns[0]?.dimension || "gender";
+  const snapshot = source?.local_snapshot || "Unknown";
+  const truth = `<div class="evidence-truth"><strong>Census / ACS PUMS</strong> is the demographic source. Residents are synthetic; poll outcomes are simulated/model-based. Hydra sources provide context, not proof that a prediction occurred.
+    <span>Snapshot: ${escapeHtml(snapshot)} · Dataset vintage, retrieval date and license: unknown unless supplied in provenance.</span>
+    ${api.isDemo || result.fixture_mode || result.preview_mode ? '<strong>Saved demo fixture — these outcomes do not answer a new question.</strong>' : ''}</div>`;
+  const section = document.createElement("section"); section.id = "evidence-panel";
+  section.innerHTML = `${truth}<details id="evidence-details" ${evidence.open ? "open" : ""}><summary>Explore demographic evidence</summary>
+    <div class="evidence-controls"><label for="evidence-dimension">Demographic dimension</label><select id="evidence-dimension">${model.breakdowns.map((b) => `<option value="${escapeHtml(b.dimension)}" ${b.dimension === evidence.dimension ? "selected" : ""}>${escapeHtml(AB_DIM_LABEL[b.dimension] || b.dimension)}</option>`).join("")}</select>
+    <label class="combine-control"><input type="checkbox" id="evidence-combine" ${evidence.combine ? "checked" : ""}> Combine groups (OR)</label>
+    <label for="evidence-resident">Inspect a synthetic resident (also available by tapping the map)</label><select id="evidence-resident"><option value="">Choose resident</option>${state.rawResidents.map((r,i) => `<option value="${i}">${escapeHtml(r.name || `Resident ${r.id}`)} · ${escapeHtml(evidenceLabel(evidence.dimension, r.segments?.[evidence.dimension] || "Unknown"))}</option>`).join("")}</select></div>
+    <div id="evidence-host"></div></details>`;
+  const anchor = els.resultCard.querySelector(".res-hydra") || els.resultCard.querySelector(".res-meta");
+  if (anchor) anchor.after(section); else els.resultCard.prepend(section);
+  $("evidence-details").addEventListener("toggle", (event) => {
+    evidence.open = event.target.open;
+    if (!evidence.open) clearEvidenceSelection();
+  });
+  $("evidence-dimension").addEventListener("change", (event) => { evidence.dimension = event.target.value; renderActiveEvidence(); });
+  $("evidence-combine").addEventListener("change", (event) => { evidence.combine = event.target.checked; });
+  $("evidence-resident").addEventListener("change", (event) => {
+    if (event.target.value === "") return;
+    const resident = state.rawResidents[Number(event.target.value)];
+    selectEvidenceResident(resident);
+  });
+  const host = $("evidence-host");
+  host.addEventListener("keydown", (event) => { if (event.key === "Escape") event.stopPropagation(); });
+  evidence.dispose = bindEvidenceChart(host, { getModel: () => evidence.model, getSelection: () => evidence.selection,
+    onSelectionChange: (next, action) => {
+      if (action.type !== "clear" && !residentEvidenceReady()) return;
+      evidence.selection = evidence.combine && action.type === "select" ? reduceEvidenceSelection(evidence.model,evidence.selection,{...action,type:"add"}) : next;
+      evidence.residentId = null;
+      map.setSegmentSelection({ clauses:evidence.selection.segments, operator:"or" }); renderActiveEvidence();
+    } });
+  renderActiveEvidence();
+}
+function residentEvidenceReady() {
+  return state.rawResidents.length > 0 && state.rawResidents.every((r) => Number.isFinite(r.pums_weight) && r.pums_weight >= 0 && typeof r.segments?.[evidence.dimension] === "string");
+}
+function renderActiveEvidence() {
+  const host = $("evidence-host"); if (!host || !evidence.model) return;
+  const ready = residentEvidenceReady();
+  const summary = map.getSegmentSelectionSummary();
+  evidence.selection.weightedCount = summary.active ? summary.weightedPumsCount : 0;
+  host.innerHTML = renderEvidenceChart({ ...evidence.model, breakdowns: evidence.model.breakdowns.filter((b) => b.dimension === evidence.dimension) }, evidence.selection);
+  const text = host.querySelector("[data-evidence-summary]");
+  const rule = evidence.selection.segments.map((s) => `${s.dimension} = ${s.key}`).join(" OR ") || "none (all residents)";
+  text.textContent = `Active rule: ${rule}. Raw resident count: ${summary.rawMatchingAgents}. Weighted PWGTP population: ${summary.weightedPumsCount}.${evidence.residentId !== null ? ` Resident ${evidence.residentId} selected; chart uses ${evidence.dimension}.` : ""}`;
+  if (!ready) text.textContent = "Selection unavailable: resident PWGTP weights or canonical segments are missing. Update the backend to enable exact map matching. Counts are unknown.";
+  text.dataset.rawCount = ready ? summary.rawMatchingAgents : "unknown"; text.dataset.weightedCount = ready ? summary.weightedPumsCount : "unknown";
+  $("evidence-resident").disabled = !ready;
+  for (const option of $("evidence-resident").options) {
+    if (option.value === "") continue;
+    const r = state.rawResidents[Number(option.value)];
+    option.textContent = `${r.name || `Resident ${r.id}`} · ${evidenceLabel(evidence.dimension, r.segments?.[evidence.dimension] || "Unknown")}`;
+  }
+  const note = document.createElement("p"); note.className = "evidence-count-note";
+  note.textContent = "Selection totals use original PWGTP across loaded residents. Bar weights and sample sizes describe respondents in this poll and may differ because of eligibility, turnout or unanswered archetypes. Map positions and tenure are simulated; gender uses PUMS SEX; income groups use POVPIP quintiles.";
+  text.after(note);
+  const selectionBar = document.createElement("div"); selectionBar.className = "evidence-selection-bar";
+  const clearButton = host.querySelector('[data-evidence-action="clear"]');
+  clearButton.before(selectionBar); selectionBar.append(clearButton, text);
+  for (const fieldset of host.querySelectorAll("fieldset")) {
+    const dimension = fieldset.querySelector("button[data-dimension]")?.dataset.dimension || fieldset.querySelector("legend")?.textContent;
+    fieldset.hidden = dimension !== evidence.dimension;
+    fieldset.querySelector("legend").textContent = AB_DIM_LABEL[dimension] || dimension;
+  }
+  for (const button of host.querySelectorAll("button[data-dimension]")) {
+    button.disabled = !ready;
+    const { dimension,key } = button.dataset;
+    const label = evidenceLabel(dimension,key);
+    button.firstElementChild.textContent = `${button.getAttribute("aria-pressed") === "true" ? "✓ " : ""}${label}`;
+    button.setAttribute("aria-label", `${label}. ${button.getAttribute("aria-label")}`);
+  }
+}
+function selectEvidenceResident({ id, segments }) {
+  if (!evidence.model || state.phase !== "results" || !residentEvidenceReady()) return;
+  const key = segments?.[evidence.dimension];
+  clearEvidenceSelection();
+  if (!evidence.model.breakdowns.some((b) => b.dimension === evidence.dimension && b.groups.some((g) => g.key === key))) { toast("This resident has no group in the active poll dimension."); return; }
+  evidence.residentId = id;
+  evidence.selection = reduceEvidenceSelection(evidence.model, evidence.selection, {type:"select",dimension:evidence.dimension,key});
+  map.setSegmentSelection({clauses:evidence.selection.segments,operator:"or"});
+  evidence.open = true; $("evidence-details").open = true;
+  renderActiveEvidence();
+  [...$("evidence-host").querySelectorAll("button[data-dimension]")].find((b) => b.dataset.dimension === evidence.dimension && b.dataset.key === key)?.focus({preventScroll:false});
+}
+map.onResidentSelect = selectEvidenceResident;
 
 // ── boot ───────────────────────────────────────────────────────────────
 // 0 → 1 progress on the thin boot bar. createSim is one slow step (~0.2); the
@@ -219,8 +356,16 @@ async function boot() {
     getCityDisplay: () => state.city?.display || "San Francisco",
     getResidents: () => state.residents,
     getNews: () => state.news,
+    // timeline charts highlight residents through the same map API the result card uses
+    setSegmentSelection: (selection) => map.setSegmentSelection(selection),
+    getSegmentSelectionSummary: () => map.getSegmentSelectionSummary(),
+    getRawResidents: () => state.rawResidents,
+    evidenceReady: (dimension) => state.rawResidents.length > 0 && state.rawResidents.every((r) =>
+      Number.isFinite(r.pums_weight) && r.pums_weight >= 0 && typeof r.segments?.[dimension] === "string"),
+    dimensionLabels: AB_DIM_LABEL,
   });
   els.status.textContent = "waking the city…";
+  if (api.isDemo) { document.body.classList.add("offline-demo"); $("demo-banner").hidden = false; }
   syncFilterButton();
 
   // Load the city catalog first (best-effort). If it fails we keep the existing
@@ -245,13 +390,14 @@ async function boot() {
 // load that city's agents and reset the overview. Shared by boot + the switcher.
 async function loadCity(city, { filters = state.filters, preserveOnError = false } = {}) {
   filters = normalizeFilters(filters);
+  resetEvidence();
+  state.rawResidents = [];
   state.city = city;
-  // The local map loads immediately and supplies dimensions + shoreline mask;
-  // progressive satellite tiles are painted above it at the camera's resolution.
+  // Committed local tiles supply dimensions and shoreline masks without a live source call.
   const maskBase = `assets/${city.slug}_tiles.png`;
   if (city.bbox) MAP.bbox = { ...city.bbox };
   MAP.base = maskBase;
-  map.setSatellite(true);
+  map.setSatellite(false);
   map.setBase(maskBase);
   syncActiveTitle();
 
@@ -274,6 +420,7 @@ async function loadCity(city, { filters = state.filters, preserveOnError = false
       setBoot(0.2 + 0.77 * (total ? loaded / total : 0));
     });
     if (!agents.length) throw new Error("no agents returned");
+    state.rawResidents = agents;
     state.simId = sim.simulation_id;
     state.mainBranch = sim.main_branch;
     state.filters = filters;
@@ -651,20 +798,22 @@ function autoGrow() {
 }
 
 function openInput() {
-  if (isBusy()) return;
-  if (state.phase === "error" || !state.simId) { toast("Predictions need the backend — it's currently unreachable."); return; }
+  if (isBusy() || state.phase === "booting" || state.switching) return;
+  if (state.queryMode !== "verified" && (state.phase === "error" || !state.simId)) { toast("Predictions need the backend — it's currently unreachable."); return; }
   cleanupBranch();
   map.clearVerdicts();
   closeCharCard();
   hide(els.summary);
   hide(els.resultCard);
+  els.askInput.value = ""; els.askInput.style.height = LINE_H + "px";
   setAsk("input");
   state.phase = "idle";
   setIdleStatus();
-  requestAnimationFrame(() => { els.askInput.value = ""; els.askInput.style.height = LINE_H + "px"; els.askInput.focus(); });
+  requestAnimationFrame(() => { if (inputOpen()) els.askInput.focus(); });
 }
 
 function closeInput() {
+  clearEvidenceSelection();
   setAsk("idle");
   els.askInput.value = "";
   els.askInput.style.height = LINE_H + "px";
@@ -704,11 +853,95 @@ function guessFraming(question) {
     /^(will|is|are|does|do|can|could|would|should)\b/i.test(question) ? "belief" : "vote";
 }
 
+// Verified questions are independent of simulation creation, branches and opinions.
+async function runVerifiedQuery(question) {
+  question = (question || "").trim();
+  if (!question || isBusy() || state.switching) return;
+  cleanupBranch(); map.clearVerdicts();
+  const myReq = ++state.reqId;
+  state.abort = new AbortController();
+  state.phase = "waiting"; setAsk("busy"); els.askInput.blur();
+  hide(els.resultCard); show(els.summary);
+  els.summaryLabel.textContent = "VERIFIED DATA";
+  els.summaryText.textContent = question;
+  els.progress.classList.add("indeterminate");
+  els.progressLabel.textContent = "Querying the complete PUMS snapshot… (Escape to cancel)";
+  try {
+    const response = await api.dataQuery(citySlug(), question, state.abort.signal);
+    if (myReq !== state.reqId) return;
+    verified.model = buildVerifiedDataModel(response);
+    if (!verified.model.question) verified.model.question = question;
+    showVerifiedResult();
+  } catch (error) {
+    if (myReq !== state.reqId) return;
+    verified.model = buildVerifiedDataModel({question});
+    showVerifiedResult();
+    const note = document.createElement("p"); note.setAttribute("role", "status");
+    note.textContent = "Unknown — the verified-data service is unavailable. Try again when it is reachable.";
+    $("verified-host").prepend(note);
+  } finally {
+    if (myReq === state.reqId) state.abort = null;
+  }
+}
+
+function showVerifiedResult() {
+  state.phase = "results"; setAsk("idle"); hide(els.summary);
+  els.progress.classList.remove("indeterminate");
+  els.resultCard.classList.remove("ab-result");
+  els.resultCard.setAttribute("aria-label", "Verified data result");
+  els.resultCard.innerHTML = `<div id="verified-host"></div><p id="verified-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p><div class="res-actions"><button id="res-again" class="btn btn-primary">Ask another</button><button id="res-dismiss" class="btn">Dismiss</button></div>`;
+  renderActiveVerified();
+  verified.dispose = bindVerifiedData($("verified-host"), {
+    getModel:() => verified.model, getSelection:() => verified.selection,
+    onSelectionChange:(next, action) => {
+      verified.selection = verified.combine && action.type === "select"
+        ? reduceVerifiedSelection(verified.model, verified.selection, {...action,type:"add"}) : next;
+      renderActiveVerified();
+    },
+  });
+  $("verified-host").addEventListener("change", event => {
+    if (event.target.id === "verified-combine") verified.combine = event.target.checked;
+  });
+  $("res-again").addEventListener("click", openInput);
+  $("res-dismiss").addEventListener("click", dismissResults);
+  show(els.resultCard);
+  els.resultCard.scrollTop = 0;
+  $("verified-heading").focus({preventScroll:true});
+}
+
+function renderActiveVerified() {
+  const result = verifiedMapSelection(verified.model, verified.selection, state.rawResidents, citySlug());
+  map.setSegmentSelection(result.selection);
+  $("verified-host").innerHTML = renderVerifiedData(verified.model, verified.selection, result.count, result.ready);
+  // Keep the live region mounted while the buttons rerender and regain focus.
+  const summary = $("verified-host").querySelector("[data-verified-summary]");
+  if (summary) { summary.removeAttribute("role"); summary.removeAttribute("aria-live"); }
+  $("verified-announcement").textContent = summary?.textContent || "";
+  if ($("verified-combine")) $("verified-combine").checked = verified.combine;
+}
+
+function setQueryMode(mode) {
+  if (mode === state.queryMode) return;
+  const booting = state.phase === "booting";
+  if (isBusy()) cancelPrediction(); else dismissResults();
+  state.reqId++;
+  state.queryMode = mode;
+  els.resultCard.setAttribute("aria-label", mode === "verified" ? "Verified data result" : "Prediction result");
+  els.ask.setAttribute("aria-label", mode === "verified" ? "Ask a verified data question" : "Ask a prediction question");
+  els.askInput.setAttribute("aria-label", mode === "verified" ? "Verified data question" : "Predict anything");
+  els.askInput.placeholder = mode === "verified" ? "e.g. What share of adults have a bachelor's degree or higher?" : "predict anything — e.g. should the city expand public transit?";
+  $("query-mode-hint").textContent = mode === "verified" ? "Census estimates from the complete PUMS snapshot. No simulated opinions." : "Simulated opinions and predictions from synthetic residents.";
+  els.abBtn.hidden = mode === "verified"; els.marketingBtn.hidden = mode === "verified";
+  closeInput();
+  if (booting) state.phase = "booting";
+}
+
 // ── prediction flow ─────────────────────────────────────────────────────
 // 1) classify the question for the current city (POST /cities/<slug>/parse)
 // 2) if unsupported → a gentle "try rephrasing" card (no poll)
 // 3) if supported → poll the branch with the parsed {framing, question, description, options}
 async function runPrediction(question) {
+  if (state.queryMode === "verified") return runVerifiedQuery(question);
   question = (question || "").trim();
   if (!question) return;
   if (state.phase === "error" || !state.simId) { toast("Predictions need the backend — it's currently unreachable."); return; }
@@ -821,6 +1054,7 @@ function openMarketing({ preserve = false } = {}) {
   if (state.phase === "error" || !state.mainBranch) { toast("Marketing tests need the backend — it's currently unreachable."); return; }
   closeInput();
   closeCharCard();
+  resetEvidence();
   marketingPreviousFocus = document.activeElement;
   setMarketingError("");
   setMarketingBusy(false);
@@ -838,6 +1072,7 @@ function openMarketing({ preserve = false } = {}) {
 }
 
 function closeMarketing(restoreFocus = true) {
+  clearEvidenceSelection();
   hide(els.marketingModal);
   hide(els.marketingScrim);
   delete els.ask.dataset.mode;
@@ -862,6 +1097,7 @@ async function runMarketingTest() {
   if (input.marketingText.length > 4000) { setMarketingError("Planned post copy must be at most 4,000 characters."); return; }
   if (state.phase === "error" || !state.mainBranch) { setMarketingError("Marketing tests need the backend — it's currently unreachable."); return; }
 
+  cleanupBranch();
   const audience = currentAudience();
   setRunAudience(audience);
 
@@ -973,6 +1209,7 @@ function openAbTest() {
   if (state.phase === "error" || !state.mainBranch) { toast("A/B tests need the backend — it's currently unreachable."); return; }
   closeInput();
   closeCharCard();
+  resetEvidence();
   abPreviousFocus = document.activeElement;
   els.abError.textContent = "";
   els.ask.dataset.mode = "ab";
@@ -983,6 +1220,7 @@ function openAbTest() {
 }
 
 function closeAbTest(restoreFocus = true) {
+  clearEvidenceSelection();
   hide(els.abModal);
   hide(els.abScrim);
   delete els.ask.dataset.mode;
@@ -1006,6 +1244,7 @@ async function runAbTest() {
     return;
   }
 
+  cleanupBranch();
   state.lastAbInput = input;
   const audience = currentAudience();
   setRunAudience(audience);
@@ -1081,6 +1320,7 @@ function hydraMeta(result) {
 }
 
 function showMarketingResults(result) {
+  resetEvidence();
   state.phase = "results";
   els.resultCard.classList.remove("ab-result");
   abRerender = null;
@@ -1123,6 +1363,7 @@ function showMarketingResults(result) {
     ${rationales.length ? `<div class="res-why"><div class="res-why-label">simulated responses after exposure</div><ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul></div>` : ""}
     <div class="res-actions"><button id="res-edit-marketing" class="btn btn-primary">Edit test</button><button id="res-dismiss" class="btn">Dismiss</button></div>`;
   show(els.resultCard);
+  attachEvidence(exposed);
   $("res-edit-marketing").addEventListener("click", () => openMarketing({ preserve: true }));
   $("res-dismiss").addEventListener("click", dismissResults);
   requestAnimationFrame(() => {
@@ -1132,6 +1373,7 @@ function showMarketingResults(result) {
 }
 
 function showResults(result) {
+  resetEvidence();
   state.phase = "results";
   els.resultCard.classList.remove("ab-result");
   abRerender = null;
@@ -1192,6 +1434,7 @@ function showResults(result) {
         <button id="res-dismiss" class="btn">Dismiss</button>
       </div>
     `;
+    attachEvidence(result);
     wireResultActions();
   };
 
@@ -1251,6 +1494,7 @@ function showOptionResults(result) {
     </div>` : ""}
     ${RESULT_ACTIONS}
   `;
+  attachEvidence(result);
   show(els.resultCard);
   wireResultActions();
   requestAnimationFrame(() => { els.resultCard.scrollTop = 0; });
@@ -1480,6 +1724,7 @@ function abAdvancedSection(result, segments, breakdowns) {
 }
 
 function showAbResults(result) {
+  resetEvidence();
   state.phase = "results";
   setAsk("idle");
   hide(els.summary);
@@ -1517,6 +1762,7 @@ function showAbResults(result) {
       ${rationales.length ? `<div class="res-why"><div class="res-why-label">simulated responses from this audience</div><ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul></div>` : ""}
       <p class="ab-note">Simulated, PUMS-weighted preference under full exposure. Segment and cross-tab figures are model estimates with no per-group significance test — read them as direction, not proof. Not causal proof or organic reach.</p>
       <div class="res-actions"><button id="res-edit-ab" class="btn btn-primary">Edit test</button><button id="res-dismiss" class="btn">Dismiss</button></div>`;
+    attachEvidence(result, true);
     $("res-edit-ab").addEventListener("click", openAbTest);
     $("res-dismiss").addEventListener("click", dismissResults);
   };
@@ -1583,11 +1829,18 @@ function escapeHtml(s) {
 
 const typingTarget = (el) => el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
 
+$("query-modes").addEventListener("change", event => setQueryMode(event.target.value));
+$("ask-submit").addEventListener("click", event => { event.stopPropagation(); runPrediction(els.askInput.value); });
+
 // ── events ───────────────────────────────────────────────────────────────
 els.ask.addEventListener("click", () => {
   if (isBusy()) { cancelPrediction(); return; }
   if (inputOpen()) { els.askInput.focus(); return; }
   openInput();
+});
+
+els.ask.addEventListener("keydown", (event) => {
+  if (event.target === els.ask && ["Enter", " "].includes(event.key)) { event.preventDefault(); openInput(); }
 });
 
 // multiline composer: Enter submits, Shift+Enter inserts a newline
@@ -1612,7 +1865,8 @@ els.returnBtn.addEventListener("click", () => { map.returnToOverview(); });
 
 // ── character inspector (tap a character when zoomed in) ────────────────────
 const charOpen = () => !els.charCard.classList.contains("hidden");
-function closeCharCard() { stopTyping(); hide(els.charCard); }
+function closeCharCard() {
+  clearEvidenceSelection(); stopTyping(); hide(els.charCard); }
 
 // ── typewriter ──
 // After a poll a resident "speaks" their rationale into a speech bubble. Only
@@ -1754,6 +2008,9 @@ document.addEventListener("keydown", (e) => {
       first.focus();
     }
   } else if (e.key === "Escape") {
+    if (e.defaultPrevented) return;
+    if (verified.selection.segments.length) { e.preventDefault(); clearEvidenceSelection(); return; }
+    if (evidence.selection.segments.length) { e.preventDefault(); clearEvidenceSelection(); return; }
     if (marketingOpen()) {
       if (isBusy()) cancelPrediction(); else closeMarketing();
     }

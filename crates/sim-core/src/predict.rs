@@ -14,7 +14,7 @@ use crate::memory::{self, AgentAnswer, MemoryClient, TestTag};
 use crate::model::{extract_json, Model, ModelClient};
 use crate::persona::Population;
 use anyhow::{anyhow, Result};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Framing {
@@ -653,9 +653,9 @@ p_yes is a probability between 0 and 1. Be realistic and calibrated to {city_nam
                     weight: w,
                     probs: dist_by_cluster[cluster_of[i]].clone(),
                 };
-                let keys = demographic_keys(a, q);
-                for ((_, rows), key) in breakdown_rows.iter_mut().zip(keys) {
-                    rows.push((key, answer.clone()));
+                let segments = demographic_segments(a, &cutoffs);
+                for (dimension, rows) in &mut breakdown_rows {
+                    rows.push((segments[dimension].clone(), answer.clone()));
                 }
                 answers.push(answer);
             }
@@ -750,38 +750,24 @@ p_yes is a probability between 0 and 1. Be realistic and calibrated to {city_nam
                 weight: w,
                 probs: vec![p, 1.0 - p],
             };
-            for ((_, dim_rows), key) in option_rows.iter_mut().zip(demographic_keys(a, q)) {
-                dim_rows.push((key, answer.clone()));
+            let segments = demographic_segments(a, &cutoffs);
+            for (dimension, dim_rows) in &mut option_rows {
+                dim_rows.push((segments[dimension].clone(), answer.clone()));
             }
-            breakdown_rows
-                .get_mut("age")
-                .unwrap()
-                .push((a.rec.age_band().to_string(), w, p));
-            breakdown_rows
-                .get_mut("race")
-                .unwrap()
-                .push((a.rec.race_eth().to_string(), w, p));
-            breakdown_rows
-                .get_mut("educ")
-                .unwrap()
-                .push((a.rec.educ().to_string(), w, p));
-            breakdown_rows
-                .get_mut("income_q")
-                .unwrap()
-                .push((format!("q{q}"), w, p));
-            breakdown_rows
-                .get_mut("puma")
-                .unwrap()
-                .push((a.rec.puma.to_string(), w, p));
-            breakdown_rows.get_mut("tenure").unwrap().push((
-                if a.homeowner {
-                    "own".into()
-                } else {
-                    "rent".into()
-                },
-                w,
-                p,
-            ));
+            // Preserve legacy dimension names while reusing canonical group values.
+            for (legacy, canonical) in [
+                ("age", "age"),
+                ("race", "race"),
+                ("educ", "education"),
+                ("income_q", "income"),
+                ("puma", "geography"),
+                ("tenure", "tenure"),
+            ] {
+                breakdown_rows
+                    .get_mut(legacy)
+                    .unwrap()
+                    .push((segments[canonical].clone(), w, p));
+            }
         }
 
         let p_yes = aggregate::weighted_yes_share(&rows);
@@ -1138,22 +1124,41 @@ pub const DEMO_DIMENSIONS: [&str; 14] = [
     "education_x_income",
 ];
 
+/// Canonical resident segment membership, shared by the API and every poll path.
+/// Income quintiles must use the cutoffs of the resident's simulation population.
+pub fn demographic_segments(
+    agent: &Agent,
+    income_cutoffs: &[f64; 4],
+) -> BTreeMap<&'static str, String> {
+    DEMO_DIMENSIONS
+        .into_iter()
+        .zip(demographic_keys(
+            agent,
+            agent.income_quintile(income_cutoffs),
+        ))
+        .collect()
+}
+
 /// Group keys for one agent, positionally aligned with [`DEMO_DIMENSIONS`].
 /// Cross-tab cells use `left|right` composites so the frontend can split them
 /// back into matrix axes without a second schema.
-fn demographic_keys(a: &Agent, income_q: usize) -> Vec<String> {
+fn demographic_keys(a: &Agent, income_q: usize) -> [String; DEMO_DIMENSIONS.len()] {
     let age = a.rec.age_band();
     let gender = a.rec.sex_label();
     let race = a.rec.race_eth();
     let educ = a.rec.educ();
     let income = format!("q{income_q}");
-    vec![
+    [
         age.to_string(),
         gender.to_string(),
         race.to_string(),
         educ.to_string(),
         income.clone(),
-        if a.homeowner { "own".into() } else { "rent".into() },
+        if a.homeowner {
+            "own".into()
+        } else {
+            "rent".into()
+        },
         a.rec.marital().to_string(),
         a.rec.nativity_label().to_string(),
         a.rec.employment_label().to_string(),
@@ -1261,7 +1266,9 @@ fn sort_option_groups(dimension: &str, groups: &mut [OptionDemoBreak]) {
     if dimension == "geography" {
         groups.sort_by(|a, b| {
             let rank = |key: &str| key.parse::<u32>().unwrap_or(u32::MAX);
-            rank(&a.key).cmp(&rank(&b.key)).then_with(|| a.key.cmp(&b.key))
+            rank(&a.key)
+                .cmp(&rank(&b.key))
+                .then_with(|| a.key.cmp(&b.key))
         });
         return;
     }
@@ -1271,7 +1278,11 @@ fn sort_option_groups(dimension: &str, groups: &mut [OptionDemoBreak]) {
             let (left, right) = key.split_once(CROSS_KEY_SEP).unwrap_or((key, ""));
             (rank_in(left_order, left), rank_in(right_order, right))
         };
-        groups.sort_by(|a, b| cell(&a.key).cmp(&cell(&b.key)).then_with(|| a.key.cmp(&b.key)));
+        groups.sort_by(|a, b| {
+            cell(&a.key)
+                .cmp(&cell(&b.key))
+                .then_with(|| a.key.cmp(&b.key))
+        });
         return;
     }
     let order = group_order(dimension);
@@ -1352,6 +1363,38 @@ mod tests {
             puma: 7510,
             adjinc: 1.0,
         }
+    }
+
+    #[test]
+    fn canonical_segments_have_stable_values_and_use_population_cutoffs() {
+        let mut record = rec(30, 21, 250.0);
+        record.sex = 2;
+        record.hisp = 2; // Hispanic ethnicity takes precedence over race.
+        record.rac1p = 1;
+        record.mar = 1;
+        record.nativity = 2;
+        record.esr = 3;
+        record.cit = 5;
+        let mut pop = build_population(&[record], 1, 42, None);
+        let agent = &mut pop.agents[0];
+        agent.homeowner = false;
+        let segments = demographic_segments(agent, &[100.0, 200.0, 300.0, 400.0]);
+        assert_eq!(
+            serde_json::to_value(&segments).unwrap(),
+            serde_json::json!({
+                "age": "25-34", "gender": "women", "race": "hispanic",
+                "education": "bachelors", "income": "q2", "tenure": "rent",
+                "marital": "married", "nativity": "foreign_born",
+                "employment": "not_employed", "citizenship": "noncitizen",
+                "geography": "7510", "gender_x_age": "women|25-34",
+                "race_x_income": "hispanic|q2", "education_x_income": "bachelors|q2"
+            })
+        );
+        let other_cutoffs = demographic_segments(agent, &[300.0, 350.0, 400.0, 450.0]);
+        assert_eq!(other_cutoffs["income"], "q0");
+        assert_eq!(other_cutoffs["race_x_income"], "hispanic|q0");
+        assert_eq!(other_cutoffs["education_x_income"], "bachelors|q0");
+        assert_eq!(other_cutoffs["gender_x_age"], segments["gender_x_age"]);
     }
 
     #[test]

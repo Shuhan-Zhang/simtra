@@ -943,3 +943,70 @@ body {
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
 }
+
+/* Interactive evidence: keep map context visible, including on narrow screens. */
+.evidence-truth { margin-block: 18px; padding: 12px; border: 1px solid #69796b; border-radius: 10px; line-height: 1.5; font-size: 13px; background: #f1f7ef; color: #193520; }
+.evidence-truth span, .evidence-truth > strong:last-child { display: block; margin-top: 6px; }
+#evidence-details > summary { cursor: pointer; min-height: 44px; padding: 12px 0; font-weight: 700; }
+.evidence-controls { display: grid; gap: 8px; margin-bottom: 12px; }
+.evidence-controls select { width: 100%; min-width: 0; min-height: 44px; border: 1px solid #667568; border-radius: 6px; padding: 8px; background: #fff; color: #17231a; font: inherit; }
+.combine-control { display: flex; align-items: center; gap: 10px; min-height: 44px; }
+.combine-control input { width: 22px; height: 22px; }
+.evidence-chart { color: #17231a; font-size: 13px; line-height: 1.5; }
+.evidence-chart > h2 { font-size: 16px; }
+.evidence-chart fieldset { min-width: 0; margin: 12px 0; padding: 10px; border: 1px solid #7b897e; border-radius: 8px; }
+.evidence-chart button { min-height: 44px; padding: 12px; background: #fff; color: #24432b; border: 1px solid #788b7d; border-radius: 6px; font: inherit; cursor: pointer; }
+.evidence-chart button[aria-pressed="true"] { background: #e1f7e6; border: 3px solid #177b37; padding: 10px; }
+.evidence-chart button > span:first-child { font-size: 15px; font-weight: 700; }
+.evidence-chart [data-evidence-summary] { padding: 12px; border-left: 4px solid #177b37; background: #eaf2e9; font-weight: 700; overflow-wrap: anywhere; }
+.evidence-chart dd { margin: 0 0 8px; overflow-wrap: anywhere; }
+.evidence-chart dt { font-weight: 700; }
+.evidence-chart h3 { margin-top: 20px; }
+.evidence-count-note { font-size: 12px; }
+#evidence-panel :focus-visible, #map:focus-visible, #ask:focus-visible { outline: 3px solid #1655d8; outline-offset: 3px; }
+#demo-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 30; margin: 0; padding: 8px 14px; background: #183924; color: #fff; font: 12px/1.5 system-ui,sans-serif; text-align: center; }
+#demo-banner a { color: #fff; text-decoration: underline; }
+body.offline-demo .title-select, body.offline-demo .status { margin-top: 46px; }
+body.offline-demo .result-card { max-height: min(60dvh, 720px); }
+.result-card:has(#evidence-details[open]) { width: min(570px, 94vw); }
+@media (max-width: 600px) {
+  .result-card:has(#evidence-panel) { max-height: 52dvh; width: min(94vw, 440px); padding: 16px; }
+  .evidence-chart button, .evidence-controls select { font-size: 16px; }
+  #demo-banner { font-size: 11px; }
+  body.offline-demo .title-select, body.offline-demo .status { margin-top: 66px; }
+}
+@media (forced-colors: active) {
+  .evidence-truth, .evidence-chart button, .evidence-controls select, .evidence-chart [data-evidence-summary] { forced-color-adjust: auto; background: Canvas; color: CanvasText; border-color: CanvasText; }
+  .evidence-chart button[aria-pressed="true"] { border: 3px solid Highlight; }
+  #evidence-panel :focus-visible { outline-color: Highlight; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #evidence-panel *, .result-card, .summary { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+.evidence-selection-bar { position: sticky; top: -16px; z-index: 2; display: flex; align-items: center; gap: 8px; padding: 8px 0; background: #fff; border-bottom: 1px solid #788b7d; }
+.evidence-selection-bar button { flex: 0 0 94px; }
+.evidence-selection-bar [data-evidence-summary] { margin: 0; flex: 1; padding: 8px; font-size: 12px; }
+@media (forced-colors: active) { .evidence-selection-bar { background: Canvas; border-color: CanvasText; } }
+
+/* Explicit statistical/simulation modes and accessible full-snapshot bars. */
+.query-modes { display:flex; flex-wrap:wrap; justify-content:center; gap:4px 14px; margin:8px 0 0; padding:4px 10px; border:1px solid #788b7d; border-radius:12px; background:#fff; color:#17231a; font:13px/1.4 system-ui,sans-serif; }
+.query-modes legend { padding:0 6px; font-weight:700; background:#fff; border-radius:4px; }
+.query-modes label { display:flex; align-items:center; gap:6px; min-height:44px; cursor:pointer; }
+.query-modes input { width:20px; height:20px; accent-color:#177b37; }
+.query-mode-hint { margin:4px 0 8px; padding:4px 8px; border-radius:6px; background:#fff; color:#17231a; text-align:center; font:12px/1.4 system-ui,sans-serif; }
+.ask-submit { display:none; min-height:44px; padding:6px 10px; border:1px solid currentColor; border-radius:6px; background:#fff; color:#17231a; cursor:pointer; }
+.ask[data-state="input"] .ask-submit { display:block; }
+#verified-panel { overflow-wrap:anywhere; }
+#verified-panel h2 { scroll-margin-top:16px; }
+.verified-bars { display:grid; gap:10px; margin-block:12px; }
+.verified-bars button { display:grid; gap:5px; width:100%; min-width:0; text-align:left; }
+.verified-track { display:block; width:100%; height:14px; border:1px solid currentColor; }
+.verified-track > span { display:block; height:100%; background:#24733b; }
+#verified-panel [data-verified-summary] { padding:12px; border-left:4px solid #177b37; background:#eaf2e9; }
+#verified-panel :focus-visible, .query-modes :focus-visible, .ask-submit:focus-visible { outline:3px solid #1655d8; outline-offset:3px; }
+.result-card:has(#verified-panel) { width:min(570px,94vw); max-height:55dvh; }
+@media (max-width:600px) { .result-card:has(#verified-panel) { max-height:48dvh; padding:16px; } .query-modes { gap:0 10px; font-size:12px; } .verified-bars button { font-size:16px; } }
+@media (forced-colors:active) { .verified-track > span { background:Highlight; } #verified-panel [data-verified-summary], .query-modes, .query-mode-hint { background:Canvas; color:CanvasText; } }
+@media (prefers-reduced-motion:reduce) { #verified-panel * { animation:none !important; transition:none !important; scroll-behavior:auto !important; } }
+
+.dock-tools button[hidden] { display:none; }
