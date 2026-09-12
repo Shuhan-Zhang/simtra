@@ -103,8 +103,15 @@
           <kbd class="ask-enter" aria-hidden="true">↵</kbd>
         </div>
         <div class="dock-tools dock-tools--balance">
+          <button id="filter-btn" class="info-btn filter-btn" type="button"
+                  aria-label="Filter residents" aria-pressed="false" title="Filter residents">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+              <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"
+                    d="M4 5h16l-6.4 7.2v5.1L10 19v-6.8z" />
+            </svg>
+            <span id="filter-count" class="filter-count hidden" aria-hidden="true"></span>
+          </button>
           <button id="info-btn" class="info-btn" aria-label="About simit" title="About">?</button>
-          <span class="dock-tool-spacer" aria-hidden="true"></span>
         </div>
       </div>
     </div>
@@ -149,6 +156,66 @@
         <div class="res-actions">
           <button id="marketing-submit" class="btn btn-primary" type="submit">Run simulated exposure</button>
           <button id="marketing-cancel" class="btn" type="button">Cancel</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- population filters: every selected trait is combined before sampling -->
+    <div id="filter-scrim" class="about-scrim hidden"></div>
+    <div id="filter-modal" class="about filter-modal hidden" role="dialog" aria-modal="true"
+         aria-labelledby="filter-title" aria-describedby="filter-note">
+      <button id="filter-close" class="about-close" type="button" aria-label="Close resident filters">×</button>
+      <div id="filter-title" class="about-title">filter residents</div>
+      <p id="filter-note" class="about-sub filter-note">Build a new synthetic sample using Census records that match every selected trait.</p>
+      <form id="filter-form" class="filter-form">
+        <div class="filter-field">
+          <label for="filter-age">Exact age</label>
+          <input id="filter-age" type="number" min="0" max="99" inputmode="numeric" placeholder="Any age">
+        </div>
+        <div class="filter-field">
+          <label for="filter-puma">Lives in</label>
+          <select id="filter-puma">
+            <option value="">Anywhere in this city</option>
+          </select>
+        </div>
+        <div class="filter-field">
+          <label for="filter-occupation">Occupation</label>
+          <select id="filter-occupation">
+            <option value="">Any occupation</option>
+            <option value="management_business">Management / business</option>
+            <option value="software_tech">Software / tech</option>
+            <option value="engineer">Engineer</option>
+            <option value="science_analysis">Science / analysis</option>
+            <option value="social_services">Social services</option>
+            <option value="legal">Legal</option>
+            <option value="education">Education</option>
+            <option value="arts_media">Arts / design / media</option>
+            <option value="healthcare">Healthcare</option>
+            <option value="service">Service work</option>
+            <option value="sales_office">Sales / office</option>
+            <option value="construction_trades">Construction / trades</option>
+            <option value="production_transportation">Production / transportation</option>
+            <option value="military">Military</option>
+            <option value="unemployed">Currently unemployed</option>
+            <option value="not_in_workforce">Not in the workforce</option>
+            <option value="other">Other work</option>
+          </select>
+        </div>
+        <div class="filter-field">
+          <label for="filter-education">Education</label>
+          <select id="filter-education">
+            <option value="">Any education</option>
+            <option value="lt_hs">No high-school diploma</option>
+            <option value="hs">High-school diploma</option>
+            <option value="some_college">Some college / associate degree</option>
+            <option value="bachelors">Bachelor's degree</option>
+            <option value="graduate">Graduate degree</option>
+          </select>
+        </div>
+        <div id="filter-error" class="ab-error filter-error" role="alert" tabindex="-1"></div>
+        <div class="res-actions filter-actions">
+          <button id="filter-apply" class="btn btn-primary" type="submit">Apply filters</button>
+          <button id="filter-clear" class="btn" type="button">Clear filters</button>
         </div>
       </form>
     </div>

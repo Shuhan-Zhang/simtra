@@ -61,6 +61,21 @@ async fn contract_all_endpoints() {
     assert!(v.get("has_key").is_some());
     assert!(v.get("sf_pums_records").and_then(|x| x.as_u64()).unwrap_or(0) > 1000, "pums loaded");
 
+    // ---- GET /cities (filter UI receives the city-specific area catalog) ----
+    let r = c.get(format!("{base}/cities")).send().await.expect("cities");
+    assert_eq!(r.status(), 200, "cities status");
+    let v: Value = r.json().await.unwrap();
+    let sf = v["cities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|city| city["slug"] == "sf")
+        .expect("SF city");
+    assert!(
+        sf["neighborhoods"].as_array().is_some_and(|areas| !areas.is_empty()),
+        "SF exposes filterable neighborhoods"
+    );
+
     // ---- POST /simulations ----
     let r = c
         .post(format!("{base}/simulations"))
@@ -70,6 +85,56 @@ async fn contract_all_endpoints() {
     let v: Value = r.json().await.unwrap();
     let sim_id = v["simulation_id"].as_str().expect("simulation_id").to_string();
     assert!(v["main_branch"].as_str().unwrap().ends_with(":main"));
+
+    // ---- POST /simulations with AND-combined demographic filters ----
+    let r = c
+        .post(format!("{base}/simulations"))
+        .json(&serde_json::json!({
+            "city": "sf",
+            "n": 32,
+            "seed": 42,
+            "filters": {
+                "age": 25,
+                "puma": 7511,
+                "occupation": "engineer",
+                "education": "bachelors"
+            }
+        }))
+        .send()
+        .await
+        .expect("create filtered sim");
+    assert_eq!(r.status(), 201, "filtered sim status");
+    let v: Value = r.json().await.unwrap();
+    assert!(v["source_records"].as_u64().unwrap_or(0) > 0);
+    assert_eq!(v["filters"]["age"], 25);
+    let filtered_branch = v["main_branch"].as_str().unwrap();
+
+    let r = c
+        .get(format!("{base}/branches/{filtered_branch}/agents?limit=100"))
+        .send()
+        .await
+        .expect("filtered agents");
+    assert_eq!(r.status(), 200, "filtered agents status");
+    let v: Value = r.json().await.unwrap();
+    let filtered_agents = v["agents"].as_array().unwrap();
+    assert_eq!(filtered_agents.len(), 32);
+    for agent in filtered_agents {
+        assert_eq!(agent["age"], 25);
+        assert_eq!(agent["puma"], 7511);
+        assert_eq!(agent["occupation_key"], "engineer");
+        assert_eq!(agent["educ"], "bachelors");
+    }
+
+    let r = c
+        .post(format!("{base}/simulations"))
+        .json(&serde_json::json!({
+            "city": "sf",
+            "filters": { "age": 3, "occupation": "engineer" }
+        }))
+        .send()
+        .await
+        .expect("empty filtered sim");
+    assert_eq!(r.status(), 422, "empty filter combination is explicit");
 
     // ---- GET /simulations/{id}/demographics (marginals match ACS) ----
     let r = c.get(format!("{base}/simulations/{sim_id}/demographics")).send().await.unwrap();

@@ -108,6 +108,7 @@ body {
 /* one focus ring, everywhere */
 .ask:focus-visible, .btn:focus-visible, .info-btn:focus-visible,
 .about-close:focus-visible, .char-close:focus-visible, .ab-form textarea:focus-visible,
+.filter-form input:focus-visible, .filter-form select:focus-visible,
 .title-btn:focus-visible, .title-option:focus-visible, .res-example:focus-visible,
 .news-bubble:focus-visible, .return:focus-visible {
   outline: var(--rule, 2px) solid var(--accent);
@@ -370,10 +371,24 @@ body {
 }
 .info-btn:hover { background: #fff; transform: translateY(-1px); }
 .info-btn:active { transform: translateY(0) scale(.96); background: var(--fill); }
+.info-btn:disabled { opacity: .45; cursor: default; transform: none; }
 .info-btn svg { width: var(--icon); height: var(--icon); }
 .info-btn svg [stroke] { stroke-width: var(--stroke); }
 .ab-btn { font-size: var(--fs-footnote); font-weight: var(--fw-bold); }
 .marketing-btn svg { pointer-events: none; }
+.filter-btn { position: relative; }
+.filter-btn svg { pointer-events: none; }
+.filter-btn[aria-pressed="true"] { background: var(--accent); color: #fff; }
+.filter-btn[aria-pressed="true"]:hover { background: #0069db; }
+.filter-count {
+  position: absolute; top: -4px; right: -4px;
+  min-width: 18px; height: 18px; padding: 0 5px;
+  display: flex; align-items: center; justify-content: center;
+  border: 2px solid #fff; border-radius: var(--r-full);
+  background: var(--ink); color: #fff;
+  font-size: 10px; font-weight: var(--fw-bold); line-height: 1;
+  font-variant-numeric: var(--nums);
+}
 
 /* ── result card ──────────────────────────────────────────────────────── */
 .result-card {
@@ -726,6 +741,42 @@ body {
 .marketing-limit { text-align: right; font-size: var(--fs-caption2); color: var(--ink-3); }
 .marketing-form[aria-busy="true"] textarea { opacity: .6; }
 
+/* ── resident filters ───────────────────────────────────────────────── */
+.filter-modal { width: min(600px, 94vw); }
+.filter-note { max-width: 500px; margin-right: var(--s-8); }
+.filter-form {
+  margin-top: var(--s-5);
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s-4);
+}
+.filter-field { display: grid; gap: var(--s-2); }
+.filter-field label {
+  font-size: var(--fs-caption2); font-weight: var(--fw-semi);
+  letter-spacing: var(--tr-label); text-transform: uppercase; color: var(--ink-3);
+}
+.filter-field input, .filter-field select {
+  width: 100%; min-height: var(--ctl); appearance: none;
+  border: var(--hair) solid var(--sep); border-radius: var(--r-sm);
+  padding: 10px var(--s-3); background: #fff; color: var(--ink);
+  font: var(--fw-reg) var(--fs-subhead)/var(--lh-tight) var(--font);
+  transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease);
+}
+.filter-field select {
+  padding-right: var(--s-8);
+  background-image: linear-gradient(45deg, transparent 50%, var(--ink-3) 50%),
+                    linear-gradient(135deg, var(--ink-3) 50%, transparent 50%);
+  background-position: calc(100% - 17px) 19px, calc(100% - 12px) 19px;
+  background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
+}
+.filter-field input:focus, .filter-field select:focus {
+  border-color: var(--accent); box-shadow: 0 0 0 3px rgba(0, 122, 255, .12); outline: none;
+}
+.filter-field input::placeholder { color: var(--ink-3); }
+.filter-error, .filter-actions { grid-column: 1 / -1; }
+.filter-error { margin-top: -4px; }
+.filter-form[aria-busy="true"] input,
+.filter-form[aria-busy="true"] select { opacity: .6; }
+
 /* ── resident inspector ───────────────────────────────────────────────── */
 .char-card {
   position: fixed; left: var(--s-5); bottom: 104px; z-index: 9;
@@ -844,6 +895,9 @@ body {
   .ask[data-state="busy"] { width: 168px; }
   .info-btn { width: var(--ctl-sm); height: var(--ctl-sm); font-size: var(--fs-subhead); }
   .dock-tool-spacer { display: none; }
+
+  .filter-form { grid-template-columns: 1fr; gap: var(--s-3); }
+  .filter-error, .filter-actions { grid-column: auto; }
 
   .about-title { font-size: var(--fs-title2); }
   .res-pct { font-size: var(--fs-large); }

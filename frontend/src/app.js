@@ -62,6 +62,19 @@ const els = {
   marketingCopy: $("marketing-copy"),
   marketingError: $("marketing-error"),
   marketingSubmit: $("marketing-submit"),
+  filterBtn: $("filter-btn"),
+  filterCount: $("filter-count"),
+  filterModal: $("filter-modal"),
+  filterScrim: $("filter-scrim"),
+  filterClose: $("filter-close"),
+  filterForm: $("filter-form"),
+  filterAge: $("filter-age"),
+  filterPuma: $("filter-puma"),
+  filterOccupation: $("filter-occupation"),
+  filterEducation: $("filter-education"),
+  filterError: $("filter-error"),
+  filterApply: $("filter-apply"),
+  filterClear: $("filter-clear"),
   infoBtn: $("info-btn"),
   about: $("about"),
   aboutScrim: $("about-scrim"),
@@ -81,6 +94,8 @@ const state = {
   cities: [],            // [{slug, display, bbox, ...}] from GET /cities
   city: null,            // the active city object (falls back to a synthetic "sf")
   switching: false,      // true while a city swap is re-creating the simulation
+  filters: {},           // exact-age, area, occupation, and education filters (AND-combined)
+  filterSourceRecords: null, // number of Census PUMS records behind the current sample
   news: [],              // the active city's recent articles (expandable bubble)
   newsExpanded: false,   // whether the news bubble is showing all of them
 };
@@ -89,6 +104,64 @@ const state = {
 const SF_FALLBACK = { slug: "sf", display: "San Francisco", bbox: { ...MAP.bbox }, default: true };
 
 const citySlug = () => state.city?.slug || "sf";
+
+const FILTER_OCCUPATION_LABEL = {
+  management_business: "management / business",
+  software_tech: "software / tech",
+  engineer: "engineer",
+  science_analysis: "science / analysis",
+  social_services: "social services",
+  legal: "legal",
+  education: "education",
+  arts_media: "arts / design / media",
+  healthcare: "healthcare",
+  service: "service work",
+  sales_office: "sales / office",
+  construction_trades: "construction / trades",
+  production_transportation: "production / transportation",
+  military: "military",
+  unemployed: "unemployed",
+  not_in_workforce: "not in workforce",
+  other: "other work",
+};
+const FILTER_EDUCATION_LABEL = {
+  lt_hs: "no HS diploma",
+  hs: "high-school diploma",
+  some_college: "some college",
+  bachelors: "bachelor's degree",
+  graduate: "graduate degree",
+};
+
+function normalizeFilters(filters = {}) {
+  const out = {};
+  if (Number.isInteger(filters.age)) out.age = filters.age;
+  if (Number.isInteger(filters.puma)) out.puma = filters.puma;
+  if (filters.occupation) out.occupation = filters.occupation;
+  if (filters.education) out.education = filters.education;
+  return out;
+}
+function filterCount(filters = state.filters) { return Object.keys(normalizeFilters(filters)).length; }
+function areaLabel(puma) {
+  return (state.city?.neighborhoods || []).find((area) => Number(area.puma) === Number(puma))?.label;
+}
+function filterSummary(filters = state.filters) {
+  const f = normalizeFilters(filters);
+  return [
+    Number.isInteger(f.age) ? `age ${f.age}` : null,
+    f.puma ? (areaLabel(f.puma) || `area ${f.puma}`) : null,
+    f.occupation ? FILTER_OCCUPATION_LABEL[f.occupation] : null,
+    f.education ? FILTER_EDUCATION_LABEL[f.education] : null,
+  ].filter(Boolean).join(" · ");
+}
+function syncFilterButton() {
+  const count = filterCount();
+  els.filterBtn.setAttribute("aria-pressed", count ? "true" : "false");
+  els.filterBtn.disabled = state.switching || state.phase === "booting" || state.phase === "error";
+  els.filterBtn.title = count ? `Filtered: ${filterSummary()}` : "Filter residents";
+  els.filterBtn.setAttribute("aria-label", els.filterBtn.title);
+  els.filterCount.textContent = String(count);
+  count ? show(els.filterCount) : hide(els.filterCount);
+}
 
 // fetch LLM chatter for the residents now on screen (sparse, batched, best-effort)
 async function requestChatter(ids) {
@@ -124,6 +197,7 @@ async function boot() {
   map.onZoomChange = (zoomedIn) => { zoomedIn ? show(els.returnBtn) : hide(els.returnBtn); };
   map.start();
   els.status.textContent = "waking the city…";
+  syncFilterButton();
 
   // Load the city catalog first (best-effort). If it fails we keep the existing
   // single-city SF behavior — the switcher just stays hidden.
@@ -145,7 +219,8 @@ async function boot() {
 
 // Create (or re-create) the simulation for a city, point the map base/bbox at it,
 // load that city's agents and reset the overview. Shared by boot + the switcher.
-async function loadCity(city) {
+async function loadCity(city, { filters = state.filters, preserveOnError = false } = {}) {
+  filters = normalizeFilters(filters);
   state.city = city;
   // The local map loads immediately and supplies dimensions + shoreline mask;
   // progressive satellite tiles are painted above it at the camera's resolution.
@@ -160,31 +235,50 @@ async function loadCity(city) {
   hide(els.newsBubble);            // clear the previous city's news while loading
   show(els.boot); setBoot(0.06);
   try {
-    const sim = await api.createSimulation({ city: city.slug });
-    state.simId = sim.simulation_id;
-    state.mainBranch = sim.main_branch;
+    const sim = await api.createSimulation({
+      city: city.slug,
+      ...(filterCount(filters) ? { filters } : {}),
+    });
+    if (filterCount(filters) && sim.source_records == null) {
+      throw new Error("This backend does not support resident filters yet. Run the updated backend locally.");
+    }
     setBoot(0.2);
-    const agents = await api.getAllAgents(state.mainBranch, (loaded, total) => {
+    const agents = await api.getAllAgents(sim.main_branch, (loaded, total) => {
       setBoot(0.2 + 0.77 * (total ? loaded / total : 0));
     });
     if (!agents.length) throw new Error("no agents returned");
+    state.simId = sim.simulation_id;
+    state.mainBranch = sim.main_branch;
+    state.filters = filters;
+    state.filterSourceRecords = sim.source_records ?? city.n_pums ?? null;
     map.setAgents(agents);
     state.residents = agents.length;
     map.setSim(city.slug, state.mainBranch);     // scope ambient chatter to this city + branch
     setBoot(1);
+    state.phase = "idle";
     setIdleStatus();
+    syncFilterButton();
     // let the bar finish, fade it out, then surface the news in its place (no overlap)
     setTimeout(() => { hide(els.boot); loadNews(city.slug); }, 450);
-    state.phase = "idle";
+    return sim;
   } catch (err) {
     console.error(err);
     hide(els.boot);
+    if (preserveOnError && state.simId && state.mainBranch) {
+      state.phase = "idle";
+      setIdleStatus();
+      syncFilterButton();
+      if (state.news.length) { renderNews(); show(els.newsBubble); }
+      throw err;
+    }
     hide(els.newsBubble);
     state.simId = null; state.mainBranch = null;
     map.setAgents(fallbackAgents(SIM.n));        // never leave an empty city
     els.status.textContent = "offline preview · backend unreachable";
     toast("Couldn't reach the backend — showing an offline preview.");
     state.phase = "error";
+    syncFilterButton();
+    return null;
   }
 }
 
@@ -192,14 +286,17 @@ function setIdleStatus() {
   const n = state.residents.toLocaleString();
   const display = (state.city?.display || "san francisco").toLowerCase();
   const kd = state.city?.knowledge_date;
+  const summary = filterSummary();
   // the clock = the date up to which the residents know the news (their knowledge cutoff)
-  const clock = kd
-    ? `<span class="status-clock">residents know the news up to ${escapeHtml(fmtDate(kd))}</span>`
-    : "";
+  const detail = summary
+    ? `<span class="status-clock">filtered: ${escapeHtml(summary)}</span>`
+    : kd
+      ? `<span class="status-clock">residents know the news up to ${escapeHtml(fmtDate(kd))}</span>`
+      : "";
   if (window.innerWidth < 560) {
-    els.status.innerHTML = `${n} residents`;              // compact on phones
+    els.status.innerHTML = `${n}${summary ? " filtered" : ""} residents`; // compact on phones
   } else {
-    els.status.innerHTML = `${escapeHtml(display)} · ${n} residents${clock}`;
+    els.status.innerHTML = `${escapeHtml(display)} · ${n} residents${detail}`;
   }
   show(els.status);
 }
@@ -304,6 +401,151 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && titleMenuOpen()) closeTitleMenu();
 });
 
+// ── population filters ──────────────────────────────────────────────────
+// Filters are sent when the simulation is created, so every later workflow
+// (map, poll, A/B, and marketing counterfactual) uses the same subset.
+let filterPreviousFocus = null;
+const filterOpen = () => !els.filterModal.classList.contains("hidden");
+
+function setFilterError(message) {
+  els.filterError.textContent = message || "";
+  if (message) els.filterError.focus();
+}
+
+function setFilterBusy(busy) {
+  els.filterForm.setAttribute("aria-busy", busy ? "true" : "false");
+  for (const control of [
+    els.filterAge, els.filterOccupation, els.filterEducation,
+    els.filterApply, els.filterClear,
+  ]) control.disabled = busy;
+  els.filterPuma.disabled = busy || !(state.city?.neighborhoods || []).length;
+  els.filterApply.textContent = busy ? "Building sample…" : "Apply filters";
+}
+
+function populateFilterAreas(selectedPuma) {
+  const areas = state.city?.neighborhoods || [];
+  els.filterPuma.innerHTML = `<option value="">Anywhere in this city</option>` + areas.map((area) =>
+    `<option value="${Number(area.puma)}">${escapeHtml(area.label)}</option>`
+  ).join("");
+  els.filterPuma.value = selectedPuma == null ? "" : String(selectedPuma);
+  els.filterPuma.disabled = !areas.length;
+}
+
+function writeFilterForm(filters = state.filters) {
+  const f = normalizeFilters(filters);
+  els.filterAge.value = Number.isInteger(f.age) ? String(f.age) : "";
+  populateFilterAreas(f.puma);
+  els.filterOccupation.value = f.occupation || "";
+  els.filterEducation.value = f.education || "";
+}
+
+function readFilterForm() {
+  const ageText = els.filterAge.value.trim();
+  const age = ageText === "" ? null : Number(ageText);
+  if (age != null && (!Number.isInteger(age) || age < 0 || age > 99)) {
+    throw new Error("Age must be a whole number from 0 to 99.");
+  }
+  return normalizeFilters({
+    ...(age == null ? {} : { age }),
+    ...(els.filterPuma.value ? { puma: Number(els.filterPuma.value) } : {}),
+    ...(els.filterOccupation.value ? { occupation: els.filterOccupation.value } : {}),
+    ...(els.filterEducation.value ? { education: els.filterEducation.value } : {}),
+  });
+}
+
+function openFilters() {
+  if (isBusy() || state.switching || state.phase === "booting") return;
+  if (state.phase === "error" || !state.mainBranch) {
+    toast("Resident filters need the backend — it's currently unreachable.");
+    return;
+  }
+  closeInput();
+  closeCharCard();
+  if (abOpen()) closeAbTest(false);
+  if (marketingOpen()) closeMarketing(false);
+  filterPreviousFocus = document.activeElement;
+  writeFilterForm();
+  setFilterError("");
+  setFilterBusy(false);
+  show(els.filterScrim);
+  show(els.filterModal);
+  requestAnimationFrame(() => els.filterAge.focus());
+}
+
+function closeFilters(restoreFocus = true) {
+  hide(els.filterModal);
+  hide(els.filterScrim);
+  setFilterError("");
+  setFilterBusy(false);
+  if (restoreFocus && filterPreviousFocus?.focus) filterPreviousFocus.focus();
+}
+
+function filterErrorMessage(err) {
+  return (err?.message || "Couldn't build that sample.")
+    .replace(/^POST \/simulations → \d+:\s*/, "");
+}
+
+async function applyPopulationFilters(filters) {
+  if (isBusy() || state.switching || !state.city) return;
+  const previousFilters = state.filters;
+  const previousSourceRecords = state.filterSourceRecords;
+  const requested = normalizeFilters(filters);
+
+  state.reqId++;
+  if (state.abort) { state.abort.abort(); state.abort = null; }
+  map.onProgress = null; map.onRevealComplete = null;
+  els.progress.classList.remove("indeterminate");
+  cleanupBranch();
+  closeCharCard();
+  hide(els.summary); hide(els.resultCard);
+  if (inputOpen()) closeInput();
+
+  setFilterError("");
+  setFilterBusy(true);
+  state.switching = true;
+  state.phase = "booting";
+  syncActiveTitle();
+  syncFilterButton();
+
+  try {
+    const sim = await loadCity(state.city, { filters: requested, preserveOnError: true });
+    closeFilters(false);
+    const count = filterCount(requested);
+    if (count) {
+      const source = sim?.source_records;
+      toast(source
+        ? `Filtered sample ready · ${source.toLocaleString()} Census records matched`
+        : "Filtered sample ready");
+    } else {
+      toast("Showing the whole city.");
+    }
+  } catch (err) {
+    state.filters = previousFilters;
+    state.filterSourceRecords = previousSourceRecords;
+    setFilterError(filterErrorMessage(err));
+    state.phase = "idle";
+    setIdleStatus();
+  } finally {
+    state.switching = false;
+    setFilterBusy(false);
+    syncActiveTitle();
+    syncFilterButton();
+  }
+}
+
+els.filterBtn.addEventListener("click", openFilters);
+els.filterClose.addEventListener("click", () => closeFilters());
+els.filterScrim.addEventListener("click", () => closeFilters());
+els.filterForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  try { applyPopulationFilters(readFilterForm()); }
+  catch (err) { setFilterError(err.message); }
+});
+els.filterClear.addEventListener("click", () => {
+  writeFilterForm({});
+  applyPopulationFilters({});
+});
+
 async function onSelectCity(slug) {
   if (state.switching || slug === citySlug()) return;
   const city = state.cities.find((c) => c.slug === slug);
@@ -318,8 +560,14 @@ async function onSelectCity(slug) {
   closeCharCard();
   if (abOpen()) closeAbTest(false);
   if (marketingOpen()) closeMarketing(false);
+  if (filterOpen()) closeFilters(false);
   hide(els.summary); hide(els.resultCard);
   if (inputOpen()) closeInput();
+
+  // Areas are city-specific, so a city change returns to that city's full sample.
+  state.filters = {};
+  state.filterSourceRecords = null;
+  syncFilterButton();
 
   state.switching = true;
   state.phase = "booting";
@@ -329,6 +577,7 @@ async function onSelectCity(slug) {
   } finally {
     state.switching = false;
     syncActiveTitle();
+    syncFilterButton();
   }
 }
 // keep the status text right-sized across orientation changes
@@ -1349,7 +1598,12 @@ function topIssues(v, n = 2) {
 function showCharCard(s) {
   if (!s || !s.name) return;                 // offline-preview agents have no persona
   const v = s.values || {};
-  const dem = [s.age != null ? `${s.age}` : null, RACE_LABEL[s.race] || s.race, EDUC_LABEL[s.educ] || s.educ].filter(Boolean).join(" · ");
+  const dem = [
+    s.age != null ? `${s.age}` : null,
+    RACE_LABEL[s.race] || s.race,
+    EDUC_LABEL[s.educ] || s.educ,
+    s.job,
+  ].filter(Boolean).join(" · ");
   const tags = [leanLabel(v.economic, "economically left", "economically right"), leanLabel(v.social, "socially progressive", "socially conservative")].filter(Boolean);
   const issues = topIssues(v, 2);
   const isPoll = s.verdict != null;
@@ -1433,11 +1687,23 @@ document.addEventListener("keydown", (e) => {
       e.preventDefault();
       first.focus();
     }
+  } else if (e.key === "Tab" && filterOpen()) {
+    const focusable = [...els.filterModal.querySelectorAll("button:not([disabled]), input:not([disabled]), select:not([disabled])")];
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
   } else if (e.key === "Escape") {
     if (marketingOpen()) {
       if (isBusy()) cancelPrediction(); else closeMarketing();
     }
     else if (abOpen()) closeAbTest();
+    else if (filterOpen()) closeFilters();
     else if (aboutOpen()) closeAbout();
     else if (charOpen()) closeCharCard();
     else if (isBusy()) cancelPrediction();
@@ -1446,8 +1712,8 @@ document.addEventListener("keydown", (e) => {
     else if (map.zoomedIn) map.returnToOverview();
   } else if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
     e.preventDefault();
-    if (!isBusy() && !inputOpen() && !marketingOpen() && !abOpen()) openInput();
-  } else if (e.key === "/" && !isBusy() && !inputOpen() && !marketingOpen() && !abOpen() && !typingTarget(document.activeElement)) {
+    if (!isBusy() && !inputOpen() && !marketingOpen() && !abOpen() && !filterOpen()) openInput();
+  } else if (e.key === "/" && !isBusy() && !inputOpen() && !marketingOpen() && !abOpen() && !filterOpen() && !typingTarget(document.activeElement)) {
     e.preventDefault();
     openInput();
   }

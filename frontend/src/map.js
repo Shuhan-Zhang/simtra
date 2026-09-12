@@ -363,7 +363,7 @@ export class SFMap {
           rationale: null,                       // set from a poll's sample_rationales
           // seeded persona, surfaced when you tap a character
           name: a.name, age: a.age, race: a.race_eth, educ: a.educ,
-          hood: a.neighborhood, values: a.values, action: a.action,
+          job: a.occupation, hood: a.neighborhood, values: a.values, action: a.action,
         };
       });
   }
