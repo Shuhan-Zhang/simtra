@@ -72,12 +72,12 @@ export function audienceHeader(audience, sampleSize) {
   const n = count(sampleSize) ?? audience?.residents;
   const source = audience?.sourceRecords;
   const sourceKnown = source != null;
-  const thin = sourceKnown && source < 5;
+  const thin = sourceKnown && source < 100;
   let basis = "Responses are simulated from Census data. Percentages describe this sample.";
   if (source === 1) {
     basis = "All simulated residents come from one matching Census record. Broaden the filters to include more source data.";
   } else if (thin) {
-    basis = `Only ${format(source)} matching source records are available. Repeated sampling does not add independent source data.`;
+    basis = `Small audience: only ${format(source)} matching Census ${source === 1 ? "record" : "records"}. Each one is polled individually and the interval reflects that; read the result as directional.`;
   } else if (sourceKnown && n > source) {
     basis = "Census records are reused to generate this sample. Simulated residents are not separate survey respondents.";
   }

@@ -168,8 +168,34 @@ struct Cluster {
 }
 
 /// Cluster agents into archetypes, coarsening the key until under `max_clusters`.
+/// Number of distinct Census persons behind a population (clones share a record).
+pub fn distinct_records(pop: &Population) -> usize {
+    let mut seen: std::collections::HashSet<(&str, u32)> = std::collections::HashSet::new();
+    for a in &pop.agents {
+        seen.insert((a.rec.serialno.as_str(), a.rec.sporder));
+    }
+    seen.len()
+}
+
 fn cluster_agents(pop: &Population, max_clusters: usize) -> Vec<Cluster> {
     let cutoffs = pop.income_cutoffs;
+    // A narrowly filtered audience can rest on a few dozen Census records cloned into
+    // thousands of residents. Bucketing those clones into demographic archetypes throws
+    // away the little variety there is (a 21-record pool can collapse to one bucket and
+    // one answer). When every distinct person fits in the batch budget, poll each
+    // distinct person instead: one archetype per Census record.
+    if distinct_records(pop) <= max_clusters {
+        let mut map: HashMap<(String, u32), Vec<usize>> = HashMap::new();
+        for (i, a) in pop.agents.iter().enumerate() {
+            map.entry((a.rec.serialno.clone(), a.rec.sporder)).or_default().push(i);
+        }
+        let mut clusters: Vec<Cluster> = map
+            .into_values()
+            .map(|member_idx| Cluster { rep_idx: member_idx[0], member_idx })
+            .collect();
+        clusters.sort_by_key(|c| c.rep_idx);
+        return clusters;
+    }
     for level in 0..4 {
         let mut map: HashMap<String, Vec<usize>> = HashMap::new();
         for (i, a) in pop.agents.iter().enumerate() {
@@ -778,8 +804,25 @@ p_yes is a probability between 0 and 1. Be realistic and calibrated to {city_nam
 
         let p_yes = aggregate::weighted_yes_share(&rows);
         let weights: Vec<f64> = rows.iter().map(|r| r.0).collect();
+        // Clones of one Census record are not independent respondents. When the pool
+        // is heavily cloned, bootstrap over archetypes (one row per distinct answer,
+        // carrying its members' total weight) so the interval reflects the real
+        // number of people behind the estimate instead of collapsing to a point.
+        let ci_rows: Vec<(f64, f64)> = if distinct_records(pop) * 4 < pop.agents.len() {
+            clusters
+                .iter()
+                .enumerate()
+                .filter(|(ci, _)| answered[*ci])
+                .map(|(ci, c)| {
+                    let w: f64 = c.member_idx.iter().map(|&i| pop.agents[i].weight()).sum();
+                    (w, p_by_cluster[ci])
+                })
+                .collect()
+        } else {
+            rows.clone()
+        };
         let (ci_low, ci_high) =
-            aggregate::weighted_bootstrap_ci(&rows, 400, 0.05, pop.seed ^ 0x9e3779b9);
+            aggregate::weighted_bootstrap_ci(&ci_rows, 400, 0.05, pop.seed ^ 0x9e3779b9);
         let mut breakdowns: HashMap<String, Vec<DemoBreak>> = HashMap::new();
         for (d, rws) in breakdown_rows {
             let b = aggregate::breakdown(&rws);
