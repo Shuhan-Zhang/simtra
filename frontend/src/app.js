@@ -214,13 +214,13 @@ function cleanupBranch() {
 
 // The app owns selection lifetime; the lane modules remain pure render/query tools.
 const verified = { model:null, selection:{segments:[]}, combine:false, dispose:null };
-const evidence = { model: null, selection: { segments: [] }, dimension: "gender", combine: false, open: false, residentId: null, dispose: null };
+const evidence = { model: null, selection: { segments: [] }, dimension: "gender", combine: false, open: true, residentId: null, dispose: null };
 function resetEvidence() {
   verified.dispose?.(); verified.dispose = null;
   verified.model = null; verified.selection = {segments:[]}; verified.combine = false;
   evidence.dispose?.(); evidence.dispose = null;
   evidence.model = null; evidence.selection = { segments: [] };
-  evidence.dimension = "gender"; evidence.combine = false; evidence.open = false; evidence.residentId = null;
+  evidence.dimension = "gender"; evidence.combine = false; evidence.open = true; evidence.residentId = null;
   map.clearSegmentSelection();
 }
 function clearEvidenceSelection() {
@@ -256,17 +256,19 @@ function attachEvidence(result, ab = false) {
   evidence.model = model;
   if (!model.breakdowns.some((b) => b.dimension === evidence.dimension)) evidence.dimension = model.breakdowns[0]?.dimension || "gender";
   const snapshot = source?.local_snapshot || "Unknown";
-  const truth = `<div class="evidence-truth"><strong>Census / ACS PUMS</strong> is the demographic source. Residents are synthetic; poll outcomes are simulated/model-based. Hydra sources provide context, not proof that a prediction occurred.
-    <span>Snapshot: ${escapeHtml(snapshot)} · Dataset vintage, retrieval date and license: unknown unless supplied in provenance.</span>
-    ${api.isDemo || result.fixture_mode || result.preview_mode ? '<strong>Saved demo fixture — these outcomes do not answer a new question.</strong>' : ''}</div>`;
+  const truthText = `Census / ACS PUMS is the demographic source. Residents are synthetic; poll outcomes are simulated / model-based. Hydra sources provide context, not proof that a prediction occurred. Snapshot: ${escapeHtml(snapshot)} · dataset vintage, retrieval date and license: unknown unless supplied in provenance.`;
+  const fixtureNote = api.isDemo || result.fixture_mode || result.preview_mode ? '<p class="evidence-fixture"><strong>Saved demo fixture — these outcomes do not answer a new question.</strong></p>' : '';
   const section = document.createElement("section"); section.id = "evidence-panel";
-  section.innerHTML = `${truth}<details id="evidence-details" ${evidence.open ? "open" : ""}><summary>Explore demographic evidence</summary>
+  section.innerHTML = `${fixtureNote}<details id="evidence-details" ${evidence.open ? "open" : ""}><summary>Explore demographic evidence
+      <span class="evidence-info-wrap"><button type="button" class="evidence-info" id="evidence-info" aria-label="About the data source" aria-describedby="evidence-tip">i</button><span role="tooltip" id="evidence-tip" class="evidence-tooltip">${truthText}</span></span></summary>
     <div class="evidence-controls"><label for="evidence-dimension">Demographic dimension</label><select id="evidence-dimension">${model.breakdowns.map((b) => `<option value="${escapeHtml(b.dimension)}" ${b.dimension === evidence.dimension ? "selected" : ""}>${escapeHtml(AB_DIM_LABEL[b.dimension] || b.dimension)}</option>`).join("")}</select>
     <label class="combine-control"><input type="checkbox" id="evidence-combine" ${evidence.combine ? "checked" : ""}> Combine groups (OR)</label>
     <label for="evidence-resident">Inspect a synthetic resident (also available by tapping the map)</label><select id="evidence-resident"><option value="">Choose resident</option>${state.rawResidents.map((r,i) => `<option value="${i}">${escapeHtml(r.name || `Resident ${r.id}`)} · ${escapeHtml(evidenceLabel(evidence.dimension, r.segments?.[evidence.dimension] || "Unknown"))}</option>`).join("")}</select></div>
     <div id="evidence-host"></div></details>`;
   const anchor = els.resultCard.querySelector(".res-hydra") || els.resultCard.querySelector(".res-meta");
   if (anchor) anchor.after(section); else els.resultCard.prepend(section);
+  // the info button lives inside <summary>: keep its clicks from toggling the disclosure
+  $("evidence-info").addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); });
   $("evidence-details").addEventListener("toggle", (event) => {
     evidence.open = event.target.open;
     if (!evidence.open) clearEvidenceSelection();

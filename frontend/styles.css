@@ -945,8 +945,13 @@ body {
 }
 
 /* Interactive evidence: keep map context visible, including on narrow screens. */
-.evidence-truth { margin-block: 18px; padding: 12px; border: 1px solid #69796b; border-radius: 10px; line-height: 1.5; font-size: 13px; background: #f1f7ef; color: #193520; }
-.evidence-truth span, .evidence-truth > strong:last-child { display: block; margin-top: 6px; }
+/* data-source note as a tooltip on a small "i" next to the evidence disclosure */
+.evidence-info-wrap { position: relative; display: inline-block; margin-left: 6px; vertical-align: middle; }
+.evidence-info { width: 18px; height: 18px; padding: 0; border: 1px solid #8a968c; border-radius: 50%; background: #fff; color: #4f5d51; font: 700 11px/16px system-ui, sans-serif; cursor: default; }
+.evidence-info:focus-visible { outline: 2px solid #1655d8; outline-offset: 2px; }
+.evidence-tooltip { position: absolute; left: 50%; bottom: calc(100% + 8px); transform: translateX(-50%); width: min(340px, 78vw); padding: 10px 12px; border-radius: 10px; background: #193520; color: #f1f7ef; font: 400 12px/1.45 system-ui, sans-serif; text-align: left; white-space: normal; box-shadow: 0 6px 20px rgba(0,0,0,.18); z-index: 5; opacity: 0; visibility: hidden; transition: opacity .12s; pointer-events: none; }
+.evidence-info:hover + .evidence-tooltip, .evidence-info:focus-visible + .evidence-tooltip, .evidence-info-wrap:hover .evidence-tooltip { opacity: 1; visibility: visible; }
+.evidence-fixture { margin: 8px 0; font-size: 13px; color: #193520; }
 #evidence-details > summary { cursor: pointer; min-height: 44px; padding: 12px 0; font-weight: 700; }
 .evidence-controls { display: grid; gap: 8px; margin-bottom: 12px; }
 .evidence-controls select { width: 100%; min-width: 0; min-height: 44px; border: 1px solid #667568; border-radius: 6px; padding: 8px; background: #fff; color: #17231a; font: inherit; }
@@ -976,7 +981,7 @@ body.offline-demo .result-card { max-height: min(60dvh, 720px); }
   body.offline-demo .title-select, body.offline-demo .status { margin-top: 66px; }
 }
 @media (forced-colors: active) {
-  .evidence-truth, .evidence-chart button, .evidence-controls select, .evidence-chart [data-evidence-summary] { forced-color-adjust: auto; background: Canvas; color: CanvasText; border-color: CanvasText; }
+  .evidence-tooltip, .evidence-chart button, .evidence-controls select, .evidence-chart [data-evidence-summary] { forced-color-adjust: auto; background: Canvas; color: CanvasText; border-color: CanvasText; }
   .evidence-chart button[aria-pressed="true"] { border: 3px solid Highlight; }
   #evidence-panel :focus-visible { outline-color: Highlight; }
 }
