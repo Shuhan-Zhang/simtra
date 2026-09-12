@@ -647,16 +647,18 @@ export class SFMap {
   setWaiting() { this.mode = "waiting"; }
 
   startReveal(verdicts, durationMs = TIMING.revealMs) {
+    if (this.reducedMotion) durationMs = 0;
     this.revealDur = durationMs;
     const now = performance.now();
     this.revealT0 = now; this.clearFade = 1;
     const spread = durationMs * 0.82;
-    this.agents.forEach((a, i) => { a.verdict = verdicts[i]; a.activateAt = now + Math.random() * spread; });
+    this.agents.forEach((a, i) => { a.verdict = verdicts[i]; a.activateAt = this.reducedMotion ? now - POP_MS : now + Math.random() * spread; });
     this.revealCount = 0; this.mode = "reveal";
   }
 
   clearVerdicts() {
     for (const a of this.agents) a.rationale = null;
+    if (this.reducedMotion) { for (const a of this.agents) a.verdict = null; this.mode = "idle"; this.clearFade = 1; return; }
     if (this.mode === "idle") return;
     this.clearT0 = performance.now(); this.mode = "clearing";
   }
@@ -676,11 +678,11 @@ export class SFMap {
 
   _draw(now) {
     const ctx = this.ctx;
-    const dt = Math.min(0.05, (now - this.lastT) / 1000);
+    const dt = this.reducedMotion ? 0 : Math.min(0.05, (now - this.lastT) / 1000);
     this.lastT = now;
 
     // animate camera toward target (snappy critically-damped-ish lerp)
-    const k = 1 - Math.pow(0.0001, dt); // ~time-constant independent of fps
+    const k = this.reducedMotion ? 1 : 1 - Math.pow(0.0001, dt); // ~time-constant independent of fps
     this.cam.x = lerp(this.cam.x, this.camTarget.x, k);
     this.cam.y = lerp(this.cam.y, this.camTarget.y, k);
     this.cam.zoom = lerp(this.cam.zoom, this.camTarget.zoom, k);
@@ -704,7 +706,7 @@ export class SFMap {
     }
 
     this._drawSprites(now, dt);
-    this._updateBubbles(now);
+    if (!this.reducedMotion) this._updateBubbles(now);
     this._drawBubbles();
 
     // reveal progress + completion (unchanged contract for app.js)
@@ -712,7 +714,7 @@ export class SFMap {
       let revealed = 0;
       for (const a of this.agents) if (a.verdict && now >= a.activateAt) revealed++;
       if (revealed !== this.revealCount) { this.revealCount = revealed; this.onProgress && this.onProgress(revealed, this.agents.length); }
-      if (now > this.revealT0 + this.revealDur + POP_MS) {
+      if (this.reducedMotion || now > this.revealT0 + this.revealDur + POP_MS) {
         this.revealCount = this.agents.length;
         this.onProgress && this.onProgress(this.agents.length, this.agents.length);
         this.mode = "results";
@@ -726,7 +728,7 @@ export class SFMap {
     const z = this.cam.zoom;
     const drawPx = Math.max(3, SPRITE_WORLD * z);          // on-screen sprite height
     const showVerdict = this.mode === "reveal" || this.mode === "results" || this.mode === "clearing";
-    const breathing = this.mode === "waiting";
+    const breathing = this.mode === "waiting" && !this.reducedMotion;
     const margin = drawPx * 2;
     const spriteOk = this.spriteReady;
     const selection = this._segmentResult;
@@ -754,7 +756,7 @@ export class SFMap {
       let vScale = 0;
       if (showVerdict && a.verdict) {
         const local = now - a.activateAt;
-        if (local >= 0) vScale = easeOutBack(clamp01(local / POP_MS)) * this.clearFade;
+        if (local >= 0) vScale = (this.reducedMotion ? 1 : easeOutBack(clamp01(local / POP_MS))) * this.clearFade;
       }
 
       const w = drawPx, h = drawPx;

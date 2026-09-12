@@ -1,5 +1,5 @@
 // DOM-free selection over canonical backend keys. No demographic inference.
-export const SEGMENT_DIMENSIONS = Object.freeze(["age", "gender", "race", "income", "gender_x_age"]);
+export const SEGMENT_DIMENSIONS = Object.freeze(["age", "gender", "race", "education", "income", "tenure", "marital", "nativity", "employment", "citizenship", "geography", "gender_x_age", "race_x_income", "education_x_income"]);
 const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 
 // Copy the request so subsequent caller edits cannot change an active selection.
@@ -19,7 +19,7 @@ export function normalizeSegmentSelection(selection) {
   };
 }
 
-// O(N * 5) once per population replacement. Row indices (not IDs) preserve
+// O(N * number of dimensions) once per population replacement. Row indices (not IDs) preserve
 // duplicates and source ordering. Snapshot keys/weights without mutating agents.
 // Missing, negative, or nonfinite weights contribute zero, never an invented 1.
 export function createSegmentIndex(agents) {
