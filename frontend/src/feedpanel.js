@@ -309,6 +309,7 @@ export function initFeedPanel({
   scheduleRefresh();
   root.classList.remove("hidden");
   refreshFeedPanel();
+  watchStatus();
 }
 
 // Reload the thread for the current city. Called by the app when the city
@@ -416,6 +417,25 @@ function watchResultCard() {
   };
   new MutationObserver(apply).observe(card, { attributes: true, attributeFilter: ["class"] });
   apply();
+}
+
+// The panel sits under the top-right status card, whose height changes with the
+// audience text (a filtered audience wraps to several lines). Track it live.
+function placeBelowStatus() {
+  const status = document.getElementById("status");
+  if (!status || !state.root) return;
+  const r = status.getBoundingClientRect();
+  const hidden = status.classList.contains("hidden") || r.height === 0;
+  const top = hidden ? 92 : Math.round(r.bottom + 12);
+  state.root.style.top = `${top}px`;
+}
+function watchStatus() {
+  const status = document.getElementById("status");
+  if (!status || typeof ResizeObserver === "undefined") return;
+  const ro = new ResizeObserver(placeBelowStatus);
+  ro.observe(status);
+  window.addEventListener("resize", placeBelowStatus);
+  placeBelowStatus();
 }
 
 function applyCollapsed() {

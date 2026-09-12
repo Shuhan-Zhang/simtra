@@ -1180,7 +1180,10 @@ async function runPrediction(question) {
     const framing = parsed?.framing || guessFraming(question);
     const description = parsed?.description || "";
     const options = parsed?.options && parsed.options.length ? parsed.options : undefined;
-    const pollQuestion = parsed?.question || question;
+    // Keep the user's own wording. The router still supplies framing, a neutral
+    // description and any option list, but the question residents see (and the
+    // timeline records) is exactly what was typed.
+    const pollQuestion = question;
 
     els.summaryLabel.textContent = "PREDICTING";
     els.progressFill.style.width = "18%";
@@ -1289,7 +1292,7 @@ async function runMarketingTest() {
       return;
     }
 
-    const pollQuestion = (parsed.question || "").trim();
+    const pollQuestion = (input.question || parsed.question || "").trim(); // keep the user's wording
     const description = (parsed.description || "").trim();
     if (!pollQuestion || !description) {
       setMarketingBusy(false);

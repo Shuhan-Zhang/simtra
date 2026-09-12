@@ -498,6 +498,7 @@ body {
   font-size: var(--fs-caption2); font-weight: var(--fw-semi); letter-spacing: var(--tr-label);
   text-transform: uppercase; color: #0064d2;
 }
+.audience-eyebrow { padding-right: 44px; } /* keep clear of the card close button */
 .audience-badge { padding: 3px 8px; border-radius: var(--r-full); background: #edf5ff; letter-spacing: 0; text-transform: none; }
 .audience-title { margin: var(--s-2) 0 0; font-size: var(--fs-title2); font-weight: var(--fw-bold); line-height: var(--lh-tight); letter-spacing: var(--tr-tight); }
 .audience-qualification { margin: 4px 0 0; font-size: var(--fs-subhead); font-weight: var(--fw-med); }
