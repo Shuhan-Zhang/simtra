@@ -19,6 +19,7 @@
 //! (:Persona)-[:ANSWERED {p_yes, dist, why, archetype, at}]->(:Test)
 //! (:Test)-[:UNDER_EVENT]->(:Event)                                   the poll's stimulus event
 //! (:Test)-[:USED_STIMULUS]->(:Stimulus {id, label, text})            A/B variants
+//! (:DataQuery {id, question, answer, response_json})-[:ASKED_IN]->(:City)  verified-data questions
 //! (:Persona)-[:REACTED_TO {text, sentiment, at}]->(:Event)            social-feed reaction
 //! ```
 //!
@@ -104,6 +105,24 @@ pub struct TestRecord {
     pub n_archetypes: usize,
     pub simulation_id: String,
     pub branch_id: String,
+    pub created_at: String,
+    /// JSON `{"breakdowns", "option_breakdowns", "p_distribution"}` so the demographic
+    /// evidence chart can be rebuilt from the timeline later. Empty when too large.
+    #[serde(default)]
+    pub breakdowns_json: String,
+}
+
+/// Largest breakdown payload stored on a Test node (bytes).
+const MAX_BREAKDOWNS_BYTES: usize = 200_000;
+
+/// A verified-data question answered from the committed PUMS snapshot (no model).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DataQueryRecord {
+    pub id: String,
+    pub city: String,
+    pub question: String,
+    pub answer: String,
+    pub status: String,
     pub created_at: String,
 }
 
@@ -193,18 +212,36 @@ pub enum LineageItem {
         stimuli: Vec<StimulusRecord>,
         previous_p_yes: Option<f64>,
         delta: Option<f64>,
+        /// Stored demographic breakdowns (`{"breakdowns","option_breakdowns","p_distribution"}`),
+        /// or null for tests recorded before breakdowns were kept.
+        breakdowns: Option<Value>,
+    },
+    /// A verified-data question (survey-weighted PUMS statistic, no model).
+    #[serde(rename = "data_query")]
+    DataQuery {
+        id: String,
+        question: String,
+        answer: String,
+        status: String,
+        created_at: String,
+        /// The full `/data-query` response, so the verified chart can be re-rendered.
+        response: Value,
     },
 }
 
 impl LineageItem {
     pub fn created_at(&self) -> &str {
         match self {
-            LineageItem::Event { created_at, .. } | LineageItem::Test { created_at, .. } => created_at,
+            LineageItem::Event { created_at, .. }
+            | LineageItem::Test { created_at, .. }
+            | LineageItem::DataQuery { created_at, .. } => created_at,
         }
     }
     pub fn id(&self) -> &str {
         match self {
-            LineageItem::Event { id, .. } | LineageItem::Test { id, .. } => id,
+            LineageItem::Event { id, .. }
+            | LineageItem::Test { id, .. }
+            | LineageItem::DataQuery { id, .. } => id,
         }
     }
 }
@@ -505,6 +542,7 @@ impl MemoryClient {
             "CREATE CONSTRAINT event_id IF NOT EXISTS FOR (e:Event) REQUIRE e.id IS UNIQUE",
             "CREATE CONSTRAINT test_id IF NOT EXISTS FOR (t:Test) REQUIRE t.id IS UNIQUE",
             "CREATE CONSTRAINT stimulus_id IF NOT EXISTS FOR (s:Stimulus) REQUIRE s.id IS UNIQUE",
+            "CREATE CONSTRAINT data_query_id IF NOT EXISTS FOR (d:DataQuery) REQUIRE d.id IS UNIQUE",
         ];
         // Constraints cannot share a transaction with data writes, and one failing
         // (e.g. an older Neo4j syntax) should not block the others.
@@ -651,7 +689,7 @@ impl MemoryClient {
                t.framing = $framing, t.as_of_date = $date, t.model = $model, t.p_yes = $p_yes, \
                t.options = $options, t.p_distribution = $dist, t.n_agents = $n_agents, \
                t.n_archetypes = $n_archetypes, t.simulation_id = $sim, t.branch_id = $branch, \
-               t.created_at = $now \
+               t.created_at = $now, t.breakdowns_json = $breakdowns \
              MERGE (t)-[:RAN_ON]->(p)",
             json!({
                 "pop": population_key, "id": test.id, "kind": test.kind, "question": test.question,
@@ -660,6 +698,7 @@ impl MemoryClient {
                 "dist": test.p_distribution, "n_agents": test.n_agents as i64,
                 "n_archetypes": test.n_archetypes as i64, "sim": test.simulation_id,
                 "branch": test.branch_id, "now": test.created_at,
+                "breakdowns": test.breakdowns_json,
             }),
         )])
         .await?;
@@ -918,9 +957,14 @@ impl MemoryClient {
               size([(e:Event)-[:HAPPENED_IN]->(c) WHERE e.created_at <= t.created_at | e]) AS events_known \
             RETURN t.id, t.kind, t.question, t.description, t.framing, t.as_of_date, t.model, \
               t.p_yes, t.options, t.p_distribution, t.n_agents, t.n_archetypes, t.simulation_id, \
-              t.branch_id, p.key, t.created_at, events_known, ue.text, stimuli \
+              t.branch_id, p.key, t.created_at, events_known, ue.text, stimuli, t.breakdowns_json \
             ORDER BY t.created_at ASC, t.id ASC";
-        let res = self.run(&[(events_q, params.clone()), (tests_q, params)]).await?;
+        let queries_q = "MATCH (d:DataQuery)-[:ASKED_IN]->(:City {slug: $city}) \
+            RETURN d.id, d.question, d.answer, d.status, d.created_at, d.response_json \
+            ORDER BY d.created_at ASC, d.id ASC";
+        let res = self
+            .run(&[(events_q, params.clone()), (tests_q, params.clone()), (queries_q, params)])
+            .await?;
         let mut items: Vec<LineageItem> = Vec::new();
         if let Some(rows) = res.first() {
             for r in rows {
@@ -975,6 +1019,24 @@ impl MemoryClient {
                     created_at: s(15), events_known: u(16),
                     under_event: r.get(17).and_then(|v| v.as_str()).map(String::from),
                     stimuli, previous_p_yes: None, delta: None,
+                    breakdowns: r
+                        .get(19)
+                        .and_then(|v| v.as_str())
+                        .filter(|t| !t.is_empty())
+                        .and_then(|t| serde_json::from_str::<Value>(t).ok()),
+                });
+            }
+        }
+        if let Some(rows) = res.get(2) {
+            for r in rows {
+                let s = |i: usize| r.get(i).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let response = r
+                    .get(5)
+                    .and_then(|v| v.as_str())
+                    .and_then(|t| serde_json::from_str::<Value>(t).ok())
+                    .unwrap_or(Value::Null);
+                items.push(LineageItem::DataQuery {
+                    id: s(0), question: s(1), answer: s(2), status: s(3), created_at: s(4), response,
                 });
             }
         }
@@ -984,6 +1046,40 @@ impl MemoryClient {
             items.drain(..items.len() - limit);
         }
         Ok(items)
+    }
+
+    /// Remember a verified-data question and its full response (the statistic, chart
+    /// and provenance), attached to the city so it shows up in the lineage.
+    pub async fn record_data_query(
+        &self,
+        city: &str,
+        question: &str,
+        response: &Value,
+    ) -> Result<DataQueryRecord> {
+        let created_at = now_iso();
+        let rec = DataQueryRecord {
+            id: short_id("dq", &[city, question, &created_at]),
+            city: city.to_string(),
+            question: question.to_string(),
+            answer: response.get("answer").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            status: response.get("status").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            created_at,
+        };
+        let mut response_json = serde_json::to_string(response).unwrap_or_default();
+        if response_json.len() > MAX_BREAKDOWNS_BYTES {
+            response_json = String::new();
+        }
+        self.run(&[(
+            "MERGE (c:City {slug: $city}) \
+             MERGE (d:DataQuery {id: $id}) \
+             ON CREATE SET d.city = $city, d.question = $question, d.answer = $answer, \
+               d.status = $status, d.response_json = $response, d.created_at = $now \
+             MERGE (d)-[:ASKED_IN]->(c)",
+            json!({"city": city, "id": rec.id, "question": rec.question, "answer": rec.answer,
+                   "status": rec.status, "response": response_json, "now": rec.created_at}),
+        )])
+        .await?;
+        Ok(rec)
     }
 
     /// Store residents' reactions to an event. Re-reacting overwrites the old reaction.
@@ -1074,7 +1170,20 @@ pub fn test_record(pop_key: &str, poll: &Poll, result: &PollResult, tag: &TestTa
         simulation_id: tag.simulation_id.clone(),
         branch_id: tag.branch_id.clone(),
         created_at,
+        breakdowns_json: breakdowns_json(result),
     }
+}
+
+/// The demographic breakdowns of a result as one JSON string, in the shape the
+/// evidence chart's `normalizeBreakdowns` reads; empty when over the size cap.
+pub fn breakdowns_json(result: &PollResult) -> String {
+    let v = json!({
+        "breakdowns": result.breakdowns,
+        "option_breakdowns": result.option_breakdowns,
+        "p_distribution": result.p_distribution,
+    });
+    let s = serde_json::to_string(&v).unwrap_or_default();
+    if s.len() > MAX_BREAKDOWNS_BYTES { String::new() } else { s }
 }
 
 fn truncate_chars(s: &str, max: usize) -> String {
@@ -1131,8 +1240,58 @@ mod tests {
             options: vec![], p_distribution: vec![], n_agents: 1, n_archetypes: 1,
             simulation_id: String::new(), branch_id: String::new(), population_key: "sf:1:1".into(),
             created_at: at.into(), events_known: 0, under_event: None, stimuli: vec![],
-            previous_p_yes: Some(9.9), delta: Some(9.9),
+            previous_p_yes: Some(9.9), delta: Some(9.9), breakdowns: None,
         }
+    }
+
+    #[test]
+    fn data_query_items_serialize_and_do_not_break_deltas() {
+        let mut items = vec![
+            lineage_test("t1", "Q?", "vote", 0.40, "2026-09-11T00:00:00Z"),
+            LineageItem::DataQuery {
+                id: "dq1".into(), question: "Show the age distribution".into(),
+                answer: "Most residents are 25-34.".into(), status: "ok".into(),
+                created_at: "2026-09-11T00:30:00Z".into(),
+                response: serde_json::json!({"status": "ok", "chart": {"type": "bar"}}),
+            },
+            lineage_test("t2", "Q?", "vote", 0.50, "2026-09-11T01:00:00Z"),
+        ];
+        attach_deltas(&mut items);
+        let j = serde_json::to_value(&items[1]).unwrap();
+        assert_eq!(j["type"], "data_query");
+        assert_eq!(j["response"]["chart"]["type"], "bar");
+        match &items[2] {
+            LineageItem::Test { previous_p_yes, delta, .. } => {
+                assert_eq!(*previous_p_yes, Some(0.40));
+                assert!((delta.unwrap() - 0.10).abs() < 1e-9);
+            }
+            _ => panic!(),
+        }
+        let back: LineageItem = serde_json::from_value(j).unwrap();
+        assert!(matches!(back, LineageItem::DataQuery { .. }));
+    }
+
+    #[test]
+    fn test_record_keeps_breakdowns_for_the_chart() {
+        use crate::hydra::HydraEvidence;
+        use crate::predict::{DemoBreak, Framing, Poll, PollResult};
+        let poll = Poll {
+            question: "Q?".into(), description: String::new(), framing: Framing::Vote,
+            as_of_date: "2026-09-12".into(), model: None, population: None, event: None, options: vec![],
+        };
+        let mut breakdowns = HashMap::new();
+        breakdowns.insert("age".to_string(), vec![DemoBreak { key: "25-34".into(), yes_share: 0.7, weight: 100.0, n: 12 }]);
+        let result = PollResult {
+            question: "Q?".into(), as_of_date: "2026-09-12".into(), model: "m".into(), p_yes: 0.6,
+            ci_low: 0.5, ci_high: 0.7, n_agents: 10, n_eff: 9.0, design_effect: 1.0, breakdowns,
+            n_archetypes: 2, n_llm_calls: 1, sample_rationales: vec![], p_distribution: vec![],
+            option_breakdowns: vec![], option_ci: None, hydra: HydraEvidence::default(),
+        };
+        let rec = test_record("sf:1:10", &poll, &result, &TestTag::poll());
+        let v: Value = serde_json::from_str(&rec.breakdowns_json).unwrap();
+        assert_eq!(v["breakdowns"]["age"][0]["key"], "25-34");
+        assert_eq!(v["breakdowns"]["age"][0]["yes_share"], 0.7);
+        assert!(v["option_breakdowns"].as_array().unwrap().is_empty());
     }
 
     #[test]

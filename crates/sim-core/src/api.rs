@@ -113,11 +113,68 @@ pub fn router(state: AppState) -> Router {
         .route("/branches/:bid/ab-test", post(branch_ab_test))
         .route("/branches/:bid/predict-market", post(predict_market))
         .route("/branches/:bid/stream", get(branch_stream))
+        // Verified PUMS data queries. Same contract as `data_query::router`, plus the
+        // answered question is remembered in the city's timeline when memory is on.
+        .route("/data-query", post(data_query_handler))
         .with_state(state)
-        .merge(crate::data_query::router(
-            std::env::current_dir().expect("server working directory"),
-        ))
         .layer(cors)
+}
+
+async fn data_query_handler(
+    State(st): State<AppState>,
+    payload: Result<Json<Value>, axum::extract::rejection::JsonRejection>,
+) -> Json<Value> {
+    let Json(input) = match payload {
+        Ok(input) => input,
+        Err(_) => {
+            return Json(crate::data_query::empty(
+                "unsupported",
+                "",
+                "Request must be a valid JSON object.",
+            ))
+        }
+    };
+    let city = input.get("city").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let question = input
+        .get("question")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .chars()
+        .take(512)
+        .collect::<String>();
+    let root = match std::env::current_dir() {
+        Ok(dir) => dir,
+        Err(_) => {
+            return Json(crate::data_query::empty(
+                "unavailable",
+                &question,
+                "Data query could not complete.",
+            ))
+        }
+    };
+    let response = match tokio::task::spawn_blocking(move || crate::data_query::execute(&root, input)).await {
+        Ok(response) => response,
+        Err(_) => {
+            return Json(crate::data_query::empty(
+                "unavailable",
+                &question,
+                "Data query could not complete.",
+            ))
+        }
+    };
+    // Remember answered questions so the timeline can show the chart again. Best-effort,
+    // off the response path; unsupported/unavailable questions are not remembered.
+    let answered = response.get("status").and_then(|v| v.as_str()) == Some("ok");
+    if let (Some(mem), true, false) = (st.memory.clone(), answered, city.is_empty()) {
+        let snapshot = response.clone();
+        tokio::spawn(async move {
+            match mem.record_data_query(&city, &question, &snapshot).await {
+                Ok(rec) => tracing::info!("persona memory: recorded data query '{}' ({})", rec.question, rec.id),
+                Err(e) => tracing::warn!("persona memory: data query write failed: {e:#}"),
+            }
+        });
+    }
+    Json(response)
 }
 
 async fn root() -> impl IntoResponse {

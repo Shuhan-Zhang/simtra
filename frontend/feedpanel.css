@@ -248,3 +248,33 @@
 @media (max-width: 560px) {
   .feed-panel { top: 62px; right: var(--s-3); width: calc(100vw - var(--s-6)); max-height: 70vh; }
 }
+
+/* ── charts inside timeline entries ─────────────────────────────────────── */
+/* PR 3's chart markup, kept as-is but fitted to the panel: the result card's
+   chrome (title, instructions, provenance) is dropped here; the entry already
+   names the question and the panel is narrow. */
+.fp-chart { margin-top: var(--s-3); padding-top: var(--s-3); border-top: var(--hair) solid var(--sep); min-width: 0; }
+.fp-chart-controls { margin-bottom: var(--s-2); }
+.fp-chart-controls label { display: grid; gap: 4px; font-size: var(--fs-caption2); color: var(--ink-3); text-transform: uppercase; letter-spacing: var(--tr-label); font-weight: 600; }
+.fp-chart-controls .fp-select { width: 100%; text-transform: none; letter-spacing: 0; font-weight: 400; }
+.fp-chart .evidence-chart { font-size: var(--fs-caption); }
+.fp-chart .evidence-chart > h2,
+.fp-chart .evidence-chart > p:not([data-evidence-summary]):not([data-verified-summary]),
+.fp-chart .evidence-chart > h3,
+.fp-chart .evidence-chart > dl,
+.fp-chart .evidence-chart > section[aria-label="Evidence provenance"] { display: none; }
+.fp-chart .evidence-chart fieldset { margin: var(--s-2) 0; padding: var(--s-2); border-color: var(--sep); border-radius: var(--r-sm); }
+.fp-chart .evidence-chart legend { font-size: var(--fs-caption2); text-transform: uppercase; letter-spacing: var(--tr-label); color: var(--ink-3); font-weight: 600; }
+.fp-chart .evidence-chart button { min-height: 0; padding: var(--s-2); font-size: var(--fs-caption); border-color: var(--sep); border-radius: var(--r-sm); overflow-wrap: anywhere; }
+.fp-chart .evidence-chart button[aria-pressed="true"] { padding: calc(var(--s-2) - 2px); }
+.fp-chart .evidence-chart button > span:first-child { font-size: var(--fs-footnote); }
+.fp-chart .evidence-chart [data-evidence-summary],
+.fp-chart .evidence-chart [data-verified-summary] { padding: var(--s-2); font-size: var(--fs-caption2); font-weight: 500; }
+.fp-chart .verified-bars { display: grid; gap: var(--s-2); }
+.fp-chart .verified-bars button { display: grid; gap: 2px; width: 100%; text-align: left; }
+.fp-chart .verified-track { display: block; height: 6px; background: var(--fill); border-radius: var(--r-full); overflow: hidden; }
+.fp-chart .verified-track > span { display: block; height: 100%; background: var(--accent); }
+.fp-chart .combine-control { display: flex; gap: 6px; align-items: center; font-size: var(--fs-caption2); color: var(--ink-2); margin: var(--s-2) 0; }
+.fp-chart-empty { font-size: var(--fs-caption); color: var(--ink-3); }
+.fp-answer { font-size: var(--fs-footnote); color: var(--ink-2); margin-top: 2px; }
+.fp-avatar-data { background: var(--fill-hi); color: var(--ink-2); }

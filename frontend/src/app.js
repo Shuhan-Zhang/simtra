@@ -20,7 +20,7 @@ import * as api from "./api.js";
 import { buildEvidenceChartModel, renderEvidenceChart, bindEvidenceChart, reduceEvidenceSelection } from "./evidence-chart.js";
 import { buildVerifiedDataModel, renderVerifiedData, bindVerifiedData, reduceVerifiedSelection, verifiedMapSelection } from "./verified-data.js";
 import { snapshotAudience, describeAudience, audienceHeader, audienceScope } from "./audience.js";
-import { initFeedPanel, refreshFeedPanel } from "./feedpanel.js?v=2";
+import { initFeedPanel, refreshFeedPanel } from "./feedpanel.js?v=3";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -356,6 +356,13 @@ async function boot() {
     getCityDisplay: () => state.city?.display || "San Francisco",
     getResidents: () => state.residents,
     getNews: () => state.news,
+    // timeline charts highlight residents through the same map API the result card uses
+    setSegmentSelection: (selection) => map.setSegmentSelection(selection),
+    getSegmentSelectionSummary: () => map.getSegmentSelectionSummary(),
+    getRawResidents: () => state.rawResidents,
+    evidenceReady: (dimension) => state.rawResidents.length > 0 && state.rawResidents.every((r) =>
+      Number.isFinite(r.pums_weight) && r.pums_weight >= 0 && typeof r.segments?.[dimension] === "string"),
+    dimensionLabels: AB_DIM_LABEL,
   });
   els.status.textContent = "waking the city…";
   if (api.isDemo) { document.body.classList.add("offline-demo"); $("demo-banner").hidden = false; }

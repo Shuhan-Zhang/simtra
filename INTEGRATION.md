@@ -354,9 +354,9 @@ Reaction object:
 
 `POST /branches/{id}/events/{event_id}/react` body `{"n": 12}` (optional, 1–24) → `{"event_id": "evt-…", "reactions": [ … ]}`. Picks `n` residents spread evenly across archetypes, asks the model (Gemini Flash when `GEMINI_API_KEY` is set, otherwise Claude Sonnet) for one in-character post and sentiment each, stores them (re-reacting overwrites), and returns them. `404` branch or event not found; `502 {"error":"reaction model request failed"}` when the model yields no reactions.
 
-### Lineage (events + tests in order)
+### Lineage (events, tests and data queries in order)
 
-`GET /cities/{city}/lineage?limit=100` (1–500, keeps the most recent items) → `{"items": [...]}` in `created_at` ascending order: the wall-clock sequence of everything thrown into the world and everything asked of the residents. `503` when `NEO4J_URI` is not configured; `404` unknown city.
+`GET /cities/{city}/lineage?limit=100` (1–500, keeps the most recent items) → `{"items": [...]}` in `created_at` ascending order: the wall-clock sequence of everything thrown into the world, everything asked of the residents, and every verified-data question answered from the PUMS snapshot. `503` when `NEO4J_URI` is not configured; `404` unknown city.
 
 ```json
 {"items": [
@@ -368,8 +368,15 @@ Reaction object:
    "p_yes": 0.46, "options": [], "p_distribution": [], "n_agents": 300, "n_archetypes": 135,
    "simulation_id": "sim-sf-42-300-…", "branch_id": "sim-sf-42-300-…:main", "population_key": "sf:42:300",
    "created_at": "2026-09-12T18:24:03Z", "events_known": 2, "under_event": null, "stimuli": [],
-   "previous_p_yes": null, "delta": null}
+   "previous_p_yes": null, "delta": null,
+   "breakdowns": {"breakdowns": {"age": [{"key": "25-34", "yes_share": 0.41, "weight": 12345.0, "n": 40}]},
+                  "option_breakdowns": [], "p_distribution": []}},
+  {"type": "data_query", "id": "dq-…", "question": "Show the age distribution",
+   "answer": "…", "status": "ok", "created_at": "2026-09-12T19:40:11Z",
+   "response": {"status": "ok", "chart": {"type": "bar", "series": ["…"]}, "source": {"…": "…"}}}
 ]}
 ```
+
+`breakdowns` on a test is the poll's stored demographic breakdowns in the exact shape `buildEvidenceChartModel` reads (`breakdowns`, `option_breakdowns`, `p_distribution`), or `null` for tests recorded before breakdowns were kept, so the timeline can re-open the evidence chart. A `data_query` item carries the full `/data-query` response so the verified chart can be re-rendered; only answered (`status: "ok"`) questions are remembered, and `POST /data-query` records them best-effort when memory is configured.
 
 `events_known` is how many city events existed when the test was asked (what the residents could remember). `under_event` is the counterfactual stimulus text, if any; `stimuli` are A/B variants. `previous_p_yes`/`delta` link a test to the most recent earlier test in the same city with the same `question` and `framing`, so a before/after pair around an event shows the shift directly.

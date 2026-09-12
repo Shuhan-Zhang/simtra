@@ -110,7 +110,12 @@ Graph shape:
 (:Persona)-[:ANSWERED {p_yes, dist, why, archetype, at}]->(:Test)
 (:Test)-[:UNDER_EVENT]->(:Event)                                   the poll's stimulus event
 (:Test)-[:USED_STIMULUS]->(:Stimulus {id, label, text})            A/B variants
+(:DataQuery {id, question, answer, response_json})-[:ASKED_IN]->(:City)  verified-data questions
 ```
+
+`Test` nodes also carry `breakdowns_json` (the poll's demographic breakdowns) so the
+timeline can reopen the evidence chart; `DataQuery` nodes keep the full `/data-query`
+response for the verified chart.
 
 Identity is deterministic: `population_key = <city>:<seed>:<n>` and
 `persona_key = <population_key>:<agent_id>`, so memory survives server restarts and
