@@ -774,7 +774,7 @@ impl MemoryClient {
               WHERE e.as_of_date <= $date RETURN e \
               UNION \
               WITH a MATCH (a)-[:EXPOSED_TO]->(e:Event) WHERE e.as_of_date <= $date RETURN e } \
-            WITH a, e ORDER BY e.as_of_date DESC, e.id ASC \
+            WITH a, e ORDER BY e.as_of_date DESC, e.created_at DESC, e.id ASC \
             WITH a, collect(e)[0..$n_events] AS evs \
             UNWIND evs AS e \
             RETURN a.agent_id, e.id, e.kind, e.text, e.as_of_date \
