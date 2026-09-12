@@ -35,8 +35,8 @@ async (page) => {
     const {map}=await import('/src/app.js');return {...map.getSegmentSelectionSummary(),text:document.querySelector('[data-verified-summary]')?.textContent};
   });
   const ask=async()=>{
-    await page.getByRole('group',{name:'Ask a verified data question'}).click();
-    await page.getByRole('textbox',{name:'Verified data question',exact:true}).fill(fixture.question);
+    await page.getByRole('group',{name:'Ask a prediction question'}).click();
+    await page.getByRole('textbox',{name:'Predict anything',exact:true}).fill(fixture.question);
     check(await page.locator('#ask-input').inputValue()===fixture.question,'composer value before submit');
     await page.getByRole('button',{name:'Submit question'}).click();
     await page.locator('#verified-heading').waitFor();
@@ -44,7 +44,7 @@ async (page) => {
   try {
     await page.setViewportSize({width:1440,height:1000});await page.emulateMedia({reducedMotion:'reduce'});
     await page.goto(base);await page.waitForFunction(async()=> (await import('/src/app.js')).state.phase==='idle');
-    await page.getByRole('radio',{name:'Verified data',exact:true}).check();
+    // Verified-data questions are routed automatically by their shape; there is no mode switch.
     const before=calls.length;await ask();
     const query=calls.slice(before).filter(c=>!c.path.endsWith('/news'));
     check(query.length===1&&query[0].path==='/data-query'&&query[0].method==='POST','Verified mode must only POST data-query');
@@ -88,24 +88,24 @@ async (page) => {
     check(layout.width<=390&&!layout.overflow&&layout.left>=0&&layout.right<=390&&layout.target>=44,'mobile layout');
     await page.screenshot({path:'output/playwright/verified-mobile.png'});
     report('Combine checkbox, forced-color selected text, 390px layout and touch targets');
-    await page.getByRole('radio',{name:'Simulation prediction',exact:true}).check();
-    check(!(await summary()).active&&!await page.locator('#result-card').isVisible(),'mode switch clears results and selection');
-    await page.getByRole('radio',{name:'Verified data',exact:true}).check();
+    await page.getByRole('button',{name:'Dismiss',exact:true}).click();
+    check(!(await summary()).active&&!await page.locator('#result-card').isVisible(),'dismiss clears results and selection');
+    // Verified-data questions are routed automatically by their shape; there is no mode switch.
     response=unsupported;await ask();check((await page.locator('#verified-panel').innerText()).includes('This question cannot be verified with the available datasets'),'unsupported message');
     check(await page.locator('.verified-bars').count()===0,'unsupported no chart');
     report('mode changes clear stale state; unsupported never invents chart');
     response=JSON.parse(JSON.stringify(fixture));response.source.snapshot_sha256=null;
     await page.getByRole('button',{name:'Ask another',exact:true}).click();
-    await page.getByRole('textbox',{name:'Verified data question',exact:true}).fill(fixture.question);await page.keyboard.press('Enter');await page.locator('#verified-heading').waitFor();
+    await page.getByRole('textbox',{name:'Predict anything',exact:true}).fill(fixture.question);await page.keyboard.press('Enter');await page.locator('#verified-heading').waitFor();
     check(!(await page.locator('#verified-panel').innerText()).includes('Verified source data'),'missing hash unknown');
     response='network-error';await page.getByRole('button',{name:'Dismiss',exact:true}).click();await ask();
     check((await page.locator('#verified-host').innerText()).includes('service is unavailable'),'network failure explicit');check(await page.locator('.verified-bars').count()===0,'network no chart');
     report('missing provenance shows Unknown; network error has no fallback');
     response=fixture;await page.getByRole('button',{name:'Dismiss',exact:true}).click();
     let release;hold=new Promise(resolve=>{release=resolve;});
-    await page.getByRole('group',{name:'Ask a verified data question'}).click();await page.getByRole('textbox',{name:'Verified data question',exact:true}).fill(fixture.question);await page.keyboard.press('Enter');
+    await page.getByRole('group',{name:'Ask a prediction question'}).click();await page.getByRole('textbox',{name:'Predict anything',exact:true}).fill(fixture.question);await page.keyboard.press('Enter');
     await page.waitForFunction(async()=> (await import('/src/app.js')).state.phase==='waiting');
-    await page.getByRole('radio',{name:'Simulation prediction',exact:true}).check();release();hold=null;
+    await page.keyboard.press('Escape');release();hold=null;
     await page.waitForFunction(async()=> (await import('/src/app.js')).state.queryMode==='simulation');
     check(!await page.locator('#result-card').isVisible(),'cancelled response cannot resurface');
     report('mode change cancels in-flight query and discards stale response');

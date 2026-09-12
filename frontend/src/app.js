@@ -397,7 +397,7 @@ async function loadCity(city, { filters = state.filters, preserveOnError = false
   const maskBase = `assets/${city.slug}_tiles.png`;
   if (city.bbox) MAP.bbox = { ...city.bbox };
   MAP.base = maskBase;
-  map.setSatellite(false);
+  map.setSatellite(true);           // satellite imagery on (PR 3 had switched to flat local tiles)
   map.setBase(maskBase);
   syncActiveTitle();
 
@@ -821,6 +821,7 @@ function closeInput() {
 }
 
 function dismissResults() {
+  state.queryMode = "simulation";
   hide(els.resultCard);
   els.resultCard.classList.remove("ab-result");
   abRerender = null;
@@ -833,6 +834,7 @@ function dismissResults() {
 }
 
 function cancelPrediction() {
+  state.queryMode = "simulation";
   state.reqId++;
   if (state.abort) { state.abort.abort(); state.abort = null; }
   map.onProgress = null; map.onRevealComplete = null;
@@ -857,6 +859,7 @@ function guessFraming(question) {
 async function runVerifiedQuery(question) {
   question = (question || "").trim();
   if (!question || isBusy() || state.switching) return;
+  state.queryMode = "verified";
   cleanupBranch(); map.clearVerdicts();
   const myReq = ++state.reqId;
   state.abort = new AbortController();
@@ -920,30 +923,24 @@ function renderActiveVerified() {
   if ($("verified-combine")) $("verified-combine").checked = verified.combine;
 }
 
-function setQueryMode(mode) {
-  if (mode === state.queryMode) return;
-  const booting = state.phase === "booting";
-  if (isBusy()) cancelPrediction(); else dismissResults();
-  state.reqId++;
-  state.queryMode = mode;
-  els.resultCard.setAttribute("aria-label", mode === "verified" ? "Verified data result" : "Prediction result");
-  els.ask.setAttribute("aria-label", mode === "verified" ? "Ask a verified data question" : "Ask a prediction question");
-  els.askInput.setAttribute("aria-label", mode === "verified" ? "Verified data question" : "Predict anything");
-  els.askInput.placeholder = mode === "verified" ? "e.g. What share of adults have a bachelor's degree or higher?" : "predict anything — e.g. should the city expand public transit?";
-  $("query-mode-hint").textContent = mode === "verified" ? "Census estimates from the complete PUMS snapshot. No simulated opinions." : "Simulated opinions and predictions from synthetic residents.";
-  els.abBtn.hidden = mode === "verified"; els.marketingBtn.hidden = mode === "verified";
-  closeInput();
-  if (booting) state.phase = "booting";
-}
-
 // ── prediction flow ─────────────────────────────────────────────────────
 // 1) classify the question for the current city (POST /cities/<slug>/parse)
 // 2) if unsupported → a gentle "try rephrasing" card (no poll)
 // 3) if supported → poll the branch with the parsed {framing, question, description, options}
+// Verified-data questions (Census/PUMS distributions and counts) are routed by
+// their shape; everything else is a simulated prediction. Mirrors the backend's
+// data_query grammar ("show the age distribution", "show population by race",
+// "what share of adults …", "how many …").
+const VERIFIED_QUESTION = /\b(distribution|population(?: counts)? by|what share of|what percent(?:age)? of|how many)\b/i;
+function looksLikeVerifiedQuestion(question) {
+  return VERIFIED_QUESTION.test(question || "");
+}
+
 async function runPrediction(question) {
-  if (state.queryMode === "verified") return runVerifiedQuery(question);
   question = (question || "").trim();
   if (!question) return;
+  if (looksLikeVerifiedQuestion(question)) return runVerifiedQuery(question);
+  state.queryMode = "simulation";
   if (state.phase === "error" || !state.simId) { toast("Predictions need the backend — it's currently unreachable."); return; }
 
   const audience = currentAudience();
@@ -1829,7 +1826,6 @@ function escapeHtml(s) {
 
 const typingTarget = (el) => el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
 
-$("query-modes").addEventListener("change", event => setQueryMode(event.target.value));
 $("ask-submit").addEventListener("click", event => { event.stopPropagation(); runPrediction(els.askInput.value); });
 
 // ── events ───────────────────────────────────────────────────────────────
