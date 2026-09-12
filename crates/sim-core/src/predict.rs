@@ -425,7 +425,7 @@ p_yes is a probability between 0 and 1. Be realistic and calibrated to {city_nam
         // the poll date — city news, stimuli it was shown, tests it already answered.
         // Appended to the representative's profile so the whole archetype reasons with
         // it. Deterministic ordering keeps prompts (and cache keys) stable.
-        let pop_key = memory::population_key(&pop.profile.slug, pop.seed, pop.n);
+        let pop_key = memory::population_key_of(pop);
         let memory_by_rep: HashMap<usize, String> = if let Some(mem) = &self.memory {
             let rep_ids: Vec<u32> = clusters.iter().map(|c| pop.agents[c.rep_idx].id).collect();
             match mem.recall(&pop_key, &rep_ids, &poll.as_of_date).await {

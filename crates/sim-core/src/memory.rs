@@ -318,6 +318,20 @@ pub fn population_key(city: &str, seed: u64, n: usize) -> String {
     format!("{city}:{seed}:{n}")
 }
 
+/// Identity of a concrete population: the plain (city, seed, n) key, extended with a
+/// fingerprint of the demographic filters when the population was sampled from a
+/// filtered record set. Unfiltered populations keep the short key.
+pub fn population_key_of(pop: &Population) -> String {
+    let base = population_key(&pop.profile.slug, pop.seed, pop.n);
+    if pop.filter_key.is_empty() {
+        base
+    } else {
+        let mut h = Sha256::new();
+        h.update(pop.filter_key.as_bytes());
+        format!("{base}:f{}", &hex::encode(h.finalize())[..10])
+    }
+}
+
 pub fn persona_key(population_key: &str, agent_id: u32) -> String {
     format!("{population_key}:{agent_id}")
 }
@@ -505,7 +519,7 @@ impl MemoryClient {
     /// Register every persona of a population (idempotent MERGE, batched).
     pub async fn ensure_population(&self, pop: &Population) -> Result<()> {
         let city = pop.profile.slug.clone();
-        let key = population_key(&city, pop.seed, pop.n);
+        let key = population_key_of(pop);
         self.run(&[(
             "MERGE (c:City {slug: $city}) \
              MERGE (p:Population {key: $key}) \
@@ -1238,5 +1252,33 @@ mod tests {
         };
         assert_eq!(mk(HttpApi::Query).endpoint(), "https://abc.databases.neo4j.io/db/abc/query/v2");
         assert_eq!(mk(HttpApi::Tx).endpoint(), "https://abc.databases.neo4j.io/db/abc/tx/commit");
+    }
+}
+
+#[cfg(test)]
+mod population_key_tests {
+    use super::*;
+    use crate::city::CityProfile;
+    use std::sync::Arc;
+
+    fn pop(filter_key: &str) -> Population {
+        Population {
+            agents: vec![],
+            income_cutoffs: [0.0; 4],
+            seed: 42,
+            n: 100,
+            profile: Arc::new(CityProfile::sf()),
+            filter_key: filter_key.to_string(),
+        }
+    }
+
+    #[test]
+    fn filtered_populations_get_distinct_keys() {
+        assert_eq!(population_key_of(&pop("")), "sf:42:100");
+        let a = population_key_of(&pop(r#"{"sex":"female"}"#));
+        let b = population_key_of(&pop(r#"{"sex":"male"}"#));
+        assert!(a.starts_with("sf:42:100:f"));
+        assert_ne!(a, b);
+        assert_eq!(a, population_key_of(&pop(r#"{"sex":"female"}"#)));
     }
 }
