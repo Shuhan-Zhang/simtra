@@ -75,7 +75,7 @@ async (page) => {
     check((await summary()).weightedPumsCount===independent.weight,'touch combine control'); await report('touch-accessible Combine control');
     await page.locator('#evidence-combine').uncheck();
     // Click a visible map resident, taking geometry from the same drawn map.
-    const tap=await page.evaluate(async()=>{const {map}=await import('/src/app.js');const a=map.agents.find(a=>{const p=map.worldToScreen(a.wx,a.wy);return p.x>50&&p.x<innerWidth-50&&p.y>160&&p.y<350;}); if(!a) throw Error('No visible resident');const p=map.worldToScreen(a.wx,a.wy);const hit=map._hitSprite(p.x,p.y-3,true);return {x:p.x,y:p.y-3,id:hit.seed,key:hit.segments.age};});
+    const tap=await page.evaluate(async()=>{const {map}=await import('/src/app.js');const a=map.agents.find(a=>{const p=map.worldToScreen(a.wx,a.wy);return p.x>50&&p.x<innerWidth-50&&p.y>160&&p.y<350&&document.elementFromPoint(p.x,p.y-3)?.id==='map';}); if(!a) throw Error('No visible resident');const p=map.worldToScreen(a.wx,a.wy);const hit=map._hitSprite(p.x,p.y-3,true);return {x:p.x,y:p.y-3,id:hit.seed,key:hit.segments.age};});
     await page.mouse.click(tap.x,tap.y);
     selected=await summary();
     check(selected.text.includes(`age = ${tap.key}`) && selected.text.includes(`Resident ${tap.id} selected`),'resident updates active age dimension',{selected,tap});

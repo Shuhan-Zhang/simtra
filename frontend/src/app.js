@@ -19,6 +19,8 @@ import {
 import * as api from "./api.js";
 import { buildEvidenceChartModel, renderEvidenceChart, bindEvidenceChart, reduceEvidenceSelection } from "./evidence-chart.js";
 
+import { buildVerifiedDataModel, renderVerifiedData, bindVerifiedData, reduceVerifiedSelection, verifiedMapSelection } from "./verified-data.js";
+
 const $ = (id) => document.getElementById(id);
 const els = {
   canvas: $("map"),
@@ -78,7 +80,7 @@ const show = (el) => el.classList.remove("hidden");
 const hide = (el) => el.classList.add("hidden");
 
 export const state = {
-  phase: "booting",
+  phase: "booting", queryMode: "simulation",
   simId: null, mainBranch: null, branchId: null,
   lastResult: null, lastAbInput: null, lastMarketingInput: null, reqId: 0, abort: null,
   residents: SIM.n, rawResidents: [],
@@ -96,7 +98,7 @@ const citySlug = () => state.city?.slug || "sf";
 
 // fetch LLM chatter for the residents now on screen (sparse, batched, best-effort)
 async function requestChatter(ids) {
-  if (!state.mainBranch || !ids?.length) return;
+  if (state.queryMode === "verified" || !state.mainBranch || !ids?.length) return;
   const branch = state.mainBranch;
   try {
     const data = await api.getChatter(branch, ids);
@@ -112,7 +114,7 @@ const inputOpen = () => els.ask.dataset.state === "input";
 
 function setAsk(s) {
   els.ask.dataset.state = s;
-  els.askLabel.textContent = s === "busy" ? "predicting…" : "ask";
+  els.askLabel.textContent = s === "busy" ? (state.queryMode === "verified" ? "querying data…" : "predicting…") : "ask";
 }
 
 function cleanupBranch() {
@@ -122,14 +124,19 @@ function cleanupBranch() {
 
 
 // The app owns selection lifetime; the lane modules remain pure render/query tools.
+const verified = { model:null, selection:{segments:[]}, combine:false, dispose:null };
 const evidence = { model: null, selection: { segments: [] }, dimension: "gender", combine: false, open: false, residentId: null, dispose: null };
 function resetEvidence() {
+  verified.dispose?.(); verified.dispose = null;
+  verified.model = null; verified.selection = {segments:[]}; verified.combine = false;
   evidence.dispose?.(); evidence.dispose = null;
   evidence.model = null; evidence.selection = { segments: [] };
   evidence.dimension = "gender"; evidence.combine = false; evidence.open = false; evidence.residentId = null;
   map.clearSegmentSelection();
 }
 function clearEvidenceSelection() {
+  verified.selection = {segments:[]};
+  if (verified.model && $("verified-host")) renderActiveVerified();
   evidence.selection = { segments: [] }; evidence.residentId = null;
   map.clearSegmentSelection();
   if (evidence.model && $("evidence-host")) renderActiveEvidence();
@@ -502,17 +509,18 @@ function autoGrow() {
 }
 
 function openInput() {
-  if (isBusy()) return;
-  if (state.phase === "error" || !state.simId) { toast("Predictions need the backend — it's currently unreachable."); return; }
+  if (isBusy() || state.phase === "booting" || state.switching) return;
+  if (state.queryMode !== "verified" && (state.phase === "error" || !state.simId)) { toast("Predictions need the backend — it's currently unreachable."); return; }
   cleanupBranch();
   map.clearVerdicts();
   closeCharCard();
   hide(els.summary);
   hide(els.resultCard);
+  els.askInput.value = ""; els.askInput.style.height = LINE_H + "px";
   setAsk("input");
   state.phase = "idle";
   setIdleStatus();
-  requestAnimationFrame(() => { els.askInput.value = ""; els.askInput.style.height = LINE_H + "px"; els.askInput.focus(); });
+  requestAnimationFrame(() => { if (inputOpen()) els.askInput.focus(); });
 }
 
 function closeInput() {
@@ -556,11 +564,95 @@ function guessFraming(question) {
     /^(will|is|are|does|do|can|could|would|should)\b/i.test(question) ? "belief" : "vote";
 }
 
+// Verified questions are independent of simulation creation, branches and opinions.
+async function runVerifiedQuery(question) {
+  question = (question || "").trim();
+  if (!question || isBusy() || state.switching) return;
+  cleanupBranch(); map.clearVerdicts();
+  const myReq = ++state.reqId;
+  state.abort = new AbortController();
+  state.phase = "waiting"; setAsk("busy"); els.askInput.blur();
+  hide(els.resultCard); show(els.summary);
+  els.summaryLabel.textContent = "VERIFIED DATA";
+  els.summaryText.textContent = question;
+  els.progress.classList.add("indeterminate");
+  els.progressLabel.textContent = "Querying the complete PUMS snapshot… (Escape to cancel)";
+  try {
+    const response = await api.dataQuery(citySlug(), question, state.abort.signal);
+    if (myReq !== state.reqId) return;
+    verified.model = buildVerifiedDataModel(response);
+    if (!verified.model.question) verified.model.question = question;
+    showVerifiedResult();
+  } catch (error) {
+    if (myReq !== state.reqId) return;
+    verified.model = buildVerifiedDataModel({question});
+    showVerifiedResult();
+    const note = document.createElement("p"); note.setAttribute("role", "status");
+    note.textContent = "Unknown — the verified-data service is unavailable. Try again when it is reachable.";
+    $("verified-host").prepend(note);
+  } finally {
+    if (myReq === state.reqId) state.abort = null;
+  }
+}
+
+function showVerifiedResult() {
+  state.phase = "results"; setAsk("idle"); hide(els.summary);
+  els.progress.classList.remove("indeterminate");
+  els.resultCard.classList.remove("ab-result");
+  els.resultCard.setAttribute("aria-label", "Verified data result");
+  els.resultCard.innerHTML = `<div id="verified-host"></div><p id="verified-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p><div class="res-actions"><button id="res-again" class="btn btn-primary">Ask another</button><button id="res-dismiss" class="btn">Dismiss</button></div>`;
+  renderActiveVerified();
+  verified.dispose = bindVerifiedData($("verified-host"), {
+    getModel:() => verified.model, getSelection:() => verified.selection,
+    onSelectionChange:(next, action) => {
+      verified.selection = verified.combine && action.type === "select"
+        ? reduceVerifiedSelection(verified.model, verified.selection, {...action,type:"add"}) : next;
+      renderActiveVerified();
+    },
+  });
+  $("verified-host").addEventListener("change", event => {
+    if (event.target.id === "verified-combine") verified.combine = event.target.checked;
+  });
+  $("res-again").addEventListener("click", openInput);
+  $("res-dismiss").addEventListener("click", dismissResults);
+  show(els.resultCard);
+  els.resultCard.scrollTop = 0;
+  $("verified-heading").focus({preventScroll:true});
+}
+
+function renderActiveVerified() {
+  const result = verifiedMapSelection(verified.model, verified.selection, state.rawResidents, citySlug());
+  map.setSegmentSelection(result.selection);
+  $("verified-host").innerHTML = renderVerifiedData(verified.model, verified.selection, result.count, result.ready);
+  // Keep the live region mounted while the buttons rerender and regain focus.
+  const summary = $("verified-host").querySelector("[data-verified-summary]");
+  if (summary) { summary.removeAttribute("role"); summary.removeAttribute("aria-live"); }
+  $("verified-announcement").textContent = summary?.textContent || "";
+  if ($("verified-combine")) $("verified-combine").checked = verified.combine;
+}
+
+function setQueryMode(mode) {
+  if (mode === state.queryMode) return;
+  const booting = state.phase === "booting";
+  if (isBusy()) cancelPrediction(); else dismissResults();
+  state.reqId++;
+  state.queryMode = mode;
+  els.resultCard.setAttribute("aria-label", mode === "verified" ? "Verified data result" : "Prediction result");
+  els.ask.setAttribute("aria-label", mode === "verified" ? "Ask a verified data question" : "Ask a prediction question");
+  els.askInput.setAttribute("aria-label", mode === "verified" ? "Verified data question" : "Predict anything");
+  els.askInput.placeholder = mode === "verified" ? "e.g. What share of adults have a bachelor's degree or higher?" : "predict anything — e.g. should the city expand public transit?";
+  $("query-mode-hint").textContent = mode === "verified" ? "Census estimates from the complete PUMS snapshot. No simulated opinions." : "Simulated opinions and predictions from synthetic residents.";
+  els.abBtn.hidden = mode === "verified"; els.marketingBtn.hidden = mode === "verified";
+  closeInput();
+  if (booting) state.phase = "booting";
+}
+
 // ── prediction flow ─────────────────────────────────────────────────────
 // 1) classify the question for the current city (POST /cities/<slug>/parse)
 // 2) if unsupported → a gentle "try rephrasing" card (no poll)
 // 3) if supported → poll the branch with the parsed {framing, question, description, options}
 async function runPrediction(question) {
+  if (state.queryMode === "verified") return runVerifiedQuery(question);
   question = (question || "").trim();
   if (!question) return;
   if (state.phase === "error" || !state.simId) { toast("Predictions need the backend — it's currently unreachable."); return; }
@@ -1428,6 +1520,9 @@ function escapeHtml(s) {
 
 const typingTarget = (el) => el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
 
+$("query-modes").addEventListener("change", event => setQueryMode(event.target.value));
+$("ask-submit").addEventListener("click", event => { event.stopPropagation(); runPrediction(els.askInput.value); });
+
 // ── events ───────────────────────────────────────────────────────────────
 els.ask.addEventListener("click", () => {
   if (isBusy()) { cancelPrediction(); return; }
@@ -1589,6 +1684,7 @@ document.addEventListener("keydown", (e) => {
     }
   } else if (e.key === "Escape") {
     if (e.defaultPrevented) return;
+    if (verified.selection.segments.length) { e.preventDefault(); clearEvidenceSelection(); return; }
     if (evidence.selection.segments.length) { e.preventDefault(); clearEvidenceSelection(); return; }
     if (marketingOpen()) {
       if (isBusy()) cancelPrediction(); else closeMarketing();

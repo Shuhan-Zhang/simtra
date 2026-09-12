@@ -77,6 +77,12 @@
 
       <div id="result-card" class="result-card hidden" role="dialog" aria-modal="false" aria-label="Prediction result"></div>
 
+      <fieldset id="query-modes" class="query-modes">
+        <legend>Question mode</legend>
+        <label><input type="radio" name="query-mode" value="simulation" checked> Simulation prediction</label>
+        <label><input type="radio" name="query-mode" value="verified"> Verified data</label>
+      </fieldset>
+      <p id="query-mode-hint" class="query-mode-hint">Simulated opinions and predictions from synthetic residents.</p>
       <div class="dock-row">
         <div class="dock-tools">
           <button id="marketing-btn" class="info-btn marketing-btn" type="button"
@@ -101,7 +107,7 @@
           <textarea id="ask-input" class="ask-input" rows="1" autocomplete="off" spellcheck="false"
                     placeholder="predict anything — e.g. will a Democrat win the 2026 California governor race?"
                     aria-label="Predict anything"></textarea>
-          <kbd class="ask-enter" aria-hidden="true">↵</kbd>
+          <button id="ask-submit" class="ask-submit" type="button" aria-label="Submit question">Submit</button>
         </div>
         <div class="dock-tools dock-tools--balance">
           <button id="info-btn" class="info-btn" aria-label="About simit" title="About">?</button>

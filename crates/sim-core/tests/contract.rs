@@ -108,6 +108,21 @@ async fn contract_all_endpoints() {
         "pums loaded"
     );
 
+    // Real data queries are available before any simulation, including browser CORS.
+    let r = c
+        .post(format!("{base}/data-query"))
+        .header("Origin", "http://localhost:5173")
+        .json(&serde_json::json!({"city": "sf", "question": "Show the sex distribution"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(r.headers()["access-control-allow-origin"], "*");
+    let v: Value = r.json().await.unwrap();
+    assert_eq!(v["status"], "ok");
+    assert_eq!(v["source"]["verification_status"], "verified");
+    assert_eq!(v["source"]["raw_records"], 8485);
+
     // ---- POST /simulations ----
     let r = c
         .post(format!("{base}/simulations"))

@@ -104,8 +104,11 @@ pub fn router(state: AppState) -> Router {
         .route("/branches/:bid/ab-test", post(branch_ab_test))
         .route("/branches/:bid/predict-market", post(predict_market))
         .route("/branches/:bid/stream", get(branch_stream))
-        .layer(cors)
         .with_state(state)
+        .merge(crate::data_query::router(
+            std::env::current_dir().expect("server working directory"),
+        ))
+        .layer(cors)
 }
 
 async fn root() -> impl IntoResponse {
@@ -113,7 +116,7 @@ async fn root() -> impl IntoResponse {
         "service": "sf-digital-twin",
         "docs": "see INTEGRATION.md",
         "endpoints": [
-            "GET /health", "POST /simulations", "GET /simulations/{id}/demographics",
+            "GET /health", "POST /data-query", "POST /simulations", "GET /simulations/{id}/demographics",
             "POST /simulations/{id}/branches", "GET /branches/{id}",
             "GET /branches/{id}/agents", "POST /branches/{id}/poll",
             "GET /prediction-results",

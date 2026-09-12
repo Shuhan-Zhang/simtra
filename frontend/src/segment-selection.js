@@ -6,6 +6,12 @@ const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
 // Malformed requests remain active but match nothing; only null/empty clears.
 export function normalizeSegmentSelection(selection) {
   if (selection == null) return { clauses: [], operator: "and" };
+  if (Array.isArray(selection.groups)) {
+    if (!selection.groups.length) return { clauses: [], operator: "and" };
+    return { groups: selection.groups.map(group => normalizeSegmentSelection({
+      clauses: group?.clauses, operator: group?.operator,
+    })) };
+  }
   const operator = selection.operator ?? "and";
   if (!Array.isArray(selection.clauses) || (operator !== "and" && operator !== "or")) {
     return { clauses: [{ dimension: null, key: null }], operator: "and" };
@@ -47,7 +53,23 @@ export function createSegmentIndex(agents) {
 // clauses, including in OR. Empty selection matches the whole raw population.
 // O(N + sum of clause posting lengths); called on selection changes, never frames.
 export function selectSegments(index, selection = null) {
-  const { clauses, operator } = normalizeSegmentSelection(selection);
+  const normalized = normalizeSegmentSelection(selection);
+  if (normalized.groups) {
+    const matchMask = new Uint8Array(index.size);
+    for (const group of normalized.groups) {
+      const result = selectSegments(index, group);
+      for (const i of result.matchingIndices) matchMask[i] = 1;
+    }
+    const matchingIndices = [];
+    let weightedPumsCount = 0;
+    for (let i = 0; i < index.size; i++) if (matchMask[i]) {
+      matchingIndices.push(i); weightedPumsCount += index.weights[i];
+    }
+    return { matchMask, matchingIndices, summary: {
+      active:true, rawMatchingAgents:matchingIndices.length, weightedPumsCount,
+    } };
+  }
+  const { clauses, operator } = normalized;
   const active = clauses.length > 0;
   const hits = new Uint32Array(index.size);
   for (const { dimension, key } of clauses) {

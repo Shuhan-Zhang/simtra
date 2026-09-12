@@ -6,6 +6,11 @@
 import { BASE, SIM, PREDICT } from "./config.js";
 
 async function req(path, { method = "GET", body, timeout = 30000, signal } = {}) {
+  if (isDemo && path === "/data-query") return {
+    status:"unsupported", question:body.question, answer:null, chart:null, query_spec:null,
+    geography:null, source:null, method:null,
+    limitations:["Offline simulation demo has no verified-data query service."],
+  };
   if (isDemo) return demoRequest(path, { method, body, signal });
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeout);
@@ -39,6 +44,10 @@ async function req(path, { method = "GET", body, timeout = 30000, signal } = {})
     clearTimeout(t);
   }
 }
+
+// Schema 1.0 statistical queries never call parse/poll or use preview fixtures.
+export const dataQuery = (city, question, signal) =>
+  req("/data-query", { method:"POST", body:{city, question}, signal, timeout:60000 });
 
 export const health = () => req("/health", { timeout: 8000 });
 

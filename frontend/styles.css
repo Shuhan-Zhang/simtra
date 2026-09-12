@@ -900,3 +900,26 @@ body.offline-demo .result-card { max-height: min(60dvh, 720px); }
 .evidence-selection-bar button { flex: 0 0 94px; }
 .evidence-selection-bar [data-evidence-summary] { margin: 0; flex: 1; padding: 8px; font-size: 12px; }
 @media (forced-colors: active) { .evidence-selection-bar { background: Canvas; border-color: CanvasText; } }
+
+/* Explicit statistical/simulation modes and accessible full-snapshot bars. */
+.query-modes { display:flex; flex-wrap:wrap; justify-content:center; gap:4px 14px; margin:8px 0 0; padding:4px 10px; border:1px solid #788b7d; border-radius:12px; background:#fff; color:#17231a; font:13px/1.4 system-ui,sans-serif; }
+.query-modes legend { padding:0 6px; font-weight:700; background:#fff; border-radius:4px; }
+.query-modes label { display:flex; align-items:center; gap:6px; min-height:44px; cursor:pointer; }
+.query-modes input { width:20px; height:20px; accent-color:#177b37; }
+.query-mode-hint { margin:4px 0 8px; padding:4px 8px; border-radius:6px; background:#fff; color:#17231a; text-align:center; font:12px/1.4 system-ui,sans-serif; }
+.ask-submit { display:none; min-height:44px; padding:6px 10px; border:1px solid currentColor; border-radius:6px; background:#fff; color:#17231a; cursor:pointer; }
+.ask[data-state="input"] .ask-submit { display:block; }
+#verified-panel { overflow-wrap:anywhere; }
+#verified-panel h2 { scroll-margin-top:16px; }
+.verified-bars { display:grid; gap:10px; margin-block:12px; }
+.verified-bars button { display:grid; gap:5px; width:100%; min-width:0; text-align:left; }
+.verified-track { display:block; width:100%; height:14px; border:1px solid currentColor; }
+.verified-track > span { display:block; height:100%; background:#24733b; }
+#verified-panel [data-verified-summary] { padding:12px; border-left:4px solid #177b37; background:#eaf2e9; }
+#verified-panel :focus-visible, .query-modes :focus-visible, .ask-submit:focus-visible { outline:3px solid #1655d8; outline-offset:3px; }
+.result-card:has(#verified-panel) { width:min(570px,94vw); max-height:55dvh; }
+@media (max-width:600px) { .result-card:has(#verified-panel) { max-height:48dvh; padding:16px; } .query-modes { gap:0 10px; font-size:12px; } .verified-bars button { font-size:16px; } }
+@media (forced-colors:active) { .verified-track > span { background:Highlight; } #verified-panel [data-verified-summary], .query-modes, .query-mode-hint { background:Canvas; color:CanvasText; } }
+@media (prefers-reduced-motion:reduce) { #verified-panel * { animation:none !important; transition:none !important; scroll-behavior:auto !important; } }
+
+.dock-tools button[hidden] { display:none; }
