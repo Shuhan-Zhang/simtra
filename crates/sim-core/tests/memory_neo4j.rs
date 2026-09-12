@@ -45,6 +45,23 @@ async fn neo4j_memory_roundtrip() {
         assert!(m.events.iter().any(|e| e.id == ev.id), "persona {id} missing city event");
         assert!(memory::prompt_fragment(m).contains("political figure"));
     }
+    // Same-day events: the most recently created one must be recalled even when
+    // more than RECALL_EVENTS events share the date (ordering by created_at, not id).
+    let mut same_day = Vec::new();
+    for i in 0..(memory::RECALL_EVENTS + 2) {
+        let e = mem
+            .add_city_event("sf", "news", &format!("Same-day filler event {i} for {seed}"), "2026-09-10")
+            .await
+            .unwrap();
+        same_day.push(e.id);
+    }
+    let newest = same_day.last().unwrap().clone();
+    let again = mem.recall(&pop_key, &[0], "2026-09-10").await.unwrap();
+    assert!(
+        again[&0].events.iter().any(|e| e.id == newest),
+        "newest same-day event must survive the recall cap"
+    );
+
     // dated before the event: not recalled (backtests stay leakage-free)
     let before = mem.recall(&pop_key, &[0, 1, 2], "2026-09-01").await.unwrap();
     for id in [0u32, 1, 2] {
@@ -140,7 +157,7 @@ async fn neo4j_memory_roundtrip() {
     assert_eq!(mine["under_event"], EVENT_TEXT);
     assert_eq!(mine["stimuli"].as_array().unwrap().len(), 2);
 
-    let events = mem.list_city_events("sf", 10).await.unwrap();
+    let events = mem.list_city_events("sf", 100).await.unwrap();
     assert!(events.iter().any(|e| e.event.id == ev.id));
 
     // Clean up: the graph is shared with the demo city, so remove this run's
@@ -155,6 +172,7 @@ async fn neo4j_memory_roundtrip() {
             serde_json::json!({"pop": pop_key}),
         ),
         ("MATCH (e:Event {id: $id}) DETACH DELETE e", serde_json::json!({"id": ev.id})),
+        ("MATCH (e:Event) WHERE e.id IN $ids DETACH DELETE e", serde_json::json!({"ids": same_day})),
     ])
     .await
     .unwrap();
