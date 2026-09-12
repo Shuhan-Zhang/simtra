@@ -1189,6 +1189,12 @@ body.offline-demo .result-card { max-height: min(60dvh, 720px); }
 .pc-answer.pos { color: var(--accent); background: rgba(0,122,255,.10); }
 .pc-person-meta { font-size: var(--fs-caption); color: var(--ink-2); }
 .pc-person-why { font-size: var(--fs-caption); color: var(--ink-2); line-height: var(--lh-body); }
+.pc-person-why.pending { color: var(--ink-3); font-style: italic; animation: pc-shimmer 1.2s ease-in-out infinite; }
+@keyframes pc-shimmer { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .pc-person-why.pending { animation: none; } }
+.pc-archetype { margin-left: 6px; font-size: var(--fs-caption2); font-style: normal; color: var(--ink-3); }
+.pc-answer.own { color: var(--accent); background: rgba(0,122,255,.10); }
+.persona-answer .pc-archetype { display: block; margin: 4px 0 0; }
 .pc-people-more { margin-top: var(--s-3); }
 
 /* persona modal */

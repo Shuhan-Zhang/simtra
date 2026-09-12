@@ -16,7 +16,7 @@
 import { BASE, today } from "./config.js";
 import { detectKind, nextKind } from "./detect-kind.js";
 import { buildEvidenceChartModel } from "./evidence-chart.js";
-import { createPersonaChart } from "./persona-chart.js?v=3";
+import { createPersonaChart } from "./persona-chart.js?v=4";
 import { buildVerifiedDataModel, renderVerifiedData, bindVerifiedData, verifiedMapSelection } from "./verified-data.js";
 
 const SENTIMENTS = ["support", "oppose", "worried", "angry", "sad", "hopeful", "indifferent"];
@@ -140,6 +140,7 @@ const state = {
   drawHead: () => {},
   openPerson: () => {},
   fetchAnswers: async () => null,
+  fetchPersonal: null,
   sourceHint: () => null,
   getPopulationKey: () => null,
   openPastResult: null,
@@ -258,7 +259,7 @@ export function lineageItems() { return state.items; }
 export function initFeedPanel({
   getCity, getBranch, getCityDisplay, getResidents, getNews,
   setSegmentSelection, getSegmentSelectionSummary, getRawResidents, evidenceReady, dimensionLabels,
-  groupLabel, drawHead, openPerson, fetchAnswers, sourceHint, getPopulationKey, openPastResult,
+  groupLabel, drawHead, openPerson, fetchAnswers, fetchPersonal, sourceHint, getPopulationKey, openPastResult,
 } = {}) {
   const root = document.getElementById("feed-panel");
   if (!root) return;
@@ -277,6 +278,7 @@ export function initFeedPanel({
   if (drawHead) state.drawHead = drawHead;
   if (openPerson) state.openPerson = openPerson;
   if (fetchAnswers) state.fetchAnswers = fetchAnswers;
+  if (fetchPersonal) state.fetchPersonal = fetchPersonal;
   if (sourceHint) state.sourceHint = sourceHint;
   if (getPopulationKey) state.getPopulationKey = getPopulationKey;
   if (openPastResult) state.openPastResult = openPastResult;
@@ -774,6 +776,7 @@ function mountEvidenceChart(item, host) {
   const events = state.items.filter((i) => i.type === "event").map((e) => ({ created_at: e.created_at, text: e.text }));
   const inst = createPersonaChart(host, {
     question: item.question, framing, options, topIndex, model, compact: true,
+    testId: item.id, fetchPersonal: state.fetchPersonal ? (ids) => state.fetchPersonal(item.id, ids) : null,
     residents: state.getRawResidents(), answers: null, answersNote: "Loading each resident's answer…",
     history, events,
     labels: { dimension: (d) => state.dimensionLabels[d] || d, group: state.groupLabel },

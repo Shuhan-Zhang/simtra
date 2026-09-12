@@ -117,6 +117,9 @@ async fn neo4j_memory_roundtrip() {
             dist: vec![],
             why: "safety first".into(),
             archetype: "arch".into(),
+            personal_p_yes: None,
+            personal_dist: None,
+            personal_why: None,
         })
         .collect();
     mem.record_test(&pop_key, &record, &answers, Some(&ev.id)).await.unwrap();
@@ -144,6 +147,23 @@ async fn neo4j_memory_roundtrip() {
         }
         other => panic!("unexpected lineage item: {other:?}"),
     }
+
+    // personal answers: stored on the ANSWERED edge and readable back
+    mem.record_personal_answers(
+        &pop_key,
+        &record.id,
+        &[memory::PersonalAnswer { agent_id: 5, p_yes: 0.31, dist: vec![], why: "I ride Muni daily and this is my own take.".into() }],
+    )
+    .await
+    .unwrap();
+    let personal = mem.personal_answers(&pop_key, &record.id, &[5, 6]).await.unwrap();
+    assert_eq!(personal.len(), 1);
+    assert_eq!(personal[0].agent_id, 5);
+    assert!((personal[0].p_yes - 0.31).abs() < 1e-9);
+    let all = mem.test_answers(&record.id).await.unwrap().unwrap();
+    let a5 = all.iter().find(|a| a.agent_id == 5).unwrap();
+    assert_eq!(a5.personal_why.as_deref(), Some("I ride Muni daily and this is my own take."));
+    assert!(all.iter().find(|a| a.agent_id == 6).unwrap().personal_why.is_none());
 
     let recalled = mem.recall(&pop_key, &[0, 5, 29], "2026-09-12").await.unwrap();
     for id in [0u32, 5, 29] {

@@ -16,7 +16,7 @@
 //! (:Event {id, kind, text, as_of_date})-[:HAPPENED_IN]->(:City)     city-wide news
 //! (:Persona)-[:EXPOSED_TO {at}]->(:Event)                            targeted exposure / stimulus
 //! (:Test {id, kind, question, framing, as_of_date, model, p_yes, ...})-[:RAN_ON]->(:Population)
-//! (:Persona)-[:ANSWERED {p_yes, dist, why, archetype, at}]->(:Test)
+//! (:Persona)-[:ANSWERED {p_yes, dist, why, archetype, at, personal_p_yes?, personal_dist?, personal_why?}]->(:Test)
 //! (:Test)-[:UNDER_EVENT]->(:Event)                                   the poll's stimulus event
 //! (:Test)-[:USED_STIMULUS]->(:Stimulus {id, label, text})            A/B variants
 //! (:DataQuery {id, question, answer, response_json})-[:ASKED_IN]->(:City)  verified-data questions
@@ -134,6 +134,23 @@ pub struct AgentAnswer {
     pub dist: Vec<f64>,
     pub why: String,
     pub archetype: String,
+    /// The resident's OWN answer (one model call per listed resident), when it has
+    /// been asked for; otherwise the archetype answer above is all there is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub personal_p_yes: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub personal_dist: Option<Vec<f64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub personal_why: Option<String>,
+}
+
+/// One resident's own answer to a test, in their own words.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PersonalAnswer {
+    pub agent_id: u32,
+    pub p_yes: f64,
+    pub dist: Vec<f64>,
+    pub why: String,
 }
 
 /// Sentiments a reaction may carry (exact wire strings).
@@ -1078,7 +1095,8 @@ impl MemoryClient {
                 ("MATCH (t:Test {id: $id}) RETURN t.id", json!({"id": test_id})),
                 (
                     "MATCH (a:Persona)-[x:ANSWERED]->(t:Test {id: $id}) \
-                     RETURN a.agent_id, x.p_yes, x.dist, x.why, x.archetype ORDER BY a.agent_id",
+                     RETURN a.agent_id, x.p_yes, x.dist, x.why, x.archetype, \
+                            x.personal_p_yes, x.personal_dist, x.personal_why ORDER BY a.agent_id",
                     json!({"id": test_id}),
                 ),
             ])
@@ -1100,11 +1118,82 @@ impl MemoryClient {
                             .unwrap_or_default(),
                         why: r.get(3).and_then(|v| v.as_str()).unwrap_or("").to_string(),
                         archetype: r.get(4).and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        personal_p_yes: r.get(5).and_then(|v| v.as_f64()),
+                        personal_dist: r
+                            .get(6)
+                            .and_then(|v| v.as_array())
+                            .map(|a| a.iter().filter_map(|x| x.as_f64()).collect()),
+                        personal_why: r.get(7).and_then(|v| v.as_str()).map(String::from),
                     })
                     .collect()
             })
             .unwrap_or_default();
         Ok(Some(answers))
+    }
+
+    /// Personal answers already stored for these residents on a test.
+    pub async fn personal_answers(
+        &self,
+        population_key: &str,
+        test_id: &str,
+        agent_ids: &[u32],
+    ) -> Result<Vec<PersonalAnswer>> {
+        let keys: Vec<String> = agent_ids.iter().map(|id| persona_key(population_key, *id)).collect();
+        let res = self
+            .run(&[(
+                "UNWIND $keys AS k \
+                 MATCH (a:Persona {key: k})-[x:ANSWERED]->(t:Test {id: $test}) \
+                 WHERE x.personal_why IS NOT NULL \
+                 RETURN a.agent_id, x.personal_p_yes, x.personal_dist, x.personal_why",
+                json!({"keys": keys, "test": test_id}),
+            )])
+            .await?;
+        Ok(res
+            .first()
+            .map(|rows| {
+                rows.iter()
+                    .map(|r| PersonalAnswer {
+                        agent_id: r.first().and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                        p_yes: r.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0),
+                        dist: r
+                            .get(2)
+                            .and_then(|v| v.as_array())
+                            .map(|a| a.iter().filter_map(|x| x.as_f64()).collect())
+                            .unwrap_or_default(),
+                        why: r.get(3).and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// Store residents' own answers on their ANSWERED edge (SET, so re-asking
+    /// overwrites; the edge is created for residents who never had one).
+    pub async fn record_personal_answers(
+        &self,
+        population_key: &str,
+        test_id: &str,
+        answers: &[PersonalAnswer],
+    ) -> Result<()> {
+        if answers.is_empty() {
+            return Ok(());
+        }
+        let now = now_iso();
+        let rows: Vec<Value> = answers
+            .iter()
+            .map(|a| json!({"key": persona_key(population_key, a.agent_id), "p_yes": a.p_yes, "dist": a.dist, "why": a.why}))
+            .collect();
+        self.run(&[(
+            "MATCH (t:Test {id: $test}) \
+             UNWIND $rows AS r \
+             MATCH (a:Persona {key: r.key}) \
+             MERGE (a)-[x:ANSWERED]->(t) \
+             ON CREATE SET x.p_yes = r.p_yes, x.dist = r.dist, x.why = r.why, x.archetype = a.archetype, x.at = $now \
+             SET x.personal_p_yes = r.p_yes, x.personal_dist = r.dist, x.personal_why = r.why, x.personal_at = $now",
+            json!({"test": test_id, "rows": rows, "now": now}),
+        )])
+        .await
+        .map(|_| ())
     }
 
     /// Remember a verified-data question and its full response (the statistic, chart
