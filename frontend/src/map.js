@@ -350,6 +350,7 @@ export class SFMap {
 
   // raw: [{ lonlat:[lon,lat], ... }]
   setAgents(raw) {
+    this._charById = null;
     this._segmentIndex = createSegmentIndex(raw);
     this._segmentResult = selectSegments(this._segmentIndex, this._segmentSelection);
     this.agents = raw
@@ -621,6 +622,29 @@ export class SFMap {
   }
 
   // draw a character's idle portrait into a small canvas (for the inspector card)
+  // sprite character index for a resident id (the timeline and charts draw the
+  // same face the map walks around with)
+  charOf(agentId) {
+    if (!this._charById) this._charById = new Map(this.agents.map((a) => [a.seed, a.char]));
+    return this._charById.get(agentId) ?? (Number(agentId) % SHEET.nChars);
+  }
+
+  // head-and-shoulders crop of the idle frame: the top 11 of the 16 sprite rows
+  drawHeadTo(canvas, agentId) {
+    if (!this.spriteReady || !canvas) return;
+    const char = this.charOf(agentId);
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const bx = (char % SHEET.perRow) * SHEET.blockW;
+    const by = Math.floor(char / SHEET.perRow) * SHEET.blockH;
+    const sx = bx + 1 * SHEET.cell, sy = by + 0 * SHEET.cell;
+    const rows = 11;
+    const scale = canvas.height / rows;
+    const w = SHEET.cell * scale;
+    ctx.drawImage(this.sprite, sx, sy, SHEET.cell, rows, (canvas.width - w) / 2, 0, w, canvas.height);
+  }
+
   drawCharTo(canvas, char) {
     if (!this.spriteReady || !canvas) return;
     const ctx = canvas.getContext("2d");

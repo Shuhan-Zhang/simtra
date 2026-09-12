@@ -235,6 +235,7 @@ mod tests {
             option_breakdowns: vec![],
             option_ci: None,
             hydra: HydraEvidence::default(),
+            memory_test_id: None,
         };
         let record =
             InsforgeClient::record_from_poll("sf", &poll, &result, "sim", "branch").unwrap();

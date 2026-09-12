@@ -81,6 +81,7 @@ async fn neo4j_memory_roundtrip() {
         option_breakdowns: vec![],
         option_ci: None,
         hydra: HydraEvidence::default(),
+            memory_test_id: None,
     };
     let tag = TestTag::kind("poll").on_branch("sim-test", "sim-test:main");
     let record = memory::test_record(&pop_key, &poll, &result, &tag);
@@ -103,6 +104,21 @@ async fn neo4j_memory_roundtrip() {
     )
     .await
     .unwrap();
+
+    // every persona's answer and the test itself are readable back by id
+    let answers = mem.test_answers(&record.id).await.unwrap().expect("test exists");
+    assert_eq!(answers.len(), 30);
+    assert!(answers.iter().all(|a| (a.p_yes - 0.72).abs() < 1e-9 && a.why == "safety first"));
+    assert!(mem.test_answers("test-does-not-exist").await.unwrap().is_none());
+    match mem.test_detail(&record.id).await.unwrap().expect("test detail") {
+        memory::LineageItem::Test { id, question, population_key, breakdowns, .. } => {
+            assert_eq!(id, record.id);
+            assert_eq!(question, poll.question);
+            assert_eq!(population_key, pop_key);
+            assert!(breakdowns.is_some());
+        }
+        other => panic!("unexpected lineage item: {other:?}"),
+    }
 
     let recalled = mem.recall(&pop_key, &[0, 5, 29], "2026-09-12").await.unwrap();
     for id in [0u32, 5, 29] {

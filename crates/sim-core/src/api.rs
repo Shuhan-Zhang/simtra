@@ -106,6 +106,9 @@ pub fn router(state: AppState) -> Router {
         .route("/branches/:bid", delete(delete_branch))
         .route("/branches/:bid/agents", get(branch_agents))
         .route("/branches/:bid/agents/:id/memory", get(agent_memory))
+        .route("/branches/:bid/agents/:id", get(agent_detail))
+        .route("/tests/:test_id", get(test_detail))
+        .route("/tests/:test_id/answers", get(test_answers))
         .route("/branches/:bid/chatter", post(branch_chatter))
         .route("/branches/:bid/poll", post(branch_poll))
         .route("/prediction-results", get(prediction_results))
@@ -135,6 +138,12 @@ async fn data_query_handler(
         }
     };
     let city = input.get("city").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    // `record: false` marks a lookup made for chart tooltips (Census source backing),
+    // which must not appear in the timeline as something the user asked.
+    let record = input.get("record").and_then(|v| v.as_bool()).unwrap_or(true);
+    // the flag is ours, not part of the strict data-query request schema
+    let mut input = input;
+    if let Some(obj) = input.as_object_mut() { obj.remove("record"); }
     let question = input
         .get("question")
         .and_then(|v| v.as_str())
@@ -165,7 +174,7 @@ async fn data_query_handler(
     // Remember answered questions so the timeline can show the chart again. Best-effort,
     // off the response path; unsupported/unavailable questions are not remembered.
     let answered = response.get("status").and_then(|v| v.as_str()) == Some("ok");
-    if let (Some(mem), true, false) = (st.memory.clone(), answered, city.is_empty()) {
+    if let (Some(mem), true, false) = (st.memory.clone(), answered && record, city.is_empty()) {
         let snapshot = response.clone();
         tokio::spawn(async move {
             match mem.record_data_query(&city, &question, &snapshot).await {
@@ -189,6 +198,7 @@ async fn root() -> impl IntoResponse {
             "POST /branches/{id}/counterfactual", "POST /branches/{id}/ab-test",
             "POST /branches/{id}/predict-market",
             "POST /cities/{city}/events", "GET /cities/{city}/events", "GET /cities/{city}/lineage",
+            "GET /tests/{test_id}", "GET /tests/{test_id}/answers", "GET /branches/{id}/agents/{agent_id}",
             "GET /cities/{city}/events/{event_id}/reactions",
             "POST /branches/{id}/events/{event_id}/react",
             "GET /branches/{id}/agents/{agent_id}/memory",
@@ -1174,6 +1184,8 @@ struct AbTestResponse {
     sample_rationales: Vec<String>,
     hydra: crate::hydra::HydraEvidence,
     evidence: PollEvidence,
+    /// Persona-memory Test id for this run (None when memory is disabled).
+    memory_test_id: Option<String>,
 }
 
 fn validate_ab_request(req: &AbTestReq) -> Result<(Model, Population0), String> {
@@ -1285,6 +1297,7 @@ fn map_ab_result(result: PollResult, profile: &CityProfile) -> AbTestResponse {
         sample_rationales: result.sample_rationales,
         hydra: result.hydra,
         evidence,
+        memory_test_id: result.memory_test_id,
     }
 }
 
@@ -2006,6 +2019,99 @@ async fn react_to_event(
 }
 
 /// What one resident remembers: city events, stimuli shown, tests answered.
+/// Full persona detail for one resident of a branch's population: the seeded
+/// prose plus the demographics the chart segments residents by.
+async fn agent_detail(
+    State(st): State<AppState>,
+    Path((bid, id)): Path<(String, u32)>,
+) -> impl IntoResponse {
+    let (ctx, _bs) = match find_branch(&st, &bid) {
+        Some(x) => x,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error":"branch not found"})),
+            )
+                .into_response()
+        }
+    };
+    let Some(agent) = ctx.population.agents.get(id as usize) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error":"agent not found"})),
+        )
+            .into_response();
+    };
+    Json(json!({
+        "id": agent.id,
+        "name": agent.name,
+        "persona": agent.persona,
+        "occupation": agent.occupation,
+        "neighborhood": agent.neighborhood,
+        "age": agent.rec.age,
+        "sex": agent.rec.sex_label(),
+        "race_eth": agent.rec.race_eth(),
+        "educ": agent.rec.educ(),
+        "marital": agent.rec.marital(),
+        "nativity": agent.rec.nativity_label(),
+        "employment": agent.rec.employment_label(),
+        "citizen": agent.rec.is_citizen(),
+        "homeowner": agent.homeowner,
+        "religion": format!("{:?}", agent.religion),
+        "religiosity": agent.religiosity,
+        "values": agent.values,
+        "values_summary": agent.values.describe(),
+        "pums_weight": agent.weight(),
+        "segments": crate::predict::demographic_segments(agent, &ctx.population.income_cutoffs),
+    }))
+    .into_response()
+}
+
+/// One recorded test (poll / A/B / counterfactual leg) from persona memory, in the
+/// lineage item shape, so a past ask can be reopened from the timeline.
+async fn test_detail(State(st): State<AppState>, Path(test_id): Path<String>) -> impl IntoResponse {
+    let Some(mem) = st.memory.as_ref() else {
+        return memory_not_configured();
+    };
+    match mem.test_detail(&test_id).await {
+        Ok(Some(item)) => Json(item).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, Json(json!({"error":"test not found"}))).into_response(),
+        Err(e) => {
+            tracing::warn!("persona memory: test detail failed: {e:#}");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error":"persona memory read failed"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Every persona's answer to a test: what each resident's archetype said, and why.
+async fn test_answers(State(st): State<AppState>, Path(test_id): Path<String>) -> impl IntoResponse {
+    let Some(mem) = st.memory.as_ref() else {
+        return memory_not_configured();
+    };
+    match mem.test_answers(&test_id).await {
+        Ok(Some(answers)) => Json(json!({
+            "test_id": test_id,
+            "answers": answers.iter().map(|a| json!({
+                "agent_id": a.agent_id, "p_yes": a.p_yes, "dist": a.dist, "why": a.why,
+            })).collect::<Vec<_>>(),
+        }))
+        .into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, Json(json!({"error":"test not found"}))).into_response(),
+        Err(e) => {
+            tracing::warn!("persona memory: test answers failed: {e:#}");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error":"persona memory read failed"})),
+            )
+                .into_response()
+        }
+    }
+}
+
 async fn agent_memory(
     State(st): State<AppState>,
     Path((bid, id)): Path<(String, u32)>,

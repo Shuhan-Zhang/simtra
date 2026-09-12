@@ -380,3 +380,25 @@ Reaction object:
 `breakdowns` on a test is the poll's stored demographic breakdowns in the exact shape `buildEvidenceChartModel` reads (`breakdowns`, `option_breakdowns`, `p_distribution`), or `null` for tests recorded before breakdowns were kept, so the timeline can re-open the evidence chart. A `data_query` item carries the full `/data-query` response so the verified chart can be re-rendered; only answered (`status: "ok"`) questions are remembered, and `POST /data-query` records them best-effort when memory is configured.
 
 `events_known` is how many city events existed when the test was asked (what the residents could remember). `under_event` is the counterfactual stimulus text, if any; `stimuli` are A/B variants. `previous_p_yes`/`delta` link a test to the most recent earlier test in the same city with the same `question` and `framing`, so a before/after pair around an event shows the shift directly.
+
+### Persona charts (per-resident answers behind a result)
+
+Every poll, A/B test and counterfactual leg is written to persona memory with each
+resident's inherited answer. The result JSON carries the Test id so a client can join
+answers with the resident list it already holds:
+
+- `POST /branches/{id}/poll`, `/ab-test`, `/counterfactual` responses include
+  `"memory_test_id": "test-…"` (null when memory is off). The write is best-effort and
+  in the background, so a client fetching answers immediately should tolerate one 404 and retry.
+- `GET /tests/{test_id}` → the recorded test in the lineage item shape (`type: "test"`,
+  question, framing, options, `p_distribution`, `p_yes`, `n_agents`, `model`, `population_key`,
+  `events_known`, `under_event`, stored `breakdowns` or null). 404 unknown, 503 memory off.
+- `GET /tests/{test_id}/answers` → `{"test_id", "answers": [{agent_id, p_yes, dist, why}]}` for
+  every resident that answered (10,000 rows for a full population). `dist` is empty for binary
+  polls. 404 unknown, 503 memory off.
+- `GET /branches/{id}/agents/{agent_id}` → one resident's full persona: `name`, `persona` (prose),
+  `occupation`, `neighborhood`, `age`, `sex`, `race_eth`, `educ`, `marital`, `nativity`,
+  `employment`, `citizen`, `homeowner`, `religion`, `values`, `values_summary`, `pums_weight`,
+  `segments`.
+- `POST /data-query` accepts an extra `"record": false` field for lookups made only as tooltip
+  source backing; such queries are answered but never recorded in the lineage.

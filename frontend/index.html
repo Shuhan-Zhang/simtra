@@ -7,7 +7,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23141414' d='M12 2l1.8 5L19 9l-5.2 2L12 16l-1.8-5L5 9l5.2-2z'/%3E%3C/svg%3E" />
 
   <!-- fonts: Pixelify Sans (title) · Neue Haas Grotesk Display (body, via Typekit); skipped in ?demo=1 -->
-  <link rel="stylesheet" href="styles.css?v=merge-2" />
+  <link rel="stylesheet" href="styles.css?v=persona-2" />
   <link rel="stylesheet" href="feedpanel.css?v=6" />
   <script>
     if (new URLSearchParams(location.search).get("demo") !== "1") {
@@ -267,9 +267,16 @@
     <!-- character inspector (tap a character when zoomed in) -->
     <div id="char-card" class="char-card hidden" role="dialog" aria-label="Resident details"></div>
 
+    <!-- persona modal: one resident behind a chart statistic -->
+    <div id="persona-scrim" class="about-scrim hidden"></div>
+    <div id="persona-modal" class="about persona-modal hidden" role="dialog" aria-modal="true" aria-label="Resident persona">
+      <button id="persona-close" class="about-close" aria-label="Close">×</button>
+      <div id="persona-body"></div>
+    </div>
+
     <div id="toast" class="toast hidden" role="alert" aria-live="assertive"></div>
   </div>
 
-  <script type="module" src="src/app.js?v=merge-2"></script>
+  <script type="module" src="src/app.js?v=persona-5"></script>
 </body>
 </html>
