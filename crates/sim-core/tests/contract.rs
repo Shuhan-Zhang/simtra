@@ -27,6 +27,11 @@ async fn base() -> (String, bool) {
     // local in-process server, offline model mode (no token spend)
     std::env::set_var("MODEL_OFFLINE", "1");
     simfrancisco::load_dotenv(".env");
+    // Local offline mode always runs with the Neo4j memory layer disabled, even when
+    // the developer's .env carries real Aura credentials.
+    for k in ["NEO4J_URI", "NEO4J_USERNAME", "NEO4J_USER", "NEO4J_PASSWORD", "NEO4J_DATABASE"] {
+        std::env::remove_var(k);
+    }
     let dir = std::env::temp_dir().join(format!("sf_contract_{}", std::process::id()));
     std::fs::create_dir_all(&dir).ok();
     let cache_path = dir.join("cache.db");
@@ -60,6 +65,17 @@ async fn contract_all_endpoints() {
     assert_eq!(v["status"], "ok");
     assert!(v.get("has_key").is_some());
     assert!(v.get("sf_pums_records").and_then(|x| x.as_u64()).unwrap_or(0) > 1000, "pums loaded");
+    if !live {
+        // offline server has no NEO4J_URI: memory layer reports disabled
+        assert_eq!(v["memory_configured"], false, "memory_configured off");
+        let r = c
+            .post(format!("{base}/cities/sf/events"))
+            .json(&serde_json::json!({"text": "A political figure was shot.", "as_of_date": "2026-09-10"}))
+            .send().await.unwrap();
+        assert_eq!(r.status(), 503, "city events POST without memory -> 503");
+        let r = c.get(format!("{base}/cities/sf/events")).send().await.unwrap();
+        assert_eq!(r.status(), 503, "city events GET without memory -> 503");
+    }
 
     // ---- POST /simulations ----
     let r = c
@@ -70,6 +86,11 @@ async fn contract_all_endpoints() {
     let v: Value = r.json().await.unwrap();
     let sim_id = v["simulation_id"].as_str().expect("simulation_id").to_string();
     assert!(v["main_branch"].as_str().unwrap().ends_with(":main"));
+    if !live {
+        let main_branch = v["main_branch"].as_str().unwrap();
+        let r = c.get(format!("{base}/branches/{main_branch}/agents/0/memory")).send().await.unwrap();
+        assert_eq!(r.status(), 503, "persona memory GET without memory -> 503");
+    }
 
     // ---- GET /simulations/{id}/demographics (marginals match ACS) ----
     let r = c.get(format!("{base}/simulations/{sim_id}/demographics")).send().await.unwrap();

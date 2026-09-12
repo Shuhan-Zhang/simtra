@@ -91,6 +91,61 @@ Three SQLite roles are distinct:
 
 `Store` in `crates/sim-core/src/store.rs` owns simulation snapshots and branch heads. Tests enforce bit-for-bit snapshot restoration, branch isolation, and reset correctness.
 
+### Persona memory layer (Neo4j)
+
+`crates/sim-core/src/memory.rs` gives every synthetic resident a durable memory of
+events thrown into the world, the tests it took part in, and the stimuli it was shown.
+It is opt-in (set `NEO4J_URI`) and best-effort: a missing or unreachable Neo4j never
+turns a successful prediction into a failure.
+
+Graph shape:
+
+```text
+(:City {slug})
+(:Population {key, city, seed, n})-[:IN_CITY]->(:City)
+(:Persona {key, agent_id, name, ...})-[:MEMBER_OF]->(:Population)
+(:Event {id, kind, text, as_of_date})-[:HAPPENED_IN]->(:City)     city-wide news
+(:Persona)-[:EXPOSED_TO {at}]->(:Event)                            targeted exposure / stimulus
+(:Test {id, kind, question, framing, as_of_date, model, p_yes, ...})-[:RAN_ON]->(:Population)
+(:Persona)-[:ANSWERED {p_yes, dist, why, archetype, at}]->(:Test)
+(:Test)-[:UNDER_EVENT]->(:Event)                                   the poll's stimulus event
+(:Test)-[:USED_STIMULUS]->(:Stimulus {id, label, text})            A/B variants
+```
+
+Identity is deterministic: `population_key = <city>:<seed>:<n>` and
+`persona_key = <population_key>:<agent_id>`, so memory survives server restarts and
+new simulations built from the same seed.
+
+Recall into prompts:
+
+- Before each poll, `Engine` recalls memory for every archetype representative and
+  appends a ` Memory: ...` fragment to that representative's profile line, so the
+  whole archetype reasons with it. Applies to polls, A/B tests, counterfactuals.
+- Only events and tests with `as_of_date <= poll.as_of_date` are recalled, so
+  historical backtests stay leakage-free unless the user deliberately dates an
+  event earlier.
+- Capped (`RECALL_EVENTS`, `RECALL_TESTS`, ~520 chars) and ordered by date then id,
+  so prompt text and therefore model cache keys stay stable across runs.
+- Stimuli are labelled "was shown (hypothetical)" so the model does not mistake a
+  past test scenario for a real event.
+
+Writes:
+
+- `POST /simulations` registers the population's personas in the background.
+- After each test, the Test node and one `ANSWERED` edge per persona are written in a
+  background task; every member of an answered archetype inherits the representative's
+  answer. A poll `event` becomes a `stimulus` Event with `EXPOSED_TO` edges; A/B
+  variants become `Stimulus` nodes.
+- `POST /cities/:city/events` creates a city-wide Event every present and future
+  persona in that city remembers (recall traverses Persona -> Population -> City).
+
+Environment: `NEO4J_URI` (`http(s)://host:7474` or an Aura `neo4j+s://host` URI,
+which maps to `https://host`; plain `bolt://` is rejected), `NEO4J_USERNAME` (alias
+`NEO4J_USER`, default `neo4j`), `NEO4J_PASSWORD`, `NEO4J_DATABASE` (default `neo4j`;
+on Aura free instances this is the instance id),
+`NEO4J_HTTP_API` (`query` = HTTP Query API v2 for Neo4j 5.x/Aura, the default; `tx` =
+legacy `/tx/commit` for 4.x). No driver crate; raw `reqwest` like the other clients.
+
 ### Multi-city loading
 
 `api::build_state` always loads San Francisco from the root `tiles.db` path and `data/sf_pums.csv`.
@@ -212,6 +267,7 @@ scripts/                       City build helpers
 - `store.rs`: SQLite snapshots and branches.
 - `geo.rs`: tile DB/cell/geographic conversion.
 - `news.rs`: city-news cache and optional NewsAPI refresh.
+- `memory.rs`: Neo4j persona memory (events, tests, stimuli) recalled into prompts and written after tests.
 - `parse.rs`: free-text question parsing into supported poll shapes.
 - `rubric.rs`: validation rubric loading/scoring.
 
@@ -251,6 +307,11 @@ Core variables read by code/config:
 | `NEWS_REFRESH_HOURS` | Enable in-process refresh loop | Unset locally; Fly uses `6` |
 | `RUST_LOG` | Logging filter | `info` in Fly/Docker |
 | `CONTRACT_BASE_URL` | Run contract test against live server | Otherwise in-process offline server |
+| `NEO4J_URI` | Enable Neo4j persona memory | Unset disables the layer; `http(s)://` or Aura `neo4j+s://`; plain `bolt://` rejected |
+| `NEO4J_USERNAME` | Neo4j username (`NEO4J_USER` alias) | `neo4j` |
+| `NEO4J_PASSWORD` | Neo4j password | Empty |
+| `NEO4J_DATABASE` | Neo4j database name | `neo4j`; Aura free instances use the instance id |
+| `NEO4J_HTTP_API` | `query` (5.x/Aura Query API) or `tx` (4.x tx/commit) | `query` |
 
 `.env` is loaded manually by `load_dotenv` and **overrides inherited shell variables**. Never commit it.
 
@@ -266,6 +327,8 @@ GET    /health
 GET    /cities
 POST   /cities/:city/parse
 GET    /cities/:city/news
+POST   /cities/:city/events
+GET    /cities/:city/events
 POST   /simulations
 GET    /simulations/:id/demographics
 POST   /simulations/:id/branches
@@ -273,6 +336,7 @@ POST   /simulations/:id/reset-to-main
 GET    /branches/:bid
 DELETE /branches/:bid
 GET    /branches/:bid/agents
+GET    /branches/:bid/agents/:id/memory
 POST   /branches/:bid/chatter
 POST   /branches/:bid/poll
 POST   /branches/:bid/predict-market
