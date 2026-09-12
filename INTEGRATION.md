@@ -393,9 +393,18 @@ answers with the resident list it already holds:
 - `GET /tests/{test_id}` → the recorded test in the lineage item shape (`type: "test"`,
   question, framing, options, `p_distribution`, `p_yes`, `n_agents`, `model`, `population_key`,
   `events_known`, `under_event`, stored `breakdowns` or null). 404 unknown, 503 memory off.
-- `GET /tests/{test_id}/answers` → `{"test_id", "answers": [{agent_id, p_yes, dist, why}]}` for
-  every resident that answered (10,000 rows for a full population). `dist` is empty for binary
-  polls. 404 unknown, 503 memory off.
+- `GET /tests/{test_id}/answers` → `{"test_id", "answers": [{agent_id, p_yes, dist, why,
+  personal_p_yes?, personal_dist?, personal_why?}]}` for every resident that answered (10,000
+  rows for a full population). `p_yes`/`dist`/`why` are the archetype's answer that the resident
+  inherited; the `personal_*` fields are present only once that resident has been asked
+  individually (below). `dist` is empty for binary polls. 404 unknown, 503 memory off.
+- `POST /tests/{test_id}/personal-answers` body `{"branch_id", "agent_ids": [..], "limit": 20}`
+  → `{"test_id", "answers": [{agent_id, p_yes, dist, why, personal: true}]}`: each listed
+  resident's OWN answer in their own words. Residents already asked come back from the graph;
+  the rest (at most `limit`, 1..=40, default 20) are asked in one batched model call grounded in
+  their persona and memory, then stored on their `ANSWERED` edge (`personal_p_yes`,
+  `personal_dist`, `personal_why`). 404 branch/test unknown, 409 when the test was asked of a
+  different population than the branch, 400 no valid ids, 502 model failure, 503 memory off.
 - `GET /branches/{id}/agents/{agent_id}` → one resident's full persona: `name`, `persona` (prose),
   `occupation`, `neighborhood`, `age`, `sex`, `race_eth`, `educ`, `marital`, `nativity`,
   `employment`, `citizen`, `homeowner`, `religion`, `values`, `values_summary`, `pums_weight`,

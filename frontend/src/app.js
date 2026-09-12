@@ -16,12 +16,12 @@ import {
   AB_CROSS_KEY_SEP, AB_MIN_SEGMENT_N, abCrossMatrix, abLeanAlpha, abSegments,
   abTopMovers, isCrossBreakdown, normalizeBreakdowns, pct, signedPp,
 } from "./ab-analysis.js";
-import * as api from "./api.js";
+import * as api from "./api.js?v=pa-1";
 import { buildEvidenceChartModel } from "./evidence-chart.js";
-import { createPersonaChart, answerLabel } from "./persona-chart.js?v=3";
+import { createPersonaChart, answerLabel } from "./persona-chart.js?v=4";
 import { buildVerifiedDataModel, renderVerifiedData, bindVerifiedData, reduceVerifiedSelection, verifiedMapSelection } from "./verified-data.js";
 import { snapshotAudience, describeAudience, audienceHeader, audienceScope } from "./audience.js";
-import { initFeedPanel, refreshFeedPanel, lineageItems } from "./feedpanel.js?v=8";
+import { initFeedPanel, refreshFeedPanel, lineageItems } from "./feedpanel.js?v=9";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -286,6 +286,14 @@ function chartOptionsOf(result, ab = false) {
   if (result.framing === "options" && Array.isArray(result.p_distribution)) return result.p_distribution.map((d) => String(Array.isArray(d) ? d[0] : d));
   return [];
 }
+// Ask specific residents the question in their own words (one batched model call).
+async function fetchPersonal(testId, agentIds) {
+  if (!state.mainBranch || !testId || !agentIds?.length) return null;
+  const data = await api.postPersonalAnswers(testId, { branch_id: state.mainBranch, agent_ids: agentIds, limit: 20 });
+  const m = new Map();
+  for (const a of data?.answers || []) m.set(Number(a.agent_id), { ...a, personal: true });
+  return m;
+}
 // A resident's answers to a test: fetched once the background memory write has
 // landed (the write is best-effort, so a 404 is retried once).
 async function fetchAnswers(testId, attempt = 0) {
@@ -341,6 +349,7 @@ function attachEvidence(result, ab = false) {
   const seq = ++chart.seq;
   chart.inst = createPersonaChart(host, {
     question: result.question, framing, options, topIndex, model,
+    testId, fetchPersonal: testId ? (ids) => fetchPersonal(testId, ids) : null,
     residents: state.rawResidents, answers: null,
     answersNote: testId ? "Loading each resident's answer…" : "Per-resident answers aren't stored for this result, so this view shows group shares.",
     history, events,
@@ -418,7 +427,7 @@ async function openPersonaModal(resident, answer, ctx = {}) {
       <canvas class="persona-portrait" width="72" height="72"></canvas>
       <div><div class="persona-name">${escapeHtml(resident.name || `Resident ${resident.id}`)}</div><div class="persona-sub">${escapeHtml(sub)}</div></div>
     </div>
-    ${a ? `<div class="persona-answer"><b>${escapeHtml(a.text)}</b>${ctx.question ? ` · ${escapeHtml(ctx.question)}` : ""}${answer?.why ? `<br>“${escapeHtml(answer.why)}”` : ""}</div>` : ""}
+    ${a ? `<div class="persona-answer"><b>${escapeHtml(a.text)}</b>${ctx.question ? ` · ${escapeHtml(ctx.question)}` : ""}${answer?.why ? `<br>“${escapeHtml(answer.why)}”` : ""}<span class="pc-archetype">${ctx.personal ? "their own answer" : "archetype view"}</span></div>` : ""}
     <div class="persona-section persona-loading">Loading their story…</div>`;
   show(personaEls.modal); show(personaEls.scrim);
   map.drawCharTo(personaEls.body.querySelector(".persona-portrait"), map.charOf(resident.id));
@@ -494,6 +503,7 @@ async function boot() {
     drawHead: (canvas, id) => map.drawHeadTo(canvas, id),
     openPerson: openPersonaModal,
     fetchAnswers,
+    fetchPersonal,
     sourceHint: censusHint,
     getPopulationKey: populationKey,
     openPastResult,

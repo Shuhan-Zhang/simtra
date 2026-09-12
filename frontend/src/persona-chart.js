@@ -101,9 +101,16 @@ export function residentsIn(residents, dimension, key) {
 }
 
 // ── main ───────────────────────────────────────────────────────────────────
+// Residents' own answers, cached per test so reopening a list is instant.
+const personalCache = new Map(); // `${testId}:${agentId}` -> { p_yes, dist, why, personal: true }
+const pkey = (testId, id) => `${testId}:${id}`;
+
 export function createPersonaChart(host, opts) {
   const o = {
     question: "", framing: "vote", options: [], topIndex: 0,
+    testId: null,
+    // (agentIds) => Map<agentId, {p_yes, dist, why}> | null — asks these residents in their own words
+    fetchPersonal: null,
     model: { breakdowns: [], options: [] },
     residents: [], answers: null, answersNote: "",
     history: [], events: [],
@@ -133,9 +140,10 @@ export function createPersonaChart(host, opts) {
 
   const hasAnswers = () => !!(o.answers && o.answers.size);
   const answerOf = (r) => (hasAnswers() ? o.answers.get(r.id) || null : null);
+  const personalOf = (id) => (o.testId ? personalCache.get(pkey(o.testId, id)) || null : null);
   const rowsFor = (residents) => residents.map((resident) => {
     const answer = answerOf(resident);
-    return { resident, answer, support: supportOf(answer, o.topIndex) };
+    return { resident, answer, support: supportOf(answer, o.topIndex), personal: personalOf(resident.id), pending: false };
   });
   const groupsOf = () => (o.model.breakdowns.find((b) => b.dimension === st.dimension)?.groups) || [];
   const groupShare = (g) => (o.framing === "options" ? g.shares[o.topIndex] : g.shares[0]);
@@ -197,11 +205,41 @@ export function createPersonaChart(host, opts) {
 
   // ── people list (the residents behind a statistic) ──
   function openPeople({ title, subtitle, rows, segments }) {
-    st.people = { title, subtitle, rows: byStrength(rows), shown: PEOPLE_PAGE };
+    st.people = { title, subtitle, rows: byStrength(rows), shown: PEOPLE_PAGE, seq: (st.people?.seq || 0) + 1 };
     o.onGroupSelect(segments || null);
     renderPeople();
     el.people.classList.remove("hidden");
     el.people.querySelector(".pc-people-back")?.focus({ preventScroll: true });
+    askPersonal();
+  }
+  // Ask the residents on the visible page for their own answers (one batched call
+  // per page); rows keep their order so nothing jumps under the cursor.
+  async function askPersonal() {
+    const p = st.people;
+    if (!p || !o.testId || typeof o.fetchPersonal !== "function") return;
+    const seq = p.seq;
+    const need = p.rows.slice(0, p.shown).filter((r) => !r.personal && !r.pending && !r.failed);
+    if (!need.length) return;
+    for (const r of need) r.pending = true;
+    paintPending();
+    let got = null;
+    try { got = await o.fetchPersonal(need.map((r) => r.resident.id)); } catch { got = null; }
+    if (st.destroyed) return;
+    for (const r of need) {
+      r.pending = false;
+      const a = got?.get?.(r.resident.id);
+      if (a) { r.personal = a; personalCache.set(pkey(o.testId, r.resident.id), a); }
+      else r.failed = true;
+    }
+    if (st.people === p && p.seq === seq) renderPeople();
+  }
+  function paintPending() {
+    const p = st.people; if (!p) return;
+    for (const li of el.people.querySelectorAll(".pc-person")) {
+      const row = p.rows.find((r) => r.resident.id === Number(li.dataset.agent));
+      const why = li.querySelector(".pc-person-why");
+      if (row?.pending && why) { why.classList.add("pending"); why.textContent = `asking ${firstName(row.resident)}…`; }
+    }
   }
   function renderPeople() {
     const p = st.people; if (!p) return;
@@ -218,23 +256,29 @@ export function createPersonaChart(host, opts) {
     paintHeads(el.people);
     for (const c of el.people.querySelectorAll(".pc-person-portrait")) o.drawHead(c, Number(c.dataset.agent));
     el.people.querySelector(".pc-people-back").addEventListener("click", () => { clearSelection(); render(); });
-    el.people.querySelector(".pc-people-more")?.addEventListener("click", () => { p.shown += PEOPLE_PAGE; renderPeople(); });
+    el.people.querySelector(".pc-people-more")?.addEventListener("click", () => { p.shown += PEOPLE_PAGE; renderPeople(); askPersonal(); });
     for (const li of el.people.querySelectorAll(".pc-person")) {
       li.addEventListener("click", () => {
         const row = p.rows.find((r) => r.resident.id === Number(li.dataset.agent));
-        if (row) o.openPerson(row.resident, row.answer, { framing: o.framing, options: o.options, topIndex: o.topIndex, question: o.question });
+        if (row) o.openPerson(row.resident, row.personal || row.answer, { framing: o.framing, options: o.options, topIndex: o.topIndex, question: o.question, personal: !!row.personal });
       });
     }
   }
+  const firstName = (r) => String(r.name || `Resident ${r.id}`).split(" ")[0];
   function personRow(r) {
-    const a = answerLabel(r.answer, o);
+    const own = r.personal;
+    const a = answerLabel(own || r.answer, o);
     const meta = [r.resident.occupation, r.resident.neighborhood, Number.isFinite(r.resident.age) ? `${r.resident.age}` : null].filter(Boolean).join(" · ");
+    const why = own?.why || r.answer?.why || "";
+    const quote = r.pending
+      ? `<span class="pc-person-why pending">asking ${esc(firstName(r.resident))}…</span>`
+      : why ? `<span class="pc-person-why">“${esc(why)}”${own ? "" : `<span class="pc-archetype">archetype view</span>`}</span>` : "";
     return `<li class="pc-person" data-agent="${r.resident.id}" tabindex="0" role="button">
       <canvas class="pc-person-portrait" width="28" height="28" data-agent="${r.resident.id}"></canvas>
       <span class="pc-person-main">
-        <span class="pc-person-name">${esc(r.resident.name || `Resident ${r.resident.id}`)}${a ? `<span class="pc-answer ${a.positive ? "pos" : ""}">${esc(a.text)}</span>` : ""}</span>
+        <span class="pc-person-name">${esc(r.resident.name || `Resident ${r.resident.id}`)}${a ? `<span class="pc-answer ${a.positive ? "pos" : ""}${own ? " own" : ""}">${esc(a.text)}</span>` : ""}</span>
         <span class="pc-person-meta">${esc(meta)}</span>
-        ${r.answer?.why ? `<span class="pc-person-why">“${esc(r.answer.why)}”</span>` : ""}
+        ${quote}
       </span></li>`;
   }
 
@@ -497,7 +541,13 @@ export function createPersonaChart(host, opts) {
       render();
       return true;
     },
-    setAnswers(answers, note = "") { o.answers = answers; o.answersNote = note; if (!st.manual) st.type = autoType(); render(); },
+    setAnswers(answers, note = "") {
+      o.answers = answers; o.answersNote = note;
+      if (o.testId && answers?.forEach) answers.forEach((a, id) => {
+        if (a && a.personal_why != null) personalCache.set(pkey(o.testId, Number(id)), { p_yes: a.personal_p_yes ?? a.p_yes, dist: a.personal_dist || [], why: a.personal_why, personal: true });
+      });
+      if (!st.manual) st.type = autoType(); render();
+    },
     setSourceHint(fn) { o.sourceHint = fn; render(); },
     setHistory(history, events) { o.history = history || []; o.events = events || []; if (!st.manual) st.type = autoType(); render(); },
     get type() { return st.type; },

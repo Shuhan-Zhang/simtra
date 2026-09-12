@@ -224,6 +224,8 @@ export const counterfactual = (branchId, payload, signal) =>
 // persona memory: a recorded test, every resident's answer to it, one resident's full persona
 export const getTest = (testId) => req(`/tests/${encodeURIComponent(testId)}`, { timeout: 20000 });
 export const getTestAnswers = (testId) => req(`/tests/${encodeURIComponent(testId)}/answers`, { timeout: 30000 });
+export const postPersonalAnswers = (testId, body) =>
+  req(`/tests/${encodeURIComponent(testId)}/personal-answers`, { method: "POST", body, timeout: 90000 });
 export const getAgentDetail = (branchId, agentId) => req(`/branches/${branchId}/agents/${agentId}`, { timeout: 12000 });
 
 export const deleteBranch = (branchId) => {

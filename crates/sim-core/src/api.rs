@@ -109,6 +109,7 @@ pub fn router(state: AppState) -> Router {
         .route("/branches/:bid/agents/:id", get(agent_detail))
         .route("/tests/:test_id", get(test_detail))
         .route("/tests/:test_id/answers", get(test_answers))
+        .route("/tests/:test_id/personal-answers", post(test_personal_answers))
         .route("/branches/:bid/chatter", post(branch_chatter))
         .route("/branches/:bid/poll", post(branch_poll))
         .route("/prediction-results", get(prediction_results))
@@ -2097,6 +2098,7 @@ async fn test_answers(State(st): State<AppState>, Path(test_id): Path<String>) -
             "test_id": test_id,
             "answers": answers.iter().map(|a| json!({
                 "agent_id": a.agent_id, "p_yes": a.p_yes, "dist": a.dist, "why": a.why,
+                "personal_p_yes": a.personal_p_yes, "personal_dist": a.personal_dist, "personal_why": a.personal_why,
             })).collect::<Vec<_>>(),
         }))
         .into_response(),
@@ -2110,6 +2112,124 @@ async fn test_answers(State(st): State<AppState>, Path(test_id): Path<String>) -
                 .into_response()
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct PersonalAnswersReq {
+    branch_id: String,
+    #[serde(default)]
+    agent_ids: Vec<u32>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// Each listed resident's OWN answer to a recorded test, in their own words:
+/// stored answers come back from the graph, the rest are asked in one batched
+/// model call (capped per request) and written to their ANSWERED edge.
+async fn test_personal_answers(
+    State(st): State<AppState>,
+    Path(test_id): Path<String>,
+    Json(req): Json<PersonalAnswersReq>,
+) -> impl IntoResponse {
+    let Some(mem) = st.memory.as_ref() else {
+        return memory_not_configured();
+    };
+    let (ctx, _bs) = match find_branch(&st, &req.branch_id) {
+        Some(x) => x,
+        None => {
+            return (StatusCode::NOT_FOUND, Json(json!({"error":"branch not found"}))).into_response()
+        }
+    };
+    let test = match mem.test_detail(&test_id).await {
+        Ok(Some(crate::memory::LineageItem::Test {
+            question, description, framing, options, as_of_date, population_key, ..
+        })) => (question, description, framing, options, as_of_date, population_key),
+        Ok(_) => {
+            return (StatusCode::NOT_FOUND, Json(json!({"error":"test not found"}))).into_response()
+        }
+        Err(e) => {
+            tracing::warn!("persona memory: test detail failed: {e:#}");
+            return (StatusCode::BAD_GATEWAY, Json(json!({"error":"persona memory read failed"}))).into_response();
+        }
+    };
+    let (question, description, framing_name, options, as_of_date, population_key) = test;
+    let pop_key = crate::memory::population_key_of(&ctx.population);
+    if !population_key.is_empty() && population_key != pop_key {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"error":"this test was asked of a different simulation population"})),
+        )
+            .into_response();
+    }
+    let limit = req.limit.unwrap_or(20).clamp(1, 40);
+    let mut ids: Vec<u32> = Vec::new();
+    for id in req.agent_ids {
+        if (id as usize) < ctx.population.agents.len() && !ids.contains(&id) {
+            ids.push(id);
+        }
+        if ids.len() >= limit {
+            break;
+        }
+    }
+    if ids.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error":"agent_ids required"}))).into_response();
+    }
+    let mut answers = match mem.personal_answers(&pop_key, &test_id, &ids).await {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::warn!("persona memory: personal answers read failed: {e:#}");
+            Vec::new()
+        }
+    };
+    let missing: Vec<u32> = ids.iter().copied().filter(|id| !answers.iter().any(|a| a.agent_id == *id)).collect();
+    if !missing.is_empty() {
+        let framing = match framing_name.as_str() {
+            "belief" => Framing::Belief,
+            "options" => Framing::Options,
+            _ => Framing::Vote,
+        };
+        let fragments: HashMap<u32, String> = match mem.recall(&pop_key, &missing, &as_of_date).await {
+            Ok(recalled) => recalled
+                .into_iter()
+                .map(|(id, m)| (id, crate::memory::prompt_fragment(&m)))
+                .filter(|(_, f)| !f.is_empty())
+                .collect(),
+            Err(e) => {
+                tracing::warn!("persona memory recall unavailable for personal answers: {e:#}");
+                HashMap::new()
+            }
+        };
+        let fresh = match st
+            .engine
+            .personal_answers(&ctx.population, &question, &description, framing, &options, &as_of_date, &missing, &fragments)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!("personal answers model call failed: {e:#}");
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({"error":"residents could not be asked right now (model request failed)"})),
+                )
+                    .into_response();
+            }
+        };
+        let fresh: Vec<crate::memory::PersonalAnswer> = fresh
+            .into_iter()
+            .map(|(agent_id, p_yes, dist, why)| crate::memory::PersonalAnswer { agent_id, p_yes, dist, why })
+            .collect();
+        if let Err(e) = mem.record_personal_answers(&pop_key, &test_id, &fresh).await {
+            tracing::warn!("persona memory: personal answers write failed: {e:#}");
+        }
+        answers.extend(fresh);
+    }
+    Json(json!({
+        "test_id": test_id,
+        "answers": answers.iter().map(|a| json!({
+            "agent_id": a.agent_id, "p_yes": a.p_yes, "dist": a.dist, "why": a.why, "personal": true,
+        })).collect::<Vec<_>>(),
+    }))
+    .into_response()
 }
 
 async fn agent_memory(
