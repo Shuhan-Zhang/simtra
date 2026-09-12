@@ -17,10 +17,11 @@ import {
   abTopMovers, isCrossBreakdown, normalizeBreakdowns, pct, signedPp,
 } from "./ab-analysis.js";
 import * as api from "./api.js";
-import { buildEvidenceChartModel, renderEvidenceChart, bindEvidenceChart, reduceEvidenceSelection } from "./evidence-chart.js";
+import { buildEvidenceChartModel } from "./evidence-chart.js";
+import { createPersonaChart, answerLabel } from "./persona-chart.js?v=3";
 import { buildVerifiedDataModel, renderVerifiedData, bindVerifiedData, reduceVerifiedSelection, verifiedMapSelection } from "./verified-data.js";
 import { snapshotAudience, describeAudience, audienceHeader, audienceScope } from "./audience.js";
-import { initFeedPanel, refreshFeedPanel } from "./feedpanel.js?v=3";
+import { initFeedPanel, refreshFeedPanel, lineageItems } from "./feedpanel.js?v=7";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -214,21 +215,19 @@ function cleanupBranch() {
 
 // The app owns selection lifetime; the lane modules remain pure render/query tools.
 const verified = { model:null, selection:{segments:[]}, combine:false, dispose:null };
-const evidence = { model: null, selection: { segments: [] }, dimension: "gender", combine: false, open: true, residentId: null, dispose: null };
+// The persona chart under a result: one instance per result card.
+const chart = { inst: null, host: null, testId: null, seq: 0 };
 function resetEvidence() {
   verified.dispose?.(); verified.dispose = null;
   verified.model = null; verified.selection = {segments:[]}; verified.combine = false;
-  evidence.dispose?.(); evidence.dispose = null;
-  evidence.model = null; evidence.selection = { segments: [] };
-  evidence.dimension = "gender"; evidence.combine = false; evidence.open = true; evidence.residentId = null;
+  chart.inst?.destroy(); chart.inst = null; chart.host = null; chart.testId = null; chart.seq++;
   map.clearSegmentSelection();
 }
 function clearEvidenceSelection() {
   verified.selection = {segments:[]};
   if (verified.model && $("verified-host")) renderActiveVerified();
-  evidence.selection = { segments: [] }; evidence.residentId = null;
+  chart.inst?.clearSelection();
   map.clearSegmentSelection();
-  if (evidence.model && $("evidence-host")) renderActiveEvidence();
 }
 window.addEventListener("simtra:branch-deleted", ({ detail }) => {
   if (detail.branchId === state.branchId) { resetEvidence(); $("evidence-panel")?.remove(); }
@@ -239,110 +238,207 @@ function evidenceLabel(dimension, key) {
   if (dimension === "age") return `Age ${key.replaceAll("-", "–")}`;
   return abGroupLabel(dimension, key);
 }
-function attachEvidence(result, ab = false) {
-  evidence.dispose?.();
-  // Adapt the A/B transport and evidence envelope without altering lane data.
+// Legacy breakdown aliases are the same demographic, not additional dimensions.
+const DIM_ALIASES = { educ:"education", income_q:"income", puma:"geography" };
+function chartModelFor(result, ab = false) {
   const poll = ab ? { ...result, breakdowns: {}, p_distribution: [["Variant A",result.a_share],["Variant B",result.b_share]],
     option_breakdowns: (result.breakdowns || []).map((b) => ({ ...b, groups: b.groups.map((g) => ({...g,shares:[g.a_share,g.b_share]})) })) } : result;
-  const source = poll.evidence?.population_source;
-  const adapted = { ...poll, evidence: { ...poll.evidence,
-    ...(source ? { population_source: { ...source, limitations: poll.evidence.limitations } } : {}),
-    context_citations: poll.evidence?.context_sources || poll.evidence?.context_citations || [] } };
-  const model = buildEvidenceChartModel(adapted);
-  // Legacy aliases are the same demographic, not additional clauses.
-  const aliases = { educ:"education", income_q:"income", puma:"geography" };
-  model.breakdowns = model.breakdowns.filter((b) => !aliases[b.dimension] || !model.breakdowns.some((other) => other.dimension === aliases[b.dimension]))
-    .map((b) => ({...b,dimension:aliases[b.dimension] || b.dimension,groups:b.groups.map((g) => ({...g,dimension:aliases[g.dimension] || g.dimension}))}));
-  evidence.model = model;
-  if (!model.breakdowns.some((b) => b.dimension === evidence.dimension)) evidence.dimension = model.breakdowns[0]?.dimension || "gender";
-  const snapshot = source?.local_snapshot || "Unknown";
-  const truthText = `Census / ACS PUMS is the demographic source. Residents are synthetic; poll outcomes are simulated / model-based. Hydra sources provide context, not proof that a prediction occurred. Snapshot: ${escapeHtml(snapshot)} · dataset vintage, retrieval date and license: unknown unless supplied in provenance.`;
-  const fixtureNote = api.isDemo || result.fixture_mode || result.preview_mode ? '<p class="evidence-fixture"><strong>Saved demo fixture — these outcomes do not answer a new question.</strong></p>' : '';
+  const model = buildEvidenceChartModel(poll);
+  model.breakdowns = model.breakdowns.filter((b) => !DIM_ALIASES[b.dimension] || !model.breakdowns.some((other) => other.dimension === DIM_ALIASES[b.dimension]))
+    .map((b) => ({...b,dimension:DIM_ALIASES[b.dimension] || b.dimension,groups:b.groups.map((g) => ({...g,dimension:DIM_ALIASES[g.dimension] || g.dimension}))}));
+  return model;
+}
+// Which option the chart treats as "support": the winner of an options poll,
+// otherwise yes.
+function topIndexOf(result) {
+  const dist = (result.p_distribution || []).map((d) => (Array.isArray(d) ? Number(d[1]) : Number(d)) || 0);
+  if (!dist.length) return 0;
+  let best = 0; dist.forEach((p, i) => { if (p > dist[best]) best = i; });
+  return best;
+}
+function chartOptionsOf(result, ab = false) {
+  if (ab) return ["Variant A", "Variant B"];
+  if (result.framing === "options" && Array.isArray(result.p_distribution)) return result.p_distribution.map((d) => String(Array.isArray(d) ? d[0] : d));
+  return [];
+}
+// A resident's answers to a test: fetched once the background memory write has
+// landed (the write is best-effort, so a 404 is retried once).
+async function fetchAnswers(testId, attempt = 0) {
+  try {
+    const data = await api.getTestAnswers(testId);
+    const m = new Map();
+    for (const a of data?.answers || []) m.set(Number(a.agent_id), a);
+    return m;
+  } catch (e) {
+    if (e?.status === 404 && attempt < 2) { await new Promise((r) => setTimeout(r, 2500)); return fetchAnswers(testId, attempt + 1); }
+    return null;
+  }
+}
+// The same question asked before, in order, for the line chart's "over time" mode.
+function askHistory(question, framing, current) {
+  const items = lineageItems();
+  const norm = (q) => String(q || "").trim().toLowerCase();
+  const asks = items.filter((i) => i.type === "test" && norm(i.question) === norm(question) && (!framing || i.framing === framing))
+    .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+  const history = asks.map((i) => ({
+    id: i.id, created_at: i.created_at, p_yes: framing === "options" && Array.isArray(i.p_distribution) && i.p_distribution.length ? Math.max(...i.p_distribution) : i.p_yes,
+    label: fmtTime(i.created_at), events_known: i.events_known, item: i, current: current && i.id === current,
+  }));
+  const events = items.filter((i) => i.type === "event").map((e) => ({ created_at: e.created_at, text: e.text }));
+  return { history, events };
+}
+function fmtTime(iso) {
+  const d = new Date(iso); if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+function attachEvidence(result, ab = false) {
+  chart.inst?.destroy(); chart.inst = null;
+  const model = chartModelFor(result, ab);
+  const testId0 = result.memory_test_id || result.past?.test_id || null;
+  const asked = askHistory(result.question, ab ? null : (result.framing || "vote"), testId0);
+  // nothing to chart: no stored breakdowns and the question was only asked once
+  if (!model.breakdowns.some((b) => b.groups.length) && asked.history.length < 2) return;
   const section = document.createElement("section"); section.id = "evidence-panel";
-  section.innerHTML = `${fixtureNote}<details id="evidence-details" ${evidence.open ? "open" : ""}><summary>Explore demographic evidence
-      <span class="evidence-info-wrap"><button type="button" class="evidence-info" id="evidence-info" aria-label="About the data source" aria-describedby="evidence-tip">i</button><span role="tooltip" id="evidence-tip" class="evidence-tooltip">${truthText}</span></span></summary>
-    <div class="evidence-controls"><label for="evidence-dimension">Demographic dimension</label><select id="evidence-dimension">${model.breakdowns.map((b) => `<option value="${escapeHtml(b.dimension)}" ${b.dimension === evidence.dimension ? "selected" : ""}>${escapeHtml(AB_DIM_LABEL[b.dimension] || b.dimension)}</option>`).join("")}</select>
-    <label class="combine-control"><input type="checkbox" id="evidence-combine" ${evidence.combine ? "checked" : ""}> Combine groups (OR)</label>
-    <label for="evidence-resident">Inspect a synthetic resident (also available by tapping the map)</label><select id="evidence-resident"><option value="">Choose resident</option>${state.rawResidents.map((r,i) => `<option value="${i}">${escapeHtml(r.name || `Resident ${r.id}`)} · ${escapeHtml(evidenceLabel(evidence.dimension, r.segments?.[evidence.dimension] || "Unknown"))}</option>`).join("")}</select></div>
-    <div id="evidence-host"></div></details>`;
-  const anchor = els.resultCard.querySelector(".res-hydra") || els.resultCard.querySelector(".res-meta");
-  if (anchor) anchor.after(section); else els.resultCard.prepend(section);
-  // the info button lives inside <summary>: keep its clicks from toggling the disclosure
-  $("evidence-info").addEventListener("click", (event) => { event.preventDefault(); event.stopPropagation(); });
-  $("evidence-details").addEventListener("toggle", (event) => {
-    evidence.open = event.target.open;
-    if (!evidence.open) clearEvidenceSelection();
+  const host = document.createElement("div"); section.append(host);
+  // under the result itself: after the bars, meta and scope; before the quotes
+  const anchor = els.resultCard.querySelector(".ab-adv") || els.resultCard.querySelector(".res-hydra") || els.resultCard.querySelector(".res-meta") || els.resultCard.querySelector(".res-scope");
+  if (anchor) anchor.after(section);
+  else { const why = els.resultCard.querySelector(".res-why") || els.resultCard.querySelector(".res-actions"); why ? why.before(section) : els.resultCard.append(section); }
+  const framing = ab ? "options" : result.framing || "vote";
+  const options = chartOptionsOf(result, ab);
+  const topIndex = ab ? 0 : topIndexOf(result);
+  const testId = testId0;
+  const { history, events } = asked;
+  chart.host = host; chart.testId = testId;
+  const seq = ++chart.seq;
+  chart.inst = createPersonaChart(host, {
+    question: result.question, framing, options, topIndex, model,
+    residents: state.rawResidents, answers: null,
+    answersNote: testId ? "Loading each resident's answer…" : "Per-resident answers aren't stored for this result, so this view shows group shares.",
+    history, events,
+    labels: { dimension: (d) => AB_DIM_LABEL[d] || d, group: evidenceLabel },
+    drawHead: (canvas, id) => map.drawHeadTo(canvas, id),
+    openPerson: openPersonaModal,
+    onGroupSelect: (segments) => map.setSegmentSelection(segments?.length ? { clauses: segments, operator: "or" } : null),
+    onOpenAsk: (h) => { if (h?.item && !h.current) openPastResult(h.item); },
+    sourceHint: censusHint,
   });
-  $("evidence-dimension").addEventListener("change", (event) => { evidence.dimension = event.target.value; renderActiveEvidence(); });
-  $("evidence-combine").addEventListener("change", (event) => { evidence.combine = event.target.checked; });
-  $("evidence-resident").addEventListener("change", (event) => {
-    if (event.target.value === "") return;
-    const resident = state.rawResidents[Number(event.target.value)];
-    selectEvidenceResident(resident);
-  });
-  const host = $("evidence-host");
-  host.addEventListener("keydown", (event) => { if (event.key === "Escape") event.stopPropagation(); });
-  evidence.dispose = bindEvidenceChart(host, { getModel: () => evidence.model, getSelection: () => evidence.selection,
-    onSelectionChange: (next, action) => {
-      if (action.type !== "clear" && !residentEvidenceReady()) return;
-      evidence.selection = evidence.combine && action.type === "select" ? reduceEvidenceSelection(evidence.model,evidence.selection,{...action,type:"add"}) : next;
-      evidence.residentId = null;
-      map.setSegmentSelection({ clauses:evidence.selection.segments, operator:"or" }); renderActiveEvidence();
-    } });
-  renderActiveEvidence();
-}
-function residentEvidenceReady() {
-  return state.rawResidents.length > 0 && state.rawResidents.every((r) => Number.isFinite(r.pums_weight) && r.pums_weight >= 0 && typeof r.segments?.[evidence.dimension] === "string");
-}
-function renderActiveEvidence() {
-  const host = $("evidence-host"); if (!host || !evidence.model) return;
-  const ready = residentEvidenceReady();
-  const summary = map.getSegmentSelectionSummary();
-  evidence.selection.weightedCount = summary.active ? summary.weightedPumsCount : 0;
-  host.innerHTML = renderEvidenceChart({ ...evidence.model, breakdowns: evidence.model.breakdowns.filter((b) => b.dimension === evidence.dimension) }, evidence.selection);
-  const text = host.querySelector("[data-evidence-summary]");
-  const rule = evidence.selection.segments.map((s) => `${s.dimension} = ${s.key}`).join(" OR ") || "none (all residents)";
-  text.textContent = `Active rule: ${rule}. Raw resident count: ${summary.rawMatchingAgents}. Weighted PWGTP population: ${summary.weightedPumsCount}.${evidence.residentId !== null ? ` Resident ${evidence.residentId} selected; chart uses ${evidence.dimension}.` : ""}`;
-  if (!ready) text.textContent = "Selection unavailable: resident PWGTP weights or canonical segments are missing. Update the backend to enable exact map matching. Counts are unknown.";
-  text.dataset.rawCount = ready ? summary.rawMatchingAgents : "unknown"; text.dataset.weightedCount = ready ? summary.weightedPumsCount : "unknown";
-  $("evidence-resident").disabled = !ready;
-  for (const option of $("evidence-resident").options) {
-    if (option.value === "") continue;
-    const r = state.rawResidents[Number(option.value)];
-    option.textContent = `${r.name || `Resident ${r.id}`} · ${evidenceLabel(evidence.dimension, r.segments?.[evidence.dimension] || "Unknown")}`;
-  }
-  const note = document.createElement("p"); note.className = "evidence-count-note";
-  note.textContent = "Selection totals use original PWGTP across loaded residents. Bar weights and sample sizes describe respondents in this poll and may differ because of eligibility, turnout or unanswered archetypes. Map positions and tenure are simulated; gender uses PUMS SEX; income groups use POVPIP quintiles.";
-  text.after(note);
-  const selectionBar = document.createElement("div"); selectionBar.className = "evidence-selection-bar";
-  const clearButton = host.querySelector('[data-evidence-action="clear"]');
-  clearButton.before(selectionBar); selectionBar.append(clearButton, text);
-  for (const fieldset of host.querySelectorAll("fieldset")) {
-    const dimension = fieldset.querySelector("button[data-dimension]")?.dataset.dimension || fieldset.querySelector("legend")?.textContent;
-    fieldset.hidden = dimension !== evidence.dimension;
-    fieldset.querySelector("legend").textContent = AB_DIM_LABEL[dimension] || dimension;
-  }
-  for (const button of host.querySelectorAll("button[data-dimension]")) {
-    button.disabled = !ready;
-    const { dimension,key } = button.dataset;
-    const label = evidenceLabel(dimension,key);
-    button.firstElementChild.textContent = `${button.getAttribute("aria-pressed") === "true" ? "✓ " : ""}${label}`;
-    button.setAttribute("aria-label", `${label}. ${button.getAttribute("aria-label")}`);
+  if (testId) {
+    fetchAnswers(testId).then((answers) => {
+      if (seq !== chart.seq || !chart.inst) return;
+      const samePopulation = !result.past || result.past.population_key === populationKey();
+      if (answers && answers.size && samePopulation) chart.inst.setAnswers(answers, "");
+      else chart.inst.setAnswers(null, answers && answers.size && !samePopulation
+        ? "These residents were asked in a different simulation, so this view shows group shares without per-person answers."
+        : "Per-resident answers aren't available for this result, so this view shows group shares.");
+    });
   }
 }
+function populationKey() {
+  const c = citySlug(); const seed = SIM.seed; const n = state.residents;
+  return filterCount() ? null : `${c}:${seed}:${n}`;
+}
+// Census figures back the chart only as tooltip text: one verified-data query per
+// dimension, cached per city, never used as chart data.
+const CENSUS_ALIAS = { age: "age", gender: "sex", race: "race and ethnicity", education: "education", employment: "employment", citizenship: "citizenship", nativity: "nativity", marital: "marital status", tenure: "tenure" };
+const censusCache = new Map();  // `${city}:${dimension}` -> { byKey: Map, label } | null (unavailable) | "pending"
+function censusHint(dimension, key) {
+  const alias = CENSUS_ALIAS[dimension]; if (!alias) return null;
+  const id = `${citySlug()}:${dimension}`;
+  const c = censusCache.get(id);
+  if (c === undefined) {
+    censusCache.set(id, "pending");
+    api.dataQuery(citySlug(), `Show the ${alias} distribution`, undefined, { record: false }).then((res) => {
+      const byKey = new Map();
+      for (const row of res?.chart?.series || []) {
+        const clause = row?.map_filter?.clauses?.[0];
+        if (clause?.key) byKey.set(clause.key, row);
+      }
+      censusCache.set(id, res?.status === "ok" && byKey.size ? { byKey, vintage: res?.source?.vintage || "2023 ACS" } : null);
+      chart.inst?.render();
+      refreshFeedPanel({ quiet: true });
+    }).catch(() => censusCache.set(id, null));
+    return null;
+  }
+  if (!c || c === "pending") return null;
+  const row = c.byKey.get(key); if (!row) return null;
+  const share = Number(row.value); const unit = share <= 100 ? `${share.toFixed(1)}%` : String(share);
+  return `Census ${c.vintage} PUMS: this group is ${unit} of ${state.city?.display || "the city"} (${Number(row.raw_records || 0).toLocaleString()} records)`;
+}
+// Map tap → the resident's group in the chart's active dimension.
 function selectEvidenceResident({ id, segments }) {
-  if (!evidence.model || state.phase !== "results" || !residentEvidenceReady()) return;
-  const key = segments?.[evidence.dimension];
-  clearEvidenceSelection();
-  if (!evidence.model.breakdowns.some((b) => b.dimension === evidence.dimension && b.groups.some((g) => g.key === key))) { toast("This resident has no group in the active poll dimension."); return; }
-  evidence.residentId = id;
-  evidence.selection = reduceEvidenceSelection(evidence.model, evidence.selection, {type:"select",dimension:evidence.dimension,key});
-  map.setSegmentSelection({clauses:evidence.selection.segments,operator:"or"});
-  evidence.open = true; $("evidence-details").open = true;
-  renderActiveEvidence();
-  [...$("evidence-host").querySelectorAll("button[data-dimension]")].find((b) => b.dataset.dimension === evidence.dimension && b.dataset.key === key)?.focus({preventScroll:false});
+  if (!chart.inst || state.phase !== "results") return;
+  const dimension = chart.inst.dimension;
+  const key = segments?.[dimension];
+  if (!key || !chart.inst.selectGroup(dimension, key)) { toast("This resident has no group in the active chart dimension."); return; }
+  $("evidence-panel")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
 }
 map.onResidentSelect = selectEvidenceResident;
+
+// ── persona modal (a resident behind a statistic) ─────────────────────────
+const personaEls = { modal: $("persona-modal"), scrim: $("persona-scrim"), close: $("persona-close"), body: $("persona-body") };
+const personaOpen = () => !personaEls.modal.classList.contains("hidden");
+let personaSeq = 0;
+function closePersonaModal() { hide(personaEls.modal); hide(personaEls.scrim); personaSeq++; }
+async function openPersonaModal(resident, answer, ctx = {}) {
+  if (!resident) return;
+  const seq = ++personaSeq;
+  const a = answerLabel(answer, ctx);
+  const sub = [Number.isFinite(resident.age) ? `${resident.age}` : null, RACE_LABEL[resident.race_eth] || resident.race_eth, EDUC_LABEL[resident.educ] || resident.educ, resident.occupation, resident.neighborhood].filter(Boolean).join(" · ");
+  personaEls.body.innerHTML = `
+    <div class="persona-head">
+      <canvas class="persona-portrait" width="72" height="72"></canvas>
+      <div><div class="persona-name">${escapeHtml(resident.name || `Resident ${resident.id}`)}</div><div class="persona-sub">${escapeHtml(sub)}</div></div>
+    </div>
+    ${a ? `<div class="persona-answer"><b>${escapeHtml(a.text)}</b>${ctx.question ? ` · ${escapeHtml(ctx.question)}` : ""}${answer?.why ? `<br>“${escapeHtml(answer.why)}”` : ""}</div>` : ""}
+    <div class="persona-section persona-loading">Loading their story…</div>`;
+  show(personaEls.modal); show(personaEls.scrim);
+  map.drawCharTo(personaEls.body.querySelector(".persona-portrait"), map.charOf(resident.id));
+  personaEls.close.focus({ preventScroll: true });
+  const branch = state.mainBranch;
+  if (!branch) return;
+  try {
+    const d = await api.getAgentDetail(branch, resident.id);
+    if (seq !== personaSeq) return;
+    const facts = [
+      ["Age", d.age], ["Sex", d.sex === "women" ? "female" : d.sex === "men" ? "male" : d.sex], ["Race / ethnicity", RACE_LABEL[d.race_eth] || d.race_eth],
+      ["Education", EDUC_LABEL[d.educ] || d.educ], ["Work", d.occupation], ["Neighborhood", d.neighborhood],
+      ["Housing", d.homeowner ? "owns" : "rents"], ["Marital status", String(d.marital || "").replaceAll("_", " ")],
+      ["Born", d.nativity === "foreign_born" ? "abroad" : "in the US"], ["Citizen", d.citizen ? "yes" : "no"],
+      ["Religion", String(d.religion || "").replaceAll("_", " ").toLowerCase()],
+    ].filter(([, v]) => v !== undefined && v !== null && v !== "");
+    personaEls.body.querySelector(".persona-loading").outerHTML = `
+      <div class="persona-section"><div class="res-why-label">who they are</div><p class="persona-prose">${escapeHtml(d.persona || "")}</p></div>
+      ${d.values_summary ? `<div class="persona-section"><div class="res-why-label">what they care about</div><p class="persona-prose">${escapeHtml(d.values_summary)}</p></div>` : ""}
+      <div class="persona-section"><div class="res-why-label">on record</div><dl class="persona-facts">${facts.map(([k, v]) => `<div class="persona-fact"><dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd></div>`).join("")}</dl></div>`;
+  } catch {
+    if (seq !== personaSeq) return;
+    personaEls.body.querySelector(".persona-loading").textContent = "Their full persona isn't available right now.";
+  }
+}
+personaEls.close.addEventListener("click", closePersonaModal);
+personaEls.scrim.addEventListener("click", closePersonaModal);
+
+// Reopen a past ask from the timeline as a full result card, rebuilt from memory.
+function openPastResult(item) {
+  if (!item || item.type !== "test") return;
+  if (isBusy()) return;
+  closeCharCard();
+  const stored = item.breakdowns && typeof item.breakdowns === "object" ? item.breakdowns : {};
+  const options = Array.isArray(item.options) ? item.options : [];
+  const framing = options.length && Array.isArray(item.p_distribution) && item.p_distribution.length ? "options" : (item.framing || "vote");
+  const result = {
+    question: item.question, framing, model: item.model, n_agents: item.n_agents,
+    p_yes: item.p_yes, ci_low: null, ci_high: null,
+    p_distribution: framing === "options" ? options.map((o, i) => [o, item.p_distribution[i] ?? 0]) : (stored.p_distribution || []),
+    breakdowns: stored.breakdowns || {}, option_breakdowns: stored.option_breakdowns || [],
+    sample_rationales: [], hydra: null, audience: currentAudience(),
+    past: { test_id: item.id, created_at: item.created_at, events_known: item.events_known, population_key: item.population_key, kind: item.kind, under_event: item.under_event },
+  };
+  map.clearVerdicts();
+  showResults(result);
+}
+
 
 // ── boot ───────────────────────────────────────────────────────────────
 // 0 → 1 progress on the thin boot bar. createSim is one slow step (~0.2); the
@@ -365,6 +461,14 @@ async function boot() {
     evidenceReady: (dimension) => state.rawResidents.length > 0 && state.rawResidents.every((r) =>
       Number.isFinite(r.pums_weight) && r.pums_weight >= 0 && typeof r.segments?.[dimension] === "string"),
     dimensionLabels: AB_DIM_LABEL,
+    // persona charts inside timeline entries share the result card's pieces
+    groupLabel: evidenceLabel,
+    drawHead: (canvas, id) => map.drawHeadTo(canvas, id),
+    openPerson: openPersonaModal,
+    fetchAnswers,
+    sourceHint: censusHint,
+    getPopulationKey: populationKey,
+    openPastResult,
   });
   els.status.textContent = "waking the city…";
   if (api.isDemo) { document.body.classList.add("offline-demo"); $("demo-banner").hidden = false; }
@@ -1310,6 +1414,16 @@ function formatPct(value) {
   return `${n.toFixed(1).replace(/\.0$/, "")}%`;
 }
 
+// a reopened ask: when it was asked and what the residents knew at the time
+function pastMeta(result) {
+  const p = result.past;
+  const when = new Date(p.created_at);
+  const stamp = Number.isNaN(when.getTime()) ? "" : when.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  const known = Number.isFinite(p.events_known) ? ` · asked with ${p.events_known} event${p.events_known === 1 ? "" : "s"} in memory` : "";
+  const hypo = p.under_event ? `<div class="res-meta">under hypothetical: ${escapeHtml(p.under_event)}</div>` : "";
+  return `<div class="res-meta">From the timeline · ${escapeHtml(stamp)}${known}${result.model ? ` · ${escapeHtml(result.model)}` : ""}</div>${hypo}`;
+}
+
 function hydraMeta(result) {
   const hydra = result?.hydra;
   if (!hydra || hydra.status !== "connected" || !Number(hydra.chunks)) return "";
@@ -1421,7 +1535,7 @@ function showResults(result) {
         <span><i class="dot no"></i>${belief ? "no" : "oppose"} ${noPct}%</span>
       </div>
       <div class="res-scope">${audienceScope(result.audience)}</div>
-      <div class="res-meta">Model estimate · 95% interval ${ciLow}–${ciHigh}%</div>
+      ${result.past ? pastMeta(result) : `<div class="res-meta">Model estimate · 95% interval ${ciLow}–${ciHigh}%</div>`}
       ${hydraMeta(result)}
       ${breakdowns.length ? abAdvancedSection({ a_share: yesShare }, segments, breakdowns) : ""}
       ${rationales.length ? `<div class="res-why">
@@ -1486,6 +1600,7 @@ function showOptionResults(result) {
     <div class="res-q">${escapeHtml(result.question || "")}</div>
     <div class="res-options">${rows}</div>
     <div class="res-scope">${audienceScope(result.audience)}</div>
+    ${result.past ? pastMeta(result) : ""}
     ${hydraMeta(result)}
     ${rationales.length ? `<div class="res-why">
       <div class="res-why-label">simulated responses from this audience</div>
@@ -2007,8 +2122,9 @@ document.addEventListener("keydown", (e) => {
     }
   } else if (e.key === "Escape") {
     if (e.defaultPrevented) return;
+    if (personaOpen()) { e.preventDefault(); closePersonaModal(); return; }
     if (verified.selection.segments.length) { e.preventDefault(); clearEvidenceSelection(); return; }
-    if (evidence.selection.segments.length) { e.preventDefault(); clearEvidenceSelection(); return; }
+    if (chart.inst?.hasSelection()) { e.preventDefault(); clearEvidenceSelection(); return; }
     if (marketingOpen()) {
       if (isBusy()) cancelPrediction(); else closeMarketing();
     }

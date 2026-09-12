@@ -46,8 +46,8 @@ async function req(path, { method = "GET", body, timeout = 30000, signal } = {})
 }
 
 // Schema 1.0 statistical queries never call parse/poll or use preview fixtures.
-export const dataQuery = (city, question, signal) =>
-  req("/data-query", { method:"POST", body:{city, question}, signal, timeout:60000 });
+export const dataQuery = (city, question, signal, { record = true } = {}) =>
+  req("/data-query", { method:"POST", body:{city, question, ...(record ? {} : { record: false })}, signal, timeout:60000 });
 
 export const health = () => req("/health", { timeout: 8000 });
 
@@ -220,6 +220,11 @@ export const counterfactual = (branchId, payload, signal) =>
     timeout: 360000,
     signal,
   });
+
+// persona memory: a recorded test, every resident's answer to it, one resident's full persona
+export const getTest = (testId) => req(`/tests/${encodeURIComponent(testId)}`, { timeout: 20000 });
+export const getTestAnswers = (testId) => req(`/tests/${encodeURIComponent(testId)}/answers`, { timeout: 30000 });
+export const getAgentDetail = (branchId, agentId) => req(`/branches/${branchId}/agents/${agentId}`, { timeout: 12000 });
 
 export const deleteBranch = (branchId) => {
   if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("simtra:branch-deleted", { detail: { branchId } }));

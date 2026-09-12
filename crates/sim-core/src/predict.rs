@@ -126,6 +126,10 @@ pub struct PollResult {
     pub option_ci: Option<(f64, f64)>,
     /// Evidence retrieved from HydraDB for this run.
     pub hydra: HydraEvidence,
+    /// Id of the Test node this run was written to in persona memory (Neo4j), so
+    /// clients can fetch per-persona answers. None when memory is disabled.
+    #[serde(default)]
+    pub memory_test_id: Option<String>,
 }
 
 struct AbStimuli<'a> {
@@ -699,9 +703,11 @@ p_yes is a probability between 0 and 1. Be realistic and calibrated to {city_nam
                 option_breakdowns,
                 option_ci: Some(option_ci),
                 hydra: hydra_evidence.clone(),
+                memory_test_id: None,
             };
+            let mut result = result;
             self.remember_test(
-                pop, poll, &result, &pop_key, tag, &clusters, &answered, &p_by_cluster,
+                pop, poll, &mut result, &pop_key, tag, &clusters, &answered, &p_by_cluster,
                 &dist_by_cluster, &rationale,
             );
             return Ok(result);
@@ -815,9 +821,11 @@ p_yes is a probability between 0 and 1. Be realistic and calibrated to {city_nam
             option_breakdowns: finish_option_breakdowns(option_rows, 2),
             option_ci: None,
             hydra: hydra_evidence,
+            memory_test_id: None,
         };
+        let mut result = result;
         self.remember_test(
-            pop, poll, &result, &pop_key, tag, &clusters, &answered, &p_by_cluster,
+            pop, poll, &mut result, &pop_key, tag, &clusters, &answered, &p_by_cluster,
             &dist_by_cluster, &rationale,
         );
         Ok(result)
@@ -830,7 +838,7 @@ p_yes is a probability between 0 and 1. Be realistic and calibrated to {city_nam
         &self,
         pop: &Population,
         poll: &Poll,
-        result: &PollResult,
+        result: &mut PollResult,
         pop_key: &str,
         tag: &TestTag,
         clusters: &[Cluster],
@@ -842,6 +850,7 @@ p_yes is a probability between 0 and 1. Be realistic and calibrated to {city_nam
         let Some(mem) = self.memory.clone() else { return };
         let cutoffs = pop.income_cutoffs;
         let record = memory::test_record(pop_key, poll, result, tag);
+        result.memory_test_id = Some(record.id.clone());
         let mut answers: Vec<AgentAnswer> = Vec::with_capacity(pop.agents.len());
         for (ci, c) in clusters.iter().enumerate() {
             if !answered[ci] {

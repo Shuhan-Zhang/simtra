@@ -409,6 +409,69 @@ pub fn framing_name(framing: Framing) -> &'static str {
     }
 }
 
+/// The Test statement shared by `lineage` and `test_detail`: one row per test with
+/// its population key, memory context, hypothetical, stimuli and stored breakdowns.
+const TEST_ROW_RETURN: &str = "RETURN t.id, t.kind, t.question, t.description, t.framing, t.as_of_date, t.model, \
+              t.p_yes, t.options, t.p_distribution, t.n_agents, t.n_archetypes, t.simulation_id, \
+              t.branch_id, p.key, t.created_at, events_known, ue.text, stimuli, t.breakdowns_json";
+
+fn test_row_query(match_clause: &str) -> String {
+    format!(
+        "{match_clause} \
+         OPTIONAL MATCH (t)-[:UNDER_EVENT]->(ue:Event) \
+         OPTIONAL MATCH (t)-[:USED_STIMULUS]->(s:Stimulus) \
+         WITH t, p, c, ue, [x IN collect(CASE WHEN s IS NULL THEN null ELSE {{label: s.label, text: s.text}} END) WHERE x IS NOT NULL] AS stimuli \
+         WITH t, p, ue, stimuli, \
+           size([(e:Event)-[:HAPPENED_IN]->(c) WHERE e.created_at <= t.created_at | e]) AS events_known \
+         {TEST_ROW_RETURN} \
+         ORDER BY t.created_at ASC, t.id ASC"
+    )
+}
+
+fn test_item_from_row(r: &[Value]) -> LineageItem {
+    let s = |i: usize| r.get(i).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let f = |i: usize| r.get(i).and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let u = |i: usize| r.get(i).and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let ss = |i: usize| -> Vec<String> {
+        r.get(i).and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+            .unwrap_or_default()
+    };
+    let fs = |i: usize| -> Vec<f64> {
+        r.get(i).and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|x| x.as_f64()).collect())
+            .unwrap_or_default()
+    };
+    let stimuli = r
+        .get(18)
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| {
+                    Some(StimulusRecord {
+                        label: x.get("label")?.as_str()?.to_string(),
+                        text: x.get("text")?.as_str()?.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    LineageItem::Test {
+        id: s(0), kind: s(1), question: s(2), description: s(3), framing: s(4),
+        as_of_date: s(5), model: s(6), p_yes: f(7), options: ss(8),
+        p_distribution: fs(9), n_agents: u(10), n_archetypes: u(11),
+        simulation_id: s(12), branch_id: s(13), population_key: s(14),
+        created_at: s(15), events_known: u(16),
+        under_event: r.get(17).and_then(|v| v.as_str()).map(String::from),
+        stimuli, previous_p_yes: None, delta: None,
+        breakdowns: r
+            .get(19)
+            .and_then(|v| v.as_str())
+            .filter(|t| !t.is_empty())
+            .and_then(|t| serde_json::from_str::<Value>(t).ok()),
+    }
+}
+
 impl MemoryClient {
     /// Build from env. Accepts the Aura credentials file variables verbatim:
     /// `NEO4J_URI` (`neo4j+s://host`, `https://host`, or `http://localhost:7474`),
@@ -949,21 +1012,12 @@ impl MemoryClient {
             WITH e, [x IN collect(r.sentiment) WHERE x IS NOT NULL] AS sentiments \
             RETURN e.id, e.kind, e.text, e.as_of_date, e.created_at, sentiments \
             ORDER BY e.created_at ASC, e.id ASC";
-        let tests_q = "MATCH (t:Test)-[:RAN_ON]->(p:Population)-[:IN_CITY]->(c:City {slug: $city}) \
-            OPTIONAL MATCH (t)-[:UNDER_EVENT]->(ue:Event) \
-            OPTIONAL MATCH (t)-[:USED_STIMULUS]->(s:Stimulus) \
-            WITH t, p, c, ue, [x IN collect(CASE WHEN s IS NULL THEN null ELSE {label: s.label, text: s.text} END) WHERE x IS NOT NULL] AS stimuli \
-            WITH t, p, ue, stimuli, \
-              size([(e:Event)-[:HAPPENED_IN]->(c) WHERE e.created_at <= t.created_at | e]) AS events_known \
-            RETURN t.id, t.kind, t.question, t.description, t.framing, t.as_of_date, t.model, \
-              t.p_yes, t.options, t.p_distribution, t.n_agents, t.n_archetypes, t.simulation_id, \
-              t.branch_id, p.key, t.created_at, events_known, ue.text, stimuli, t.breakdowns_json \
-            ORDER BY t.created_at ASC, t.id ASC";
+        let tests_q = test_row_query("MATCH (t:Test)-[:RAN_ON]->(p:Population)-[:IN_CITY]->(c:City {slug: $city})");
         let queries_q = "MATCH (d:DataQuery)-[:ASKED_IN]->(:City {slug: $city}) \
             RETURN d.id, d.question, d.answer, d.status, d.created_at, d.response_json \
             ORDER BY d.created_at ASC, d.id ASC";
         let res = self
-            .run(&[(events_q, params.clone()), (tests_q, params.clone()), (queries_q, params)])
+            .run(&[(events_q, params.clone()), (tests_q.as_str(), params.clone()), (queries_q, params)])
             .await?;
         let mut items: Vec<LineageItem> = Vec::new();
         if let Some(rows) = res.first() {
@@ -984,47 +1038,7 @@ impl MemoryClient {
         }
         if let Some(rows) = res.get(1) {
             for r in rows {
-                let s = |i: usize| r.get(i).and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let f = |i: usize| r.get(i).and_then(|v| v.as_f64()).unwrap_or(0.0);
-                let u = |i: usize| r.get(i).and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                let ss = |i: usize| -> Vec<String> {
-                    r.get(i).and_then(|v| v.as_array())
-                        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
-                        .unwrap_or_default()
-                };
-                let fs = |i: usize| -> Vec<f64> {
-                    r.get(i).and_then(|v| v.as_array())
-                        .map(|a| a.iter().filter_map(|x| x.as_f64()).collect())
-                        .unwrap_or_default()
-                };
-                let stimuli = r
-                    .get(18)
-                    .and_then(|v| v.as_array())
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|x| {
-                                Some(StimulusRecord {
-                                    label: x.get("label")?.as_str()?.to_string(),
-                                    text: x.get("text")?.as_str()?.to_string(),
-                                })
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                items.push(LineageItem::Test {
-                    id: s(0), kind: s(1), question: s(2), description: s(3), framing: s(4),
-                    as_of_date: s(5), model: s(6), p_yes: f(7), options: ss(8),
-                    p_distribution: fs(9), n_agents: u(10), n_archetypes: u(11),
-                    simulation_id: s(12), branch_id: s(13), population_key: s(14),
-                    created_at: s(15), events_known: u(16),
-                    under_event: r.get(17).and_then(|v| v.as_str()).map(String::from),
-                    stimuli, previous_p_yes: None, delta: None,
-                    breakdowns: r
-                        .get(19)
-                        .and_then(|v| v.as_str())
-                        .filter(|t| !t.is_empty())
-                        .and_then(|t| serde_json::from_str::<Value>(t).ok()),
-                });
+                items.push(test_item_from_row(r));
             }
         }
         if let Some(rows) = res.get(2) {
@@ -1046,6 +1060,51 @@ impl MemoryClient {
             items.drain(..items.len() - limit);
         }
         Ok(items)
+    }
+
+    /// One recorded test by id, in the lineage item shape (with stored breakdowns).
+    /// `Ok(None)` when no such test exists.
+    pub async fn test_detail(&self, test_id: &str) -> Result<Option<LineageItem>> {
+        let q = test_row_query("MATCH (t:Test {id: $id})-[:RAN_ON]->(p:Population)-[:IN_CITY]->(c:City)");
+        let res = self.run(&[(q.as_str(), json!({"id": test_id}))]).await?;
+        Ok(res.first().and_then(|rows| rows.first()).map(|r| test_item_from_row(r)))
+    }
+
+    /// Every persona's answer to a test (the ANSWERED edges), ordered by agent id.
+    /// `Ok(None)` when the test does not exist.
+    pub async fn test_answers(&self, test_id: &str) -> Result<Option<Vec<AgentAnswer>>> {
+        let res = self
+            .run(&[
+                ("MATCH (t:Test {id: $id}) RETURN t.id", json!({"id": test_id})),
+                (
+                    "MATCH (a:Persona)-[x:ANSWERED]->(t:Test {id: $id}) \
+                     RETURN a.agent_id, x.p_yes, x.dist, x.why, x.archetype ORDER BY a.agent_id",
+                    json!({"id": test_id}),
+                ),
+            ])
+            .await?;
+        if res.first().map(|rows| rows.is_empty()).unwrap_or(true) {
+            return Ok(None);
+        }
+        let answers = res
+            .get(1)
+            .map(|rows| {
+                rows.iter()
+                    .map(|r| AgentAnswer {
+                        agent_id: r.first().and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                        p_yes: r.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0),
+                        dist: r
+                            .get(2)
+                            .and_then(|v| v.as_array())
+                            .map(|a| a.iter().filter_map(|x| x.as_f64()).collect())
+                            .unwrap_or_default(),
+                        why: r.get(3).and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        archetype: r.get(4).and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(Some(answers))
     }
 
     /// Remember a verified-data question and its full response (the statistic, chart
@@ -1286,6 +1345,7 @@ mod tests {
             ci_low: 0.5, ci_high: 0.7, n_agents: 10, n_eff: 9.0, design_effect: 1.0, breakdowns,
             n_archetypes: 2, n_llm_calls: 1, sample_rationales: vec![], p_distribution: vec![],
             option_breakdowns: vec![], option_ci: None, hydra: HydraEvidence::default(),
+            memory_test_id: None,
         };
         let rec = test_record("sf:1:10", &poll, &result, &TestTag::poll());
         let v: Value = serde_json::from_str(&rec.breakdowns_json).unwrap();

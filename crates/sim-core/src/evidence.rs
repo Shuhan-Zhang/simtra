@@ -145,6 +145,7 @@ mod tests {
                 chunks: 0,
                 sources: vec![],
             },
+            memory_test_id: None,
         };
         let legacy = serde_json::to_value(&result).unwrap();
         let mut response =

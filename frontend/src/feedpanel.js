@@ -14,7 +14,8 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { BASE, today } from "./config.js";
-import { buildEvidenceChartModel, renderEvidenceChart, bindEvidenceChart } from "./evidence-chart.js";
+import { buildEvidenceChartModel } from "./evidence-chart.js";
+import { createPersonaChart } from "./persona-chart.js?v=3";
 import { buildVerifiedDataModel, renderVerifiedData, bindVerifiedData, verifiedMapSelection } from "./verified-data.js";
 
 const SENTIMENTS = ["support", "oppose", "worried", "angry", "sad", "hopeful", "indifferent"];
@@ -132,6 +133,13 @@ const state = {
   getRawResidents: () => [],
   evidenceReady: () => false,
   dimensionLabels: {},
+  groupLabel: (d, k) => k,
+  drawHead: () => {},
+  openPerson: () => {},
+  fetchAnswers: async () => null,
+  sourceHint: () => null,
+  getPopulationKey: () => null,
+  openPastResult: null,
   chart: null,          // the one open timeline chart: { id, host, dispose, close }
   items: [],            // lineage items (events, tests, data queries), newest first
   posts: new Map(),     // item id -> post element
@@ -205,9 +213,14 @@ function build(root) {
 }
 
 // ── public api ─────────────────────────────────────────────────────────────
+// lineage items as last loaded (newest first); the app reads these to build the
+// "over time" history of a question without a second fetch
+export function lineageItems() { return state.items; }
+
 export function initFeedPanel({
   getCity, getBranch, getCityDisplay, getResidents, getNews,
   setSegmentSelection, getSegmentSelectionSummary, getRawResidents, evidenceReady, dimensionLabels,
+  groupLabel, drawHead, openPerson, fetchAnswers, sourceHint, getPopulationKey, openPastResult,
 } = {}) {
   const root = document.getElementById("feed-panel");
   if (!root) return;
@@ -222,6 +235,13 @@ export function initFeedPanel({
   if (getRawResidents) state.getRawResidents = getRawResidents;
   if (evidenceReady) state.evidenceReady = evidenceReady;
   if (dimensionLabels) state.dimensionLabels = dimensionLabels;
+  if (groupLabel) state.groupLabel = groupLabel;
+  if (drawHead) state.drawHead = drawHead;
+  if (openPerson) state.openPerson = openPerson;
+  if (fetchAnswers) state.fetchAnswers = fetchAnswers;
+  if (sourceHint) state.sourceHint = sourceHint;
+  if (getPopulationKey) state.getPopulationKey = getPopulationKey;
+  if (openPastResult) state.openPastResult = openPastResult;
   build(root);
 
   try { state.collapsed = localStorage.getItem(COLLAPSE_KEY) === "1"; } catch { /* private mode */ }
@@ -599,12 +619,31 @@ function fillTest(post, item) {
   const kind = TEST_KINDS[item.kind] || item.kind || "poll";
   post.querySelector(".fp-date").textContent = [fmtWhen(item.created_at), kind].join(" · ");
   post.querySelector(".fp-title").textContent = item.question || "";
-  const p = Number.isFinite(item.p_yes) ? item.p_yes : 0;
+  const options = Array.isArray(item.options) ? item.options : [];
+  const dist = Array.isArray(item.p_distribution) ? item.p_distribution : [];
+  const isOptions = options.length > 0 && dist.length > 0;
+  let p = Number.isFinite(item.p_yes) ? item.p_yes : 0;
+  let framing = item.framing === "belief" ? "say it will happen" : "would vote yes";
+  if (isOptions) {
+    let best = 0; dist.forEach((v, i) => { if (v > dist[best]) best = i; });
+    p = dist[best] ?? 0;
+    framing = `chose “${options[best] ?? ""}”`;
+  }
   const pct = Math.round(p * 100);
   post.querySelector(".fp-bar-yes").style.width = `${pct}%`;
-  const framing = item.framing === "belief" ? "say it will happen" : "would vote yes";
   const meta = [item.n_agents ? `${item.n_agents.toLocaleString()} residents` : "", item.model || ""].filter(Boolean).join(" · ");
-  post.querySelector(".fp-result").innerHTML = `<b>${pct}% ${framing}</b>${meta ? ` <span class="fp-muted">· ${esc(meta)}</span>` : ""}`;
+  post.querySelector(".fp-result").innerHTML = `<b>${pct}% ${esc(framing)}</b>${meta ? ` <span class="fp-muted">· ${esc(meta)}</span>` : ""}`;
+  const title = post.querySelector(".fp-title");
+  if (state.openPastResult) {
+    title.classList.add("fp-title-link");
+    title.setAttribute("role", "button"); title.tabIndex = 0; title.title = "Open this result";
+    if (!title.dataset.bound) {
+      title.dataset.bound = "1";
+      const open = () => { const it = state.items.find((i) => i.id === post.dataset.id); if (it) state.openPastResult(it); };
+      title.addEventListener("click", open);
+      title.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
+    }
+  }
   const mem = post.querySelector(".fp-memory");
   const known = Number.isFinite(item.events_known) ? item.events_known : null;
   let memHtml = known === null ? "" : `asked with ${plural(known, "event")} in memory`;
@@ -671,62 +710,46 @@ function stripIds(host) {
 
 function mountEvidenceChart(item, host) {
   const stored = item.breakdowns && typeof item.breakdowns === "object" ? item.breakdowns : null;
-  if (!stored) {
+  const model = stored ? buildEvidenceChartModel({ question: item.question, ...stored }) : { breakdowns: [], options: [] };
+  const norm0 = (q) => String(q || "").trim().toLowerCase();
+  const repeats = state.items.filter((i) => i.type === "test" && norm0(i.question) === norm0(item.question) && i.framing === item.framing).length;
+  if (!model.breakdowns.some((b) => b.groups.length) && repeats < 2) {
     host.innerHTML = `<p class="fp-chart-empty">No demographic breakdowns were stored for this question.</p>`;
     return;
   }
-  const model = buildEvidenceChartModel({ question: item.question, ...stored });
-  if (!model.breakdowns.some((b) => b.groups.length)) {
-    host.innerHTML = `<p class="fp-chart-empty">No demographic breakdowns were stored for this question.</p>`;
-    return;
-  }
-  const chart = { model, selection: { segments: [] }, dimension: model.breakdowns[0].dimension };
-  const label = (d) => state.dimensionLabels[d] || d;
-  host.innerHTML = `
-    <div class="fp-chart-controls">
-      <label>Demographic dimension
-        <select class="fp-select fp-chart-dim" aria-label="Demographic dimension">
-          ${model.breakdowns.map((b) => `<option value="${esc(b.dimension)}">${esc(label(b.dimension))}</option>`).join("")}
-        </select>
-      </label>
-    </div>
-    <div class="fp-chart-host"></div>`;
-  const chartHost = host.querySelector(".fp-chart-host");
-  const ready = () => state.evidenceReady(chart.dimension);
-  const render = () => {
-    const summary = state.getSegmentSelectionSummary();
-    chart.selection.weightedCount = summary.active ? summary.weightedPumsCount : 0;
-    chartHost.innerHTML = renderEvidenceChart(
-      { ...chart.model, breakdowns: chart.model.breakdowns.filter((b) => b.dimension === chart.dimension) },
-      chart.selection,
-    );
-    stripIds(chartHost);
-    const text = chartHost.querySelector("[data-evidence-summary]");
-    if (text) {
-      const rule = chart.selection.segments.map((s) => `${s.dimension} = ${s.key}`).join(" OR ") || "none (all residents)";
-      text.textContent = ready()
-        ? `Active rule: ${rule}. Raw resident count: ${summary.rawMatchingAgents}. Weighted PWGTP population: ${summary.weightedPumsCount}.`
-        : "Selection unavailable: resident PWGTP weights or canonical segments are missing. Counts are unknown.";
-    }
-  };
-  host.querySelector(".fp-chart-dim").addEventListener("change", (e) => {
-    chart.dimension = e.target.value;
-    chart.selection = { segments: [] };
-    state.setSegmentSelection(null);
-    render();
+  const options = Array.isArray(item.options) ? item.options : [];
+  const dist = Array.isArray(item.p_distribution) ? item.p_distribution : [];
+  const framing = options.length && dist.length ? "options" : (item.framing || "vote");
+  let topIndex = 0; dist.forEach((v, i) => { if (v > dist[topIndex]) topIndex = i; });
+  const norm = (q) => String(q || "").trim().toLowerCase();
+  const asks = state.items.filter((i) => i.type === "test" && norm(i.question) === norm(item.question) && i.framing === item.framing)
+    .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+  const history = asks.map((i) => ({
+    id: i.id, created_at: i.created_at, label: fmtWhen(i.created_at).replace(/^.*?,\s*/, ""), events_known: i.events_known, item: i, current: i.id === item.id,
+    p_yes: Array.isArray(i.p_distribution) && i.p_distribution.length && (i.options || []).length ? Math.max(...i.p_distribution) : i.p_yes,
+  }));
+  const events = state.items.filter((i) => i.type === "event").map((e) => ({ created_at: e.created_at, text: e.text }));
+  const inst = createPersonaChart(host, {
+    question: item.question, framing, options, topIndex, model, compact: true,
+    residents: state.getRawResidents(), answers: null, answersNote: "Loading each resident's answer…",
+    history, events,
+    labels: { dimension: (d) => state.dimensionLabels[d] || d, group: state.groupLabel },
+    drawHead: state.drawHead,
+    openPerson: state.openPerson,
+    onGroupSelect: (segments) => state.setSegmentSelection(segments?.length ? { clauses: segments, operator: "or" } : null),
+    onOpenAsk: state.openPastResult ? (h) => { if (h?.item) state.openPastResult(h.item); } : null,
+    sourceHint: state.sourceHint,
   });
-  chartHost.addEventListener("keydown", (e) => { if (e.key === "Escape") e.stopPropagation(); });
-  state.chart.dispose = bindEvidenceChart(chartHost, {
-    getModel: () => chart.model,
-    getSelection: () => chart.selection,
-    onSelectionChange: (next, action) => {
-      if (action.type !== "clear" && !ready()) return;
-      chart.selection = next;
-      state.setSegmentSelection(chart.selection.segments.length ? { clauses: chart.selection.segments, operator: "or" } : null);
-      render();
-    },
+  state.chart.dispose = () => inst.destroy();
+  const chartRef = state.chart;
+  state.fetchAnswers(item.id).then((answers) => {
+    if (state.chart !== chartRef) return;
+    const same = !item.population_key || item.population_key === state.getPopulationKey();
+    if (answers && answers.size && same) inst.setAnswers(answers, "");
+    else inst.setAnswers(null, answers && answers.size && !same
+      ? "These residents were asked in a different simulation, so this view shows group shares without per-person answers."
+      : "Per-resident answers aren't available for this result, so this view shows group shares.");
   });
-  render();
 }
 
 function mountVerifiedChart(item, host) {

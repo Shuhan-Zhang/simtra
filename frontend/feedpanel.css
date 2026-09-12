@@ -278,3 +278,8 @@
 .fp-chart-empty { font-size: var(--fs-caption); color: var(--ink-3); }
 .fp-answer { font-size: var(--fs-footnote); color: var(--ink-2); margin-top: 2px; }
 .fp-avatar-data { background: var(--fill-hi); color: var(--ink-2); }
+
+/* persona chart inside an entry */
+.fp-chart .pc { margin-top: var(--s-3); padding-top: var(--s-3); }
+.fp-title-link { cursor: pointer; }
+.fp-title-link:hover, .fp-title-link:focus-visible { color: var(--accent); outline: none; }
