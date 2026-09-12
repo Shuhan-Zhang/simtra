@@ -13,6 +13,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { COLORS, TIMING, MAP } from "./config.js";
+import { createSegmentIndex, normalizeSegmentSelection, selectSegments } from "./segment-selection.js";
 
 const POP_MS = 340; // per-sprite verdict pop duration
 
@@ -123,6 +124,9 @@ export class SFMap {
     this.ctx = canvas.getContext("2d");
     this.dpr = Math.min(window.devicePixelRatio || 1, 2);
     this.agents = [];
+    this._segmentIndex = createSegmentIndex([]);
+    this._segmentSelection = normalizeSegmentSelection(null);
+    this._segmentResult = selectSegments(this._segmentIndex, this._segmentSelection);
 
     this.imgW = 2144; this.imgH = 1920;           // updated when base loads
     this.satellite = false;
@@ -141,6 +145,7 @@ export class SFMap {
     this.camTarget = { ...this.cam };
     this.zoomedIn = false;
     this.onZoomChange = null;                      // (zoomedIn:boolean) => {}
+    this.onResidentSelect = null;                  // ({ id, segments }) => {} — canonical chart keys
     this.onSpriteTap = null;                       // (sprite) => {}  tap a character
     this.onEmptyTap = null;                        // () => bool      tap empty space (return true to suppress zoom)
 
@@ -203,7 +208,8 @@ export class SFMap {
   // updated by the caller) and rebuild the land mask + overview around it. Agents
   // are cleared so they don't linger on the old map until the caller re-seeds them.
   setBase(src, maskSrc = null) {
-    this.agents = [];
+    this.setAgents([]);
+    this.clearSegmentSelection();
     this.clearVerdicts();
     this.bubbleIdx = [];
     this.baseReady = false;
@@ -344,9 +350,12 @@ export class SFMap {
 
   // raw: [{ lonlat:[lon,lat], ... }]
   setAgents(raw) {
+    this._segmentIndex = createSegmentIndex(raw);
+    this._segmentResult = selectSegments(this._segmentIndex, this._segmentSelection);
     this.agents = raw
-      .filter((a) => Array.isArray(a.lonlat))
-      .map((a, i) => {
+      .map((a, rawIndex) => ({ a, rawIndex }))
+      .filter(({ a }) => Array.isArray(a?.lonlat))
+      .map(({ a, rawIndex }, i) => {
         const w0 = this.lonlatToWorld(a.lonlat[0], a.lonlat[1]);
         const w = this._snapToLand(w0.x, w0.y);   // keep every resident on land
         const ang = Math.random() * Math.PI * 2;
@@ -359,6 +368,8 @@ export class SFMap {
           turnClock: Math.random() * 2.5,
           verdict: null, activateAt: 0,
           seed: a.id ?? i,
+          segmentIndex: rawIndex,
+          segments: this._segmentIndex.segments[rawIndex],
           thought: makeThought(a, a.id ?? i),   // diverse persona thought (backend value vector + demographics)
           rationale: null,                       // set from a poll's sample_rationales
           // seeded persona, surfaced when you tap a character
@@ -367,6 +378,20 @@ export class SFMap {
         };
       });
   }
+
+  // Selection is independent of verdict/reveal state. Changes are immediate,
+  // with no added animation (including under prefers-reduced-motion).
+  setSegmentSelection(selection) {
+    this._segmentSelection = normalizeSegmentSelection(selection);
+    this._segmentResult = selectSegments(this._segmentIndex, this._segmentSelection);
+    return this.getSegmentSelectionSummary();
+  }
+
+  clearSegmentSelection() { return this.setSegmentSelection(null); }
+
+  // Counts cover ALL raw residents from setAgents, including unplaced residents.
+  // No selection means the full population; active distinguishes this from a filter.
+  getSegmentSelectionSummary() { return { ...this._segmentResult.summary }; }
 
   // Build a land/water mask from the base image so sprites never wander into the
   // bay/ocean. Water in sf_tiles.png is deep blue rgb(33,92,129) (+ wave variants);
@@ -500,7 +525,7 @@ export class SFMap {
       pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
       try { c.setPointerCapture(e.pointerId); } catch {}
       if (pts.size === 1) { moved = 0; lastX = e.clientX; lastY = e.clientY; }
-      else if (pts.size === 2) { const [a, b] = [...pts.values()]; startDist = Math.hypot(a.x - b.x, a.y - b.y); startZoom = this.cam.zoom; }
+      else if (pts.size === 2) { moved = Infinity; const [a, b] = [...pts.values()]; startDist = Math.hypot(a.x - b.x, a.y - b.y); startZoom = this.cam.zoom; }
     });
     c.addEventListener("pointermove", (e) => {
       if (!pts.has(e.pointerId)) return;
@@ -535,13 +560,23 @@ export class SFMap {
       pts.delete(e.pointerId);
       try { c.releasePointerCapture(e.pointerId); } catch {}
       if (pts.size < 2) startDist = 0;
-      if (wasSingle && moved < 8) {            // a tap (not a drag)
+      if (e.type !== "pointercancel" && wasSingle && moved < 8) {            // a tap (not a drag)
         const r = rect();
         const tx = e.clientX - r.left, ty = e.clientY - r.top;
         if (this.zoomedIn) {
           const hit = this._hitSprite(tx, ty);
-          if (hit) { this.onSpriteTap && this.onSpriteTap(hit); return; }   // tapped a character → inspect
+          if (hit) {
+            // Capture canonical keys before either consumer handles the tap.
+            const resident = { id: hit.seed, segments: { ...hit.segments } };
+            try { this.onSpriteTap && this.onSpriteTap(hit); }  // preserve character detail
+            finally { this.onResidentSelect && this.onResidentSelect(resident); }
+            return;
+          }
           if (this.onEmptyTap && this.onEmptyTap()) return;                  // app closed an open card
+        } else if (this.onResidentSelect) {
+          // Overview still zooms as before, while also selecting a tapped resident.
+          const hit = this._hitSprite(tx, ty, true);
+          if (hit) this.onResidentSelect({ id: hit.seed, segments: { ...hit.segments } });
         }
         const w = this.screenToWorld(tx, ty);
         this.zoomTo(w.x, w.y);                  // empty space (or overview) → zoom in
@@ -569,10 +604,10 @@ export class SFMap {
     }, { passive: false });
   }
 
-  // nearest character under a screen point (only when sprites are big enough to tap)
-  _hitSprite(sx, sy) {
+  // Nearest character; chart selection can opt into small overview sprites.
+  _hitSprite(sx, sy, allowOverview = false) {
     const drawPx = Math.max(3, SPRITE_WORLD * this.cam.zoom);
-    if (drawPx < 14) return null;
+    if (drawPx < 14 && !allowOverview) return null;
     const rx = drawPx * 0.55, ry = drawPx * 0.9;
     let best = null, bestD = Infinity;
     for (const a of this.agents) {
@@ -694,6 +729,8 @@ export class SFMap {
     const breathing = this.mode === "waiting";
     const margin = drawPx * 2;
     const spriteOk = this.spriteReady;
+    const selection = this._segmentResult;
+    const selecting = selection.summary.active;
 
     for (const a of this.agents) {
       // wander: occasionally pick a new heading; integrate but never step into water
@@ -722,12 +759,14 @@ export class SFMap {
 
       const w = drawPx, h = drawPx;
       const footX = s.x, footY = s.y;     // feet anchored to the cell
+      const matched = selecting && selection.matchMask[a.segmentIndex] === 1;
+      const selectionAlpha = selecting && !matched ? 0.25 : 1;
 
       if (drawPx < 9 || !spriteOk) {
         // overview LOD: a cheap colored square per agent (keeps 10k sprites at 60fps;
         // blitting 10k sprite cells every frame would be far heavier)
         const sz = Math.max(2, Math.round(drawPx * 0.6));
-        ctx.globalAlpha = breathing ? 0.5 + 0.4 * Math.sin(now / 240 + a.wx) : 0.92;
+        ctx.globalAlpha = (breathing ? 0.5 + 0.4 * Math.sin(now / 240 + a.wx) : 0.92) * selectionAlpha;
         ctx.fillStyle = CHAR_COLORS[a.char % CHAR_COLORS.length];
         ctx.fillRect(Math.round(footX - sz / 2), Math.round(footY - sz), sz, sz);
         ctx.globalAlpha = 1;
@@ -738,11 +777,20 @@ export class SFMap {
         const sx = bx + a.frame * SHEET.cell;
         const sy = by + a.dir * SHEET.cell;
         ctx.imageSmoothingEnabled = false;
-        ctx.globalAlpha = breathing ? 0.55 + 0.35 * Math.sin(now / 240 + a.wx) : 1;
+        ctx.globalAlpha = (breathing ? 0.55 + 0.35 * Math.sin(now / 240 + a.wx) : 1) * selectionAlpha;
         ctx.drawImage(this.sprite, sx, sy, SHEET.cell, SHEET.cell, footX - w / 2, footY - h, w, h);
         ctx.globalAlpha = 1;
       }
 
+      // Static green selection frame stays below the separate yes/no marker.
+      if (matched) {
+        const size = drawPx < 9 || !spriteOk ? Math.max(2, Math.round(drawPx * 0.6)) : w;
+        ctx.strokeStyle = "#22c55e";
+        ctx.lineWidth = Math.max(1.5, Math.min(3, size * 0.08));
+        ctx.strokeRect(Math.round(footX - size / 2) - 1, Math.round(footY - size) - 1, size + 2, size + 2);
+      }
+
+      ctx.globalAlpha = selectionAlpha;
       // verdict marker: a colored dot floating just above the sprite's head
       if (vScale > 0.01) {
         const col = a.verdict === "yes" ? COLORS.yes : COLORS.no;
@@ -753,6 +801,7 @@ export class SFMap {
         ctx.beginPath(); ctx.strokeStyle = withAlpha("#ffffff", 0.85 * clamp01(vScale)); ctx.lineWidth = Math.max(1, rr * 0.25);
         ctx.arc(mx, my, rr, 0, Math.PI * 2); ctx.stroke();
       }
+      ctx.globalAlpha = 1;
     }
   }
 
@@ -798,7 +847,9 @@ export class SFMap {
       }
       if (!text) continue;
       const s = this.worldToScreen(a.wx, a.wy);
+      if (this._segmentResult.summary.active && !this._segmentResult.matchMask[a.segmentIndex]) ctx.globalAlpha = 0.25;
       this._drawBubble(ctx, s.x, s.y - drawPx - 5, text);
+      ctx.globalAlpha = 1;
     }
   }
 
