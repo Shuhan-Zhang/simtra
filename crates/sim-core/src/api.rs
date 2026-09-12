@@ -4,6 +4,7 @@
 
 use crate::agent::Agent;
 use crate::city::CityProfile;
+use crate::evidence::{PollEvidence, PollResponse};
 use crate::geo::TilesDb;
 use crate::hydra::HydraClient;
 use crate::insforge::InsforgeClient;
@@ -559,6 +560,14 @@ async fn branch_agents(
         if out.len() >= limit {
             continue;
         }
+        let pums_weight = agent.weight();
+        if !pums_weight.is_finite() || pums_weight < 0.0 {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "resident has invalid PUMS weight"})),
+            )
+                .into_response();
+        }
         let (lon, lat) = ctx.city.tiles.cell_to_lonlat(ast.pos);
         out.push(json!({
             "id": ast.id,
@@ -572,6 +581,8 @@ async fn branch_agents(
             "race_eth": agent.rec.race_eth(),
             "educ": agent.rec.educ(),
             "values": agent.values,
+            "pums_weight": pums_weight,
+            "segments": crate::predict::demographic_segments(agent, &ctx.population.income_cutoffs),
         }));
     }
     Json(json!({
@@ -657,10 +668,12 @@ async fn branch_poll(
                             }
                         });
                     }
-                    Err(error) => tracing::warn!("could not build InsForge prediction record: {error:#}"),
+                    Err(error) => {
+                        tracing::warn!("could not build InsForge prediction record: {error:#}")
+                    }
                 }
             }
-            Json(json!(res)).into_response()
+            Json(PollResponse::new(res, &ctx.population.profile)).into_response()
         }
         Err(e) => (
             StatusCode::BAD_GATEWAY,
@@ -732,8 +745,8 @@ struct CounterfactualReq {
 
 #[derive(Serialize)]
 struct CounterfactualResponse {
-    baseline: PollResult,
-    exposed: PollResult,
+    baseline: PollResponse,
+    exposed: PollResponse,
     delta: f64,
 }
 
@@ -773,8 +786,8 @@ async fn branch_counterfactual(
                     .into_response();
             }
             Json(CounterfactualResponse {
-                baseline,
-                exposed,
+                baseline: PollResponse::new(baseline, &ctx.population.profile),
+                exposed: PollResponse::new(exposed, &ctx.population.profile),
                 delta,
             })
             .into_response()
@@ -942,6 +955,7 @@ struct AbTestResponse {
     breakdowns: Vec<AbTestBreakdown>,
     sample_rationales: Vec<String>,
     hydra: crate::hydra::HydraEvidence,
+    evidence: PollEvidence,
 }
 
 fn validate_ab_request(req: &AbTestReq) -> Result<(Model, Population0), String> {
@@ -988,7 +1002,8 @@ fn validate_ab_request(req: &AbTestReq) -> Result<(Model, Population0), String> 
     Ok((model, population))
 }
 
-fn map_ab_result(result: PollResult) -> AbTestResponse {
+fn map_ab_result(result: PollResult, profile: &CityProfile) -> AbTestResponse {
+    let evidence = PollEvidence::new(profile, &result.hydra);
     let a_share = result
         .p_distribution
         .first()
@@ -1051,6 +1066,7 @@ fn map_ab_result(result: PollResult) -> AbTestResponse {
         breakdowns,
         sample_rationales: result.sample_rationales,
         hydra: result.hydra,
+        evidence,
     }
 }
 
@@ -1088,7 +1104,7 @@ async fn branch_ab_test(
         )
         .await
     {
-        Ok(result) => Json(map_ab_result(result)).into_response(),
+        Ok(result) => Json(map_ab_result(result, &ctx.population.profile)).into_response(),
         Err(error) => (
             StatusCode::BAD_GATEWAY,
             Json(json!({"error": format!("A/B test failed: {error}")})),
@@ -1161,6 +1177,7 @@ async fn predict_market(
             "n_agents": res.n_agents,
             "model": res.model,
             "hydra": res.hydra,
+            "evidence": PollEvidence::new(&ctx.population.profile, &res.hydra),
             "note": "headline market number weights the sf_opinion_informative bucket; general_knowledge is reported separately.",
             "live_market_price": req.get("live_market_price"),
         })).into_response(),
