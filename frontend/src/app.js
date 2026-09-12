@@ -325,9 +325,12 @@ function attachEvidence(result, ab = false) {
   if (!model.breakdowns.some((b) => b.groups.length) && asked.history.length < 2) return;
   const section = document.createElement("section"); section.id = "evidence-panel";
   const host = document.createElement("div"); section.append(host);
-  // under the result itself: after the bars, meta and scope; before the quotes
-  const anchor = els.resultCard.querySelector(".ab-adv") || els.resultCard.querySelector(".res-hydra") || els.resultCard.querySelector(".res-meta") || els.resultCard.querySelector(".res-scope");
-  if (anchor) anchor.after(section);
+  // under the result itself: after the bars, meta and scope; ABOVE the advanced
+  // breakdown and the quotes
+  const adv = els.resultCard.querySelector(".ab-adv");
+  const anchor = els.resultCard.querySelector(".res-hydra") || els.resultCard.querySelector(".res-meta") || els.resultCard.querySelector(".res-scope");
+  if (adv) adv.before(section);
+  else if (anchor) anchor.after(section);
   else { const why = els.resultCard.querySelector(".res-why") || els.resultCard.querySelector(".res-actions"); why ? why.before(section) : els.resultCard.append(section); }
   const framing = ab ? "options" : result.framing || "vote";
   const options = chartOptionsOf(result, ab);
