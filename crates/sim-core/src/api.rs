@@ -170,6 +170,88 @@ struct CreateSimReq {
     commit_every: u64,
     #[serde(default)]
     distributional_params: Option<Value>,
+    /// Optional AND-combined demographic filters applied before sampling.
+    #[serde(default)]
+    filters: PopulationFilters,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+struct PopulationFilters {
+    /// Exact age in completed years.
+    age: Option<u8>,
+    /// City-specific PUMA, surfaced to the UI as a neighborhood/area.
+    puma: Option<u32>,
+    /// Stable coarse occupation key from [`crate::persona::occupation_key`].
+    occupation: Option<String>,
+    /// Collapsed PUMS education key from [`PumsRecord::educ`].
+    #[serde(alias = "educ")]
+    education: Option<String>,
+}
+
+impl PopulationFilters {
+    fn is_empty(&self) -> bool {
+        self.age.is_none()
+            && self.puma.is_none()
+            && self.occupation.is_none()
+            && self.education.is_none()
+    }
+
+    fn validate(&self, profile: &CityProfile) -> Result<(), String> {
+        if self.age.is_some_and(|age| age > 99) {
+            return Err("age must be between 0 and 99".into());
+        }
+        if let Some(puma) = self.puma {
+            if !profile.pumas.contains(&puma) {
+                return Err(format!("area {puma} is not part of {}", profile.display));
+            }
+        }
+        if let Some(education) = self.education.as_deref() {
+            if !matches!(
+                education,
+                "lt_hs" | "hs" | "some_college" | "bachelors" | "graduate"
+            ) {
+                return Err("unsupported education filter".into());
+            }
+        }
+        if let Some(occupation) = self.occupation.as_deref() {
+            if !matches!(
+                occupation,
+                "management_business"
+                    | "software_tech"
+                    | "engineer"
+                    | "science_analysis"
+                    | "social_services"
+                    | "legal"
+                    | "education"
+                    | "arts_media"
+                    | "healthcare"
+                    | "service"
+                    | "sales_office"
+                    | "construction_trades"
+                    | "production_transportation"
+                    | "military"
+                    | "unemployed"
+                    | "not_in_workforce"
+                    | "other"
+            ) {
+                return Err("unsupported occupation filter".into());
+            }
+        }
+        Ok(())
+    }
+
+    fn matches(&self, record: &PumsRecord) -> bool {
+        self.age.map_or(true, |age| record.age == age)
+            && self.puma.map_or(true, |puma| record.puma == puma)
+            && self
+                .education
+                .as_deref()
+                .map_or(true, |education| record.educ() == education)
+            && self.occupation.as_deref().map_or(true, |occupation| {
+                crate::persona::occupation_key(record.occp, record.esr) == occupation
+            })
+    }
 }
 fn default_n() -> usize {
     800
@@ -203,19 +285,50 @@ async fn create_sim(
                 .into_response();
         }
     };
+
+    if let Err(error) = req.filters.validate(&rt.profile) {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": error}))).into_response();
+    }
+
+    let filtered_records: Vec<PumsRecord>;
+    let source_records: &[PumsRecord] = if req.filters.is_empty() {
+        rt.records.as_slice()
+    } else {
+        filtered_records = rt
+            .records
+            .iter()
+            .filter(|record| req.filters.matches(record))
+            .cloned()
+            .collect();
+        filtered_records.as_slice()
+    };
+    if source_records.is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({
+                "error": "No Census records match every selected filter. Try removing one filter."
+            })),
+        )
+            .into_response();
+    }
+    let source_record_count = source_records.len();
     let pop = build_population_with(
-        &rt.records,
+        source_records,
         n,
         req.seed,
         Some(&rt.tiles),
         rt.profile.clone(),
     );
+    let filter_key = serde_json::to_string(&req.filters).unwrap_or_default();
     let sim_id = format!(
         "sim-{}-{}-{}-{}",
         city_slug,
         req.seed,
         n,
-        short_hash(&format!("{}{}", req.start_datetime, req.tick_seconds))
+        short_hash(&format!(
+            "{}{}{}",
+            req.start_datetime, req.tick_seconds, filter_key
+        ))
     );
     let meta = SimMeta {
         seed: req.seed,
@@ -267,6 +380,8 @@ async fn create_sim(
             "simulation_id": sim_id,
             "city": city_slug,
             "n": n,
+            "source_records": source_record_count,
+            "filters": req.filters,
             "main_branch": format!("{sim_id}:main"),
             "start_datetime": req.start_datetime,
         })),
@@ -568,9 +683,12 @@ async fn branch_agents(
             "cell": [ast.pos.x, ast.pos.y],
             "lonlat": [lon, lat],
             "neighborhood": agent.neighborhood,
+            "puma": agent.rec.puma,
             "age": agent.rec.age,
             "race_eth": agent.rec.race_eth(),
             "educ": agent.rec.educ(),
+            "occupation": &agent.occupation,
+            "occupation_key": crate::persona::occupation_key(agent.rec.occp, agent.rec.esr),
             "values": agent.values,
         }));
     }
@@ -1315,9 +1433,11 @@ fn filter_matches(a: &Agent, f: &Filter) -> bool {
     for (k, v) in &f.pairs {
         let ok = match k.as_str() {
             "race" | "race_eth" => a.rec.race_eth() == v,
-            "educ" => a.rec.educ() == v,
+            "educ" | "education" => a.rec.educ() == v,
+            "age" => a.rec.age.to_string() == *v,
             "age_band" => a.rec.age_band() == v,
             "puma" => a.rec.puma.to_string() == *v,
+            "occupation" => crate::persona::occupation_key(a.rec.occp, a.rec.esr) == v,
             "tenure" => (if a.homeowner { "own" } else { "rent" }) == v,
             "sex" => a.rec.sex.to_string() == *v,
             "religion" => a.religion.label().contains(v.as_str()),
@@ -1491,11 +1611,18 @@ async fn list_cities(State(st): State<AppState>) -> impl IntoResponse {
         .map(|slug| {
             let rt = &st.cities[*slug];
             let m = &rt.tiles.manifest;
+            let neighborhoods: Vec<Value> = rt
+                .profile
+                .neighborhoods
+                .iter()
+                .map(|area| json!({ "puma": area.puma, "label": &area.label }))
+                .collect();
             json!({
                 "slug": rt.profile.slug,
                 "display": rt.profile.display,
                 "prompt_name": rt.profile.prompt_name,
                 "bbox": { "west": m.west, "south": m.south, "east": m.east, "north": m.north },
+                "neighborhoods": neighborhoods,
                 "n_pums": rt.records.len(),
                 "knowledge_date": crate::news::load(&rt.profile.slug).date,
                 "default": rt.profile.slug == st.default_city,
@@ -1586,6 +1713,57 @@ pub fn build_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn filter_record() -> PumsRecord {
+        PumsRecord {
+            serialno: "filter-test".into(),
+            sporder: 1,
+            pwgtp: 12.0,
+            age: 25,
+            sex: 1,
+            rac1p: 1,
+            hisp: 1,
+            schl: 21,
+            pincp: 80_000.0,
+            povpip: 400.0,
+            occp: 1350,
+            cow: 1,
+            esr: 1,
+            cit: 1,
+            mar: 5,
+            nativity: 1,
+            puma: 7511,
+            adjinc: 1.0,
+        }
+    }
+
+    #[test]
+    fn population_filters_combine_age_area_occupation_and_education() {
+        let record = filter_record();
+        let filters = PopulationFilters {
+            age: Some(25),
+            puma: Some(7511),
+            occupation: Some("engineer".into()),
+            education: Some("bachelors".into()),
+        };
+        assert!(filters.validate(&CityProfile::sf()).is_ok());
+        assert!(filters.matches(&record));
+
+        let wrong_age = PopulationFilters {
+            age: Some(26),
+            ..filters.clone()
+        };
+        assert!(!wrong_age.matches(&record));
+
+        let invalid = PopulationFilters {
+            occupation: Some("wizard".into()),
+            ..PopulationFilters::default()
+        };
+        assert_eq!(
+            invalid.validate(&CityProfile::sf()).unwrap_err(),
+            "unsupported occupation filter"
+        );
+    }
 
     fn valid_counterfactual() -> CounterfactualReq {
         CounterfactualReq {
