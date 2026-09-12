@@ -18,6 +18,7 @@ import {
 } from "./ab-analysis.js";
 import * as api from "./api.js";
 import { snapshotAudience, describeAudience, audienceHeader, audienceScope } from "./audience.js";
+import { initFeedPanel, refreshFeedPanel } from "./feedpanel.js?v=2";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -212,6 +213,13 @@ function setBoot(p) { els.bootFill.style.width = `${Math.round(Math.max(0, Math.
 async function boot() {
   map.onZoomChange = (zoomedIn) => { zoomedIn ? show(els.returnBtn) : hide(els.returnBtn); };
   map.start();
+  initFeedPanel({
+    getCity: citySlug,
+    getBranch: () => state.mainBranch,
+    getCityDisplay: () => state.city?.display || "San Francisco",
+    getResidents: () => state.residents,
+    getNews: () => state.news,
+  });
   els.status.textContent = "waking the city…";
   syncFilterButton();
 
@@ -249,6 +257,9 @@ async function loadCity(city, { filters = state.filters, preserveOnError = false
 
   els.status.textContent = `waking ${city.display}…`;
   hide(els.newsBubble);            // clear the previous city's news while loading
+  state.news = [];
+  state.mainBranch = null;
+  refreshFeedPanel();              // the feed follows the city; branch arrives after boot
   show(els.boot); setBoot(0.06);
   try {
     const sim = await api.createSimulation({
@@ -276,6 +287,7 @@ async function loadCity(city, { filters = state.filters, preserveOnError = false
     syncFilterButton();
     // let the bar finish, fade it out, then surface the news in its place (no overlap)
     setTimeout(() => { hide(els.boot); loadNews(city.slug); }, 450);
+    refreshFeedPanel();              // branch is ready: enable posting
     return sim;
   } catch (err) {
     console.error(err);
@@ -332,16 +344,16 @@ function fmtDate(iso) {
 // fetch the city's recent news into the bubble (best-effort); click to expand all
 async function loadNews(slug) {
   state.newsExpanded = false;
+  // headlines now surface inside the feed panel as "city desk" posts; the
+  // legacy bubble stays hidden.
   try {
     const data = await api.getNews(slug);
     state.news = data.articles || [];
-    if (!state.news.length) { hide(els.newsBubble); return; }
-    renderNews();
-    show(els.newsBubble);
   } catch {
     state.news = [];
-    hide(els.newsBubble);
   }
+  hide(els.newsBubble);
+  if (slug === citySlug()) refreshFeedPanel({ quiet: true });
 }
 
 // render the news bubble in its current (collapsed / expanded) state
@@ -762,6 +774,7 @@ async function runPrediction(question) {
     if (myReq !== state.reqId) return;
 
     state.lastResult = { ...result, framing, question: pollQuestion, audience };
+    setTimeout(() => refreshFeedPanel({ quiet: true }), 1500); // the poll is now a post in the feed
 
     // p_yes drives the on-map green/red reveal for both paths; for options it is the
     // winning option's share, so the crowd still visualizes the result's strength.
@@ -920,6 +933,7 @@ async function runMarketingTest() {
       marketing_text: input.marketingText,
     }, signal);
     if (myReq !== state.reqId) return;
+    setTimeout(() => refreshFeedPanel({ quiet: true }), 1500); // both legs are posts in the feed
 
     const completedBranch = state.branchId;
     state.branchId = null;
@@ -1019,6 +1033,7 @@ async function runAbTest() {
     }, signal);
     if (myReq !== state.reqId) return;
     state.lastResult = { ...result, audience };
+    setTimeout(() => refreshFeedPanel({ quiet: true }), 1500); // the A/B test is now a post in the feed
     const verdicts = assignVerdicts(map.agents, result.a_share, input.question, map.proj.planarSize);
     map.setRationales(result.sample_rationales || []);
     els.progress.classList.remove("indeterminate");

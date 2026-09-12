@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="https://use.typekit.net/bsk0vur.css" />
 
   <link rel="stylesheet" href="styles.css?v=audience-2" />
+  <link rel="stylesheet" href="feedpanel.css?v=4" />
   <link rel="preconnect" href="https://sf-digital-twin-tp.fly.dev" />
 </head>
 <body>
@@ -45,8 +46,11 @@
     <!-- simulation status: city · residents · knowledge-clock (top-right) -->
     <div id="status" class="status">waking the city…</div>
 
-    <!-- fleeting news bubble: the recent headlines that inform the residents -->
+    <!-- legacy news bubble: kept in the DOM, superseded by the feed panel below -->
     <div id="news-bubble" class="news-bubble hidden" aria-live="polite"></div>
+
+    <!-- the city feed: events, how residents took them, and what was asked -->
+    <section id="feed-panel" class="feed-panel hidden" aria-label="City feed"></section>
 
     <!-- boot progress: a thin line that fills while the city wakes -->
     <div id="boot" class="boot hidden" aria-hidden="true">
@@ -263,6 +267,6 @@
     <div id="toast" class="toast hidden" role="alert" aria-live="assertive"></div>
   </div>
 
-  <script type="module" src="src/app.js?v=audience-2"></script>
+  <script type="module" src="src/app.js?v=memory-1"></script>
 </body>
 </html>

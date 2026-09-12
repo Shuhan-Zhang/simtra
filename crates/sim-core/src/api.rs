@@ -7,6 +7,7 @@ use crate::city::CityProfile;
 use crate::geo::TilesDb;
 use crate::hydra::HydraClient;
 use crate::insforge::InsforgeClient;
+use crate::memory::{MemoryClient, TestTag};
 use crate::model::{Cache, Model, ModelClient};
 use crate::persona::{build_population_with, Population};
 use crate::predict::{Engine, Event, Framing, Poll, PollResult, Population0};
@@ -47,6 +48,8 @@ pub struct AppState {
     pub insforge: Option<InsforgeClient>,
     /// Optional RocketRide question-router webhook. The local parser remains the fallback.
     pub rocketride: Option<RocketRideClient>,
+    /// Optional Neo4j persona memory (events, tests, stimuli residents remember).
+    pub memory: Option<MemoryClient>,
     /// Default city's tiles/records (used by city-agnostic endpoints like /health).
     pub tiles: Arc<TilesDb>,
     pub records: Arc<Vec<PumsRecord>>,
@@ -89,6 +92,11 @@ pub fn router(state: AppState) -> Router {
         .route("/cities", get(list_cities))
         .route("/cities/:city/parse", post(parse_question_handler))
         .route("/cities/:city/news", get(city_news))
+        .route("/cities/:city/events", post(create_city_event))
+        .route("/cities/:city/events", get(list_city_events))
+        .route("/cities/:city/events/:event_id/reactions", get(event_reactions))
+        .route("/cities/:city/lineage", get(city_lineage))
+        .route("/branches/:bid/events/:event_id/react", post(react_to_event))
         .route("/simulations", post(create_sim))
         .route("/simulations/:id/demographics", get(demographics))
         .route("/simulations/:id/branches", post(create_branch))
@@ -96,6 +104,7 @@ pub fn router(state: AppState) -> Router {
         .route("/branches/:bid", get(branch_status))
         .route("/branches/:bid", delete(delete_branch))
         .route("/branches/:bid/agents", get(branch_agents))
+        .route("/branches/:bid/agents/:id/memory", get(agent_memory))
         .route("/branches/:bid/chatter", post(branch_chatter))
         .route("/branches/:bid/poll", post(branch_poll))
         .route("/prediction-results", get(prediction_results))
@@ -118,6 +127,10 @@ async fn root() -> impl IntoResponse {
             "GET /prediction-results",
             "POST /branches/{id}/counterfactual", "POST /branches/{id}/ab-test",
             "POST /branches/{id}/predict-market",
+            "POST /cities/{city}/events", "GET /cities/{city}/events", "GET /cities/{city}/lineage",
+            "GET /cities/{city}/events/{event_id}/reactions",
+            "POST /branches/{id}/events/{event_id}/react",
+            "GET /branches/{id}/agents/{agent_id}/memory",
             "POST /simulations/{id}/reset-to-main",
             "DELETE /branches/{id}", "GET /branches/{id}/stream"
         ]
@@ -148,6 +161,7 @@ async fn health(State(st): State<AppState>) -> impl IntoResponse {
         "hydra_configured": st.hydra.is_some(),
         "insforge_configured": st.insforge.is_some(),
         "rocketride_configured": st.rocketride.is_some(),
+        "memory_configured": st.memory.is_some(),
         "map_chunks": st.tiles.manifest.chunks_x * st.tiles.manifest.chunks_y,
         "sf_pums_records": st.records.len(),
         "usage": st.client.usage.snapshot(),
@@ -312,7 +326,7 @@ async fn create_sim(
             .into_response();
     }
     let source_record_count = source_records.len();
-    let pop = build_population_with(
+    let mut pop = build_population_with(
         source_records,
         n,
         req.seed,
@@ -320,6 +334,9 @@ async fn create_sim(
         rt.profile.clone(),
     );
     let filter_key = serde_json::to_string(&req.filters).unwrap_or_default();
+    if !req.filters.is_empty() {
+        pop.filter_key = filter_key.clone();
+    }
     let sim_id = format!(
         "sim-{}-{}-{}-{}",
         city_slug,
@@ -341,6 +358,20 @@ async fn create_sim(
 
     // main-branch engine
     let pop_arc = Arc::new(pop);
+    // Register personas in the memory graph (idempotent, best-effort, off the request path).
+    if let Some(mem) = st.memory.clone() {
+        let pop_for_mem = pop_arc.clone();
+        tokio::spawn(async move {
+            match mem.ensure_population(&pop_for_mem).await {
+                Ok(()) => tracing::info!(
+                    "persona memory: registered {} personas for {}",
+                    pop_for_mem.agents.len(),
+                    crate::memory::population_key_of(&pop_for_mem)
+                ),
+                Err(e) => tracing::warn!("persona memory: population registration failed: {e:#}"),
+            }
+        });
+    }
     let engine = SimEngine::new(
         rt.tiles.clone(),
         pop_arc.clone(),
@@ -754,7 +785,11 @@ async fn branch_poll(
         Ok(p) => p,
         Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({"error": e}))).into_response(),
     };
-    match st.engine.run_poll(&ctx.population, &poll).await {
+    match st
+        .engine
+        .run_poll_tagged(&ctx.population, &poll, &TestTag::poll().on_branch(&ctx.id, &bid))
+        .await
+    {
         Ok(res) => {
             if let Some(insforge) = st.insforge.clone() {
                 match InsforgeClient::record_from_poll(
@@ -876,7 +911,12 @@ async fn branch_counterfactual(
     };
     match st
         .engine
-        .run_counterfactual(&ctx.population, &poll, event)
+        .run_counterfactual(
+            &ctx.population,
+            &poll,
+            event,
+            &TestTag::kind("counterfactual").on_branch(&ctx.id, &bid),
+        )
         .await
     {
         Ok((baseline, exposed, delta)) => {
@@ -1095,7 +1135,7 @@ fn validate_ab_request(req: &AbTestReq) -> Result<(Model, Population0), String> 
         "gpt-4o" | "gpt4o" | "4o" | "gpt-5.5" | "gpt55" | "gpt-55" | "5.5" | "grok-4.3"
         | "grok" | "grok43" | "sonnet" => Model::parse(model_name),
         name if name.starts_with("claude") => Model::Sonnet,
-        name if name.starts_with("gemini") => Model::Gemini35Flash,
+        name if name.starts_with("gemini") => Model::parse(model_name),
         _ => return Err("unsupported model".into()),
     };
     let population = match req.population.as_deref().unwrap_or("all") {
@@ -1203,6 +1243,7 @@ async fn branch_ab_test(
             &req.as_of_date,
             model,
             population,
+            &TestTag::kind("ab_test").on_branch(&ctx.id, &bid),
         )
         .await
     {
@@ -1269,7 +1310,15 @@ async fn predict_market(
         event: None,
         options: Vec::new(),
     };
-    match st.engine.run_poll(&ctx.population, &poll).await {
+    match st
+        .engine
+        .run_poll_tagged(
+            &ctx.population,
+            &poll,
+            &TestTag::kind("predict_market").on_branch(&ctx.id, &bid),
+        )
+        .await
+    {
         Ok(res) => Json(json!({
             "question": question,
             "as_of_date": as_of,
@@ -1602,6 +1651,322 @@ async fn city_news(State(_st): State<AppState>, Path(city): Path<String>) -> imp
     Json(json!({ "city": city, "date": news.date, "articles": news.articles }))
 }
 
+const EVENT_TEXT_MAX_CHARS: usize = 2000;
+const EVENT_KIND_MAX_CHARS: usize = 32;
+
+#[derive(Debug, Deserialize)]
+struct CreateEventReq {
+    text: String,
+    #[serde(default)]
+    as_of_date: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
+}
+
+fn memory_not_configured() -> axum::response::Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({"error":"persona memory (Neo4j) is not configured"})),
+    )
+        .into_response()
+}
+
+fn validate_event_request(req: &CreateEventReq) -> Result<(String, String, String), String> {
+    let text = req.text.trim();
+    if text.is_empty() {
+        return Err("text required".into());
+    }
+    if text.chars().count() > EVENT_TEXT_MAX_CHARS {
+        return Err(format!("text must be at most {EVENT_TEXT_MAX_CHARS} characters"));
+    }
+    let as_of_date = req
+        .as_of_date
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(crate::news::today);
+    if NaiveDate::parse_from_str(&as_of_date, "%Y-%m-%d").is_err() {
+        return Err("as_of_date must use YYYY-MM-DD".into());
+    }
+    let kind = req
+        .kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .unwrap_or("news")
+        .to_string();
+    if kind.chars().count() > EVENT_KIND_MAX_CHARS
+        || !kind.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+    {
+        return Err(format!(
+            "kind must be lowercase letters/underscores, at most {EVENT_KIND_MAX_CHARS} characters"
+        ));
+    }
+    Ok((text.to_string(), as_of_date, kind))
+}
+
+/// Throw an event into a city's world. Every persona in that city remembers it.
+async fn create_city_event(
+    State(st): State<AppState>,
+    Path(city): Path<String>,
+    Json(req): Json<CreateEventReq>,
+) -> impl IntoResponse {
+    if !st.cities.contains_key(&city) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("unknown city: {city}")})),
+        )
+            .into_response();
+    }
+    let (text, as_of_date, kind) = match validate_event_request(&req) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({"error": e}))).into_response(),
+    };
+    let Some(mem) = st.memory.as_ref() else {
+        return memory_not_configured();
+    };
+    match mem.add_city_event(&city, &kind, &text, &as_of_date).await {
+        Ok(event) => (StatusCode::CREATED, Json(json!({"event": event}))).into_response(),
+        Err(e) => {
+            tracing::warn!("persona memory: event write failed: {e:#}");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error":"persona memory write failed"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct EventListQuery {
+    limit: Option<usize>,
+}
+
+async fn list_city_events(
+    State(st): State<AppState>,
+    Path(city): Path<String>,
+    Query(query): Query<EventListQuery>,
+) -> impl IntoResponse {
+    if !st.cities.contains_key(&city) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("unknown city: {city}")})),
+        )
+            .into_response();
+    }
+    let Some(mem) = st.memory.as_ref() else {
+        return memory_not_configured();
+    };
+    let limit = query.limit.unwrap_or(25).clamp(1, 100);
+    match mem.list_city_events(&city, limit).await {
+        Ok(events) => Json(json!({"events": events})).into_response(),
+        Err(e) => {
+            tracing::warn!("persona memory: event list failed: {e:#}");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error":"persona memory read failed"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Lineage: every news event and every test in a city, oldest first, with the number
+/// of events the residents could remember at the time and the shift versus the previous
+/// run of the same question.
+async fn city_lineage(
+    State(st): State<AppState>,
+    Path(city): Path<String>,
+    Query(query): Query<EventListQuery>,
+) -> impl IntoResponse {
+    if !st.cities.contains_key(&city) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("unknown city: {city}")})),
+        )
+            .into_response();
+    }
+    let Some(mem) = st.memory.as_ref() else {
+        return memory_not_configured();
+    };
+    let limit = query.limit.unwrap_or(100).clamp(1, 500);
+    match mem.lineage(&city, limit).await {
+        Ok(items) => Json(json!({"items": items})).into_response(),
+        Err(e) => {
+            tracing::warn!("persona memory: lineage failed: {e:#}");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error":"persona memory read failed"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// One event with every stored resident reaction, newest first.
+async fn event_reactions(
+    State(st): State<AppState>,
+    Path((city, event_id)): Path<(String, String)>,
+    Query(query): Query<EventListQuery>,
+) -> impl IntoResponse {
+    if !st.cities.contains_key(&city) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": format!("unknown city: {city}")})),
+        )
+            .into_response();
+    }
+    let Some(mem) = st.memory.as_ref() else {
+        return memory_not_configured();
+    };
+    let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    match mem.event_reactions(&city, &event_id, limit).await {
+        Ok(Some((event, reactions))) => {
+            let sentiment = crate::memory::sentiment_tally(&reactions);
+            Json(json!({"event": event, "reactions": reactions, "sentiment": sentiment}))
+                .into_response()
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error":"event not found"})),
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::warn!("persona memory: reactions read failed: {e:#}");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error":"persona memory read failed"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ReactReq {
+    n: Option<usize>,
+}
+
+/// Have `n` diverse residents of a branch's population react to an event on the
+/// social feed. Reactions are generated by the model, stored in memory, and returned.
+async fn react_to_event(
+    State(st): State<AppState>,
+    Path((bid, event_id)): Path<(String, String)>,
+    Json(req): Json<ReactReq>,
+) -> impl IntoResponse {
+    let (ctx, _bs) = match find_branch(&st, &bid) {
+        Some(x) => x,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error":"branch not found"})),
+            )
+                .into_response()
+        }
+    };
+    let Some(mem) = st.memory.as_ref() else {
+        return memory_not_configured();
+    };
+    let city = ctx.city.profile.slug.clone();
+    let event = match mem.event_reactions(&city, &event_id, 1).await {
+        Ok(Some((event, _))) => event,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error":"event not found"})),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            tracing::warn!("persona memory: event lookup failed: {e:#}");
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error":"persona memory read failed"})),
+            )
+                .into_response();
+        }
+    };
+    let n = req.n.unwrap_or(12).clamp(1, 24);
+    let pop = &ctx.population;
+    let ids = crate::predict::diverse_sample(pop, n);
+    let raw = st
+        .engine
+        .react_to_event(pop, &event.text, &event.as_of_date, &ids)
+        .await;
+    if raw.is_empty() {
+        return (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error":"reaction model request failed"})),
+        )
+            .into_response();
+    }
+    let at = crate::memory::now_iso();
+    let cutoffs = pop.income_cutoffs;
+    let reactions: Vec<crate::memory::Reaction> = raw
+        .into_iter()
+        .filter_map(|(id, text, sentiment)| {
+            let a = pop.agents.get(id as usize)?;
+            Some(crate::memory::Reaction {
+                agent_id: id,
+                name: a.name.clone(),
+                occupation: a.occupation.clone(),
+                neighborhood: a.neighborhood.clone(),
+                age: a.rec.age_band().to_string(),
+                archetype: a.archetype_key(&cutoffs),
+                text,
+                sentiment,
+                at: at.clone(),
+            })
+        })
+        .collect();
+    let pop_key = crate::memory::population_key_of(&pop);
+    if let Err(e) = mem.record_reactions(&pop_key, &event_id, &reactions).await {
+        tracing::warn!("persona memory: reactions write failed: {e:#}");
+    }
+    Json(json!({"event_id": event_id, "reactions": reactions})).into_response()
+}
+
+/// What one resident remembers: city events, stimuli shown, tests answered.
+async fn agent_memory(
+    State(st): State<AppState>,
+    Path((bid, id)): Path<(String, u32)>,
+) -> impl IntoResponse {
+    let (ctx, _bs) = match find_branch(&st, &bid) {
+        Some(x) => x,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error":"branch not found"})),
+            )
+                .into_response()
+        }
+    };
+    if (id as usize) >= ctx.population.agents.len() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error":"agent not found"})),
+        )
+            .into_response();
+    }
+    let Some(mem) = st.memory.as_ref() else {
+        return memory_not_configured();
+    };
+    let pop_key = crate::memory::population_key_of(&ctx.population);
+    match mem.persona_view(&pop_key, id).await {
+        Ok(view) => Json(view).into_response(),
+        Err(e) => {
+            tracing::warn!("persona memory: persona view failed: {e:#}");
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error":"persona memory read failed"})),
+            )
+                .into_response()
+        }
+    }
+}
+
 /// List loaded cities (for the frontend city switcher).
 async fn list_cities(State(st): State<AppState>) -> impl IntoResponse {
     let mut slugs: Vec<&String> = st.cities.keys().collect();
@@ -1657,6 +2022,19 @@ pub fn build_state(
     let hydra = HydraClient::from_env();
     let insforge = InsforgeClient::from_env();
     let rocketride = RocketRideClient::from_env();
+    let memory = MemoryClient::from_env();
+    if let Some(mem) = memory.clone() {
+        tracing::info!("Neo4j persona memory configured");
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                if let Err(e) = mem.ensure_schema().await {
+                    tracing::warn!("persona memory: schema setup failed: {e:#}");
+                }
+            });
+        }
+    } else {
+        tracing::info!("Neo4j persona memory not configured; personas have no persistent memory");
+    }
     if insforge.is_some() {
         tracing::info!("InsForge prediction persistence configured");
     } else {
@@ -1667,7 +2045,7 @@ pub fn build_state(
     } else {
         tracing::info!("RocketRide question routing not configured; using local router");
     }
-    let engine = Engine::new_with_hydra(client.clone(), hydra.clone());
+    let engine = Engine::new_with_hydra(client.clone(), hydra.clone()).with_memory(memory.clone());
     let store = Arc::new(Store::open(state_db)?);
 
     // SF is always available (committed tiles.db + PUMS at the repo root).
@@ -1700,6 +2078,7 @@ pub fn build_state(
         hydra,
         insforge,
         rocketride,
+        memory,
         tiles: sf_tiles,
         records: sf_records,
         cities: Arc::new(cities),

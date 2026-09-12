@@ -33,6 +33,11 @@ pub struct Population {
     pub n: usize,
     /// The city this population belongs to (drives seeding + prompt context).
     pub profile: Arc<CityProfile>,
+    /// Canonical description of the demographic filters the source records were
+    /// narrowed by before sampling; empty for the unfiltered population. Part of the
+    /// population's identity for the memory layer, since the same (city, seed, n)
+    /// yields different residents under different filters.
+    pub filter_key: String,
 }
 
 impl Population {
@@ -100,6 +105,7 @@ pub fn build_population_with(
         seed,
         n,
         profile,
+        filter_key: String::new(),
     }
 }
 
