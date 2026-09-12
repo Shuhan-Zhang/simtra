@@ -374,13 +374,23 @@ impl ModelClient {
                                 model.id()
                             ));
                         }
-                        if attempt >= self.max_retries {
-                            return Err(anyhow!("model {} status {} after retries: {}", model.id(), status, truncate(&txt, 300)));
+                        // Rate limits get one short retry only: a free-tier quota that is
+                        // really exhausted keeps answering 429 with a small "retry in" hint,
+                        // and sleeping through five of those left polls hanging for minutes.
+                        let rate_limited = status.as_u16() == 429;
+                        if attempt >= self.max_retries || (rate_limited && attempt >= 1) {
+                            return Err(anyhow!(
+                                "model {} status {}{}: {}",
+                                model.id(),
+                                status,
+                                if rate_limited { " (rate limited or quota exhausted; add billing or another provider key)" } else { " after retries" },
+                                truncate(&txt, 300)
+                            ));
                         }
                         // Rate-limited providers (Gemini free tier) say how long to wait;
                         // honoring it beats a blind exponential backoff that never recovers.
                         match retry_after_hint(&txt) {
-                            Some(d) => tokio::time::sleep(d).await,
+                            Some(d) => tokio::time::sleep(d.min(Duration::from_secs(30))).await,
                             None => self.backoff(attempt).await,
                         }
                         attempt += 1;
