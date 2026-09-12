@@ -175,7 +175,7 @@ function syncFilterButton() {
   chip.setAttribute("aria-pressed", count ? "true" : "false");
   chip.disabled = state.switching || state.phase === "booting" || state.phase === "error";
   const summary = count ? filterSummary() : "";
-  els.audienceChipText.textContent = count ? summary : "Everyone";
+  els.audienceChipText.textContent = count ? summary : "everyone · tap to filter";
   const source = state.filterSourceRecords;
   if (count && source != null) {
     els.audienceChipCount.textContent = source.toLocaleString();
@@ -983,6 +983,20 @@ function setComposerBusy(busy) {
   els.askSubmit.disabled = busy;
 }
 
+
+// Every result card, live or reopened from the timeline, gets a persistent close
+// button in the top-right corner (the bottom "Dismiss" can be far below the fold).
+function showResultCard() {
+  if (!els.resultCard.querySelector(".res-close")) {
+    const btn = document.createElement("button");
+    btn.type = "button"; btn.className = "about-close res-close"; btn.setAttribute("aria-label", "Close result");
+    btn.textContent = "×";
+    btn.addEventListener("click", dismissResults);
+    els.resultCard.prepend(btn);
+  }
+  show(els.resultCard);
+}
+
 function dismissResults() {
   state.queryMode = "simulation";
   hide(els.resultCard);
@@ -1071,7 +1085,7 @@ function showVerifiedResult() {
   });
   $("res-again").addEventListener("click", openInput);
   $("res-dismiss").addEventListener("click", dismissResults);
-  show(els.resultCard);
+  showResultCard();
   els.resultCard.scrollTop = 0;
   $("verified-heading").focus({preventScroll:true});
 }
@@ -1495,7 +1509,7 @@ function showMarketingResults(result) {
     <div class="res-cf-note">Model-based comparison under simulated exposure of every sampled resident to the planned copy—not an estimate of organic reach. Each arm has its own 95% CI; no separate CI was estimated for the delta, so treat small shifts cautiously.</div>
     ${rationales.length ? `<div class="res-why"><div class="res-why-label">simulated responses after exposure</div><ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul></div>` : ""}
     <div class="res-actions"><button id="res-edit-marketing" class="btn btn-primary">Edit test</button><button id="res-dismiss" class="btn">Dismiss</button></div>`;
-  show(els.resultCard);
+  showResultCard();
   attachEvidence(exposed);
   $("res-edit-marketing").addEventListener("click", () => openMarketing({ preserve: true }));
   $("res-dismiss").addEventListener("click", dismissResults);
@@ -1574,7 +1588,7 @@ function showResults(result) {
   abRerender = renderPanel;
   bindAbPanelControls();
   renderPanel();
-  show(els.resultCard);
+  showResultCard();
   requestAnimationFrame(() => { els.resultCard.scrollTop = 0; });
 }
 
@@ -1629,7 +1643,7 @@ function showOptionResults(result) {
     ${RESULT_ACTIONS}
   `;
   attachEvidence(result);
-  show(els.resultCard);
+  showResultCard();
   wireResultActions();
   requestAnimationFrame(() => { els.resultCard.scrollTop = 0; });
 }
@@ -1904,7 +1918,7 @@ function showAbResults(result) {
   abRerender = renderPanel;
   bindAbPanelControls();
   renderPanel();
-  show(els.resultCard);
+  showResultCard();
   // The card scrolls internally, and the advanced panel makes it tall enough to
   // overflow. Focusing the action button would scroll the winner headline out of
   // view, so keep the scroll pinned to the top and focus without moving it.
@@ -1936,7 +1950,7 @@ function showRephrase(parsed, question) {
     </div>` : ""}
     ${RESULT_ACTIONS}
   `;
-  show(els.resultCard);
+  showResultCard();
   // clicking an example pre-fills the composer with it, ready to submit
   els.resultCard.querySelectorAll(".res-example").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -2139,7 +2153,7 @@ document.addEventListener("keydown", (e) => {
     else if (aboutOpen()) closeAbout();
     else if (charOpen()) closeCharCard();
     else if (isBusy()) cancelPrediction();
-    else if (state.phase === "results") dismissResults();
+    else if (state.phase === "results" || !els.resultCard.classList.contains("hidden")) dismissResults();
     else if (inputOpen()) closeInput();
     else if (map.zoomedIn) map.returnToOverview();
   } else if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
