@@ -1,0 +1,1472 @@
+// ─────────────────────────────────────────────────────────────────────────
+// sim francisco · pixel-map frontend · orchestration
+//
+// Flow:  idle → click "ask" (bottom-center) → multiline composer
+//        → submit → branch + poll the electorate (composer shows "predicting…")
+//        → stochastic green/red verdicts pop over the sprite crowd
+//        → result card expands above the composer → dismiss → idle
+// Map:   click anywhere → camera zooms into that spot (sprites walk the roads);
+//        the "whole city" button returns to the overview.
+// ─────────────────────────────────────────────────────────────────────────
+
+import { SIM, PREDICT, TIMING, MAP } from "./config.js";
+import { SFMap } from "./map.js";
+import { assignVerdicts } from "./verdict.js";
+import {
+  AB_CROSS_KEY_SEP, AB_MIN_SEGMENT_N, abCrossMatrix, abLeanAlpha, abSegments,
+  abTopMovers, isCrossBreakdown, normalizeBreakdowns, pct, signedPp,
+} from "./ab-analysis.js";
+import * as api from "./api.js";
+
+const $ = (id) => document.getElementById(id);
+const els = {
+  canvas: $("map"),
+  titleSelect: $("title-select"),
+  titleBtn: $("title-btn"),
+  titleCurrent: $("title-current"),
+  titleMenu: $("title-menu"),
+  status: $("status"),
+  newsBubble: $("news-bubble"),
+  boot: $("boot"),
+  bootFill: $("boot-fill"),
+  returnBtn: $("return"),
+  summary: $("summary"),
+  summaryLabel: $("summary-label"),
+  summaryText: $("summary-text"),
+  progress: $("progress"),
+  progressFill: $("progress-fill"),
+  progressLabel: $("progress-label"),
+  dock: $("dock"),
+  ask: $("ask"),
+  askInput: $("ask-input"),
+  askLabel: $("ask-label"),
+  resultCard: $("result-card"),
+  toast: $("toast"),
+  abBtn: $("ab-btn"),
+  abModal: $("ab-modal"),
+  abScrim: $("ab-scrim"),
+  abClose: $("ab-close"),
+  abCancel: $("ab-cancel"),
+  abForm: $("ab-form"),
+  abQuestion: $("ab-question"),
+  abA: $("ab-a"),
+  abB: $("ab-b"),
+  abError: $("ab-error"),
+  marketingBtn: $("marketing-btn"),
+  marketingModal: $("marketing-modal"),
+  marketingScrim: $("marketing-scrim"),
+  marketingClose: $("marketing-close"),
+  marketingCancel: $("marketing-cancel"),
+  marketingForm: $("marketing-form"),
+  marketingQuestion: $("marketing-question"),
+  marketingCopy: $("marketing-copy"),
+  marketingError: $("marketing-error"),
+  marketingSubmit: $("marketing-submit"),
+  infoBtn: $("info-btn"),
+  about: $("about"),
+  aboutScrim: $("about-scrim"),
+  aboutClose: $("about-close"),
+  charCard: $("char-card"),
+};
+
+const map = new SFMap(els.canvas);
+const show = (el) => el.classList.remove("hidden");
+const hide = (el) => el.classList.add("hidden");
+
+const state = {
+  phase: "booting",
+  simId: null, mainBranch: null, branchId: null,
+  lastResult: null, lastAbInput: null, lastMarketingInput: null, reqId: 0, abort: null,
+  residents: SIM.n,
+  cities: [],            // [{slug, display, bbox, ...}] from GET /cities
+  city: null,            // the active city object (falls back to a synthetic "sf")
+  switching: false,      // true while a city swap is re-creating the simulation
+  news: [],              // the active city's recent articles (expandable bubble)
+  newsExpanded: false,   // whether the news bubble is showing all of them
+};
+
+// fallback city when /cities is unavailable — keeps the single-city SF behavior.
+const SF_FALLBACK = { slug: "sf", display: "San Francisco", bbox: { ...MAP.bbox }, default: true };
+
+const citySlug = () => state.city?.slug || "sf";
+
+// fetch LLM chatter for the residents now on screen (sparse, batched, best-effort)
+async function requestChatter(ids) {
+  if (!state.mainBranch || !ids?.length) return;
+  const branch = state.mainBranch;
+  try {
+    const data = await api.getChatter(branch, ids);
+    if (branch !== state.mainBranch) return;            // city swapped mid-flight — drop it
+    const ch = data?.chatter || {};
+    for (const [id, text] of Object.entries(ch)) map.setThought(Number(id), text);
+  } catch { /* best-effort: residents keep their neutral fallback thought */ }
+}
+map.onNeedChatter = requestChatter;
+
+const isBusy = () => state.phase === "waiting" || state.phase === "reveal";
+const inputOpen = () => els.ask.dataset.state === "input";
+
+function setAsk(s) {
+  els.ask.dataset.state = s;
+  els.askLabel.textContent = s === "busy" ? "predicting…" : "ask";
+}
+
+function cleanupBranch() {
+  if (state.branchId) { api.deleteBranch(state.branchId); state.branchId = null; }
+}
+
+// ── boot ───────────────────────────────────────────────────────────────
+// 0 → 1 progress on the thin boot bar. createSim is one slow step (~0.2); the
+// agent fetch is paged, so it fills the rest (0.2 → 0.97) as residents arrive.
+function setBoot(p) { els.bootFill.style.width = `${Math.round(Math.max(0, Math.min(1, p)) * 100)}%`; }
+
+async function boot() {
+  map.onZoomChange = (zoomedIn) => { zoomedIn ? show(els.returnBtn) : hide(els.returnBtn); };
+  map.start();
+  els.status.textContent = "waking the city…";
+
+  // Load the city catalog first (best-effort). If it fails we keep the existing
+  // single-city SF behavior — the switcher just stays hidden.
+  let initial = SF_FALLBACK;
+  try {
+    const data = await api.getCities();
+    const cities = (data?.cities || []).filter((c) => c && c.slug);
+    if (cities.length) {
+      state.cities = cities;
+      initial = cities.find((c) => c.default) || cities[0];
+      buildTitleSelect();
+    }
+  } catch (err) {
+    console.warn("city catalog unavailable, falling back to SF:", err);
+  }
+
+  await loadCity(initial);
+}
+
+// Create (or re-create) the simulation for a city, point the map base/bbox at it,
+// load that city's agents and reset the overview. Shared by boot + the switcher.
+async function loadCity(city) {
+  state.city = city;
+  // The local map loads immediately and supplies dimensions + shoreline mask;
+  // progressive satellite tiles are painted above it at the camera's resolution.
+  const maskBase = `assets/${city.slug}_tiles.png`;
+  if (city.bbox) MAP.bbox = { ...city.bbox };
+  MAP.base = maskBase;
+  map.setSatellite(true);
+  map.setBase(maskBase);
+  syncActiveTitle();
+
+  els.status.textContent = `waking ${city.display}…`;
+  hide(els.newsBubble);            // clear the previous city's news while loading
+  show(els.boot); setBoot(0.06);
+  try {
+    const sim = await api.createSimulation({ city: city.slug });
+    state.simId = sim.simulation_id;
+    state.mainBranch = sim.main_branch;
+    setBoot(0.2);
+    const agents = await api.getAllAgents(state.mainBranch, (loaded, total) => {
+      setBoot(0.2 + 0.77 * (total ? loaded / total : 0));
+    });
+    if (!agents.length) throw new Error("no agents returned");
+    map.setAgents(agents);
+    state.residents = agents.length;
+    map.setSim(city.slug, state.mainBranch);     // scope ambient chatter to this city + branch
+    setBoot(1);
+    setIdleStatus();
+    // let the bar finish, fade it out, then surface the news in its place (no overlap)
+    setTimeout(() => { hide(els.boot); loadNews(city.slug); }, 450);
+    state.phase = "idle";
+  } catch (err) {
+    console.error(err);
+    hide(els.boot);
+    hide(els.newsBubble);
+    state.simId = null; state.mainBranch = null;
+    map.setAgents(fallbackAgents(SIM.n));        // never leave an empty city
+    els.status.textContent = "offline preview · backend unreachable";
+    toast("Couldn't reach the backend — showing an offline preview.");
+    state.phase = "error";
+  }
+}
+
+function setIdleStatus() {
+  const n = state.residents.toLocaleString();
+  const display = (state.city?.display || "san francisco").toLowerCase();
+  const kd = state.city?.knowledge_date;
+  // the clock = the date up to which the residents know the news (their knowledge cutoff)
+  const clock = kd
+    ? `<span class="status-clock">residents know the news up to ${escapeHtml(fmtDate(kd))}</span>`
+    : "";
+  if (window.innerWidth < 560) {
+    els.status.innerHTML = `${n} residents`;              // compact on phones
+  } else {
+    els.status.innerHTML = `${escapeHtml(display)} · ${n} residents${clock}`;
+  }
+  show(els.status);
+}
+
+function fmtDate(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+// fetch the city's recent news into the bubble (best-effort); click to expand all
+async function loadNews(slug) {
+  state.newsExpanded = false;
+  try {
+    const data = await api.getNews(slug);
+    state.news = data.articles || [];
+    if (!state.news.length) { hide(els.newsBubble); return; }
+    renderNews();
+    show(els.newsBubble);
+  } catch {
+    state.news = [];
+    hide(els.newsBubble);
+  }
+}
+
+// render the news bubble in its current (collapsed / expanded) state
+function renderNews() {
+  const arts = state.news;
+  if (!arts.length) { hide(els.newsBubble); return; }
+  els.newsBubble.dataset.expanded = state.newsExpanded ? "true" : "false";
+  const caret = arts.length > 1
+    ? `<svg class="news-toggle" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6"/></svg>`
+    : "";
+  const head = `<span class="news-head"><span>informing the residents</span>${caret}</span>`;
+  // on mobile the status drops the clock for space, so surface it here when opened
+  const kd = state.city?.knowledge_date;
+  const clock = (state.newsExpanded && kd && window.innerWidth < 560)
+    ? `<div class="news-clock">residents know the news up to ${escapeHtml(fmtDate(kd))}</div>` : "";
+  const body = clock + (state.newsExpanded
+    ? arts.map((a) =>
+        `<div class="news-art">` +
+        (a.date ? `<span class="news-art-date">${escapeHtml(fmtDate(a.date))}</span>` : "") +
+        `<span class="news-art-head">${escapeHtml(a.headline)}</span>` +
+        (a.summary ? `<span class="news-art-sum">${escapeHtml(a.summary)}</span>` : "") +
+        `</div>`
+      ).join("")
+    : arts.slice(0, 3).map((a) => `<span class="news-item">${escapeHtml(a.headline)}</span>`).join(""));
+  els.newsBubble.innerHTML = head + body;
+}
+
+// click the bubble to expand it to all the news updating the residents (and back)
+els.newsBubble.addEventListener("click", () => {
+  if (!state.news.length) return;
+  state.newsExpanded = !state.newsExpanded;
+  renderNews();
+});
+
+// ── title-select: the title itself is the city switcher ────────────────────
+function buildTitleSelect() {
+  els.titleMenu.innerHTML = state.cities.map((c) =>
+    `<button class="title-option" type="button" role="option" data-slug="${escapeHtml(c.slug)}"
+       aria-selected="false">${escapeHtml(c.display)}</button>`
+  ).join("");
+  els.titleMenu.querySelectorAll(".title-option").forEach((btn) => {
+    btn.addEventListener("click", () => { closeTitleMenu(); onSelectCity(btn.dataset.slug); });
+  });
+  syncActiveTitle();
+}
+
+function titleMenuOpen() { return els.titleBtn.getAttribute("aria-expanded") === "true"; }
+function openTitleMenu() {
+  if (state.cities.length <= 1 || state.switching) return;
+  show(els.titleMenu);
+  els.titleBtn.setAttribute("aria-expanded", "true");
+}
+function closeTitleMenu() {
+  hide(els.titleMenu);
+  els.titleBtn.setAttribute("aria-expanded", "false");
+}
+function toggleTitleMenu() { titleMenuOpen() ? closeTitleMenu() : openTitleMenu(); }
+
+// reflect the active city in the title button + the menu; lock while swapping
+function syncActiveTitle() {
+  const city = state.cities.find((c) => c.slug === citySlug());
+  els.titleCurrent.textContent = city?.display || state.city?.display || "San Francisco";
+  els.titleMenu.querySelectorAll(".title-option").forEach((btn) => {
+    btn.setAttribute("aria-selected", btn.dataset.slug === citySlug() ? "true" : "false");
+    btn.disabled = state.switching;
+  });
+  els.titleBtn.disabled = state.switching || state.cities.length <= 1;
+}
+
+// title-button toggles the dropdown; click-away / Escape close it
+els.titleBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  if (!els.titleBtn.disabled) toggleTitleMenu();
+});
+document.addEventListener("click", (e) => {
+  if (titleMenuOpen() && !els.titleSelect.contains(e.target)) closeTitleMenu();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && titleMenuOpen()) closeTitleMenu();
+});
+
+async function onSelectCity(slug) {
+  if (state.switching || slug === citySlug()) return;
+  const city = state.cities.find((c) => c.slug === slug);
+  if (!city) return;
+
+  // tear down any in-flight prediction / lingering UI from the previous city
+  state.reqId++;
+  if (state.abort) { state.abort.abort(); state.abort = null; }
+  map.onProgress = null; map.onRevealComplete = null;
+  els.progress.classList.remove("indeterminate");
+  cleanupBranch();
+  closeCharCard();
+  if (abOpen()) closeAbTest(false);
+  if (marketingOpen()) closeMarketing(false);
+  hide(els.summary); hide(els.resultCard);
+  if (inputOpen()) closeInput();
+
+  state.switching = true;
+  state.phase = "booting";
+  syncActiveTitle();
+  try {
+    await loadCity(city);
+  } finally {
+    state.switching = false;
+    syncActiveTitle();
+  }
+}
+// keep the status text right-sized across orientation changes
+window.addEventListener("resize", () => {
+  if (state.phase === "idle" || state.phase === "results") setIdleStatus();
+});
+
+// random points inside the map bbox, for the offline preview only
+function fallbackAgents(n) {
+  const { bbox } = map.proj;
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const lon = bbox.minLon + Math.random() * (bbox.maxLon - bbox.minLon);
+    const lat = bbox.minLat + Math.random() * (bbox.maxLat - bbox.minLat);
+    out.push({ lonlat: [lon, lat] });
+  }
+  return out;
+}
+
+// ── ask composer (multiline) ───────────────────────────────────────────
+// The composer opens at exactly one line and expands only HORIZONTALLY; it grows
+// vertically solely when the typed text wraps past a single line.
+const LINE_H = 24;
+function autoGrow() {
+  const ta = els.askInput;
+  ta.style.height = LINE_H + "px";          // reset to one line, then measure
+  const sh = ta.scrollHeight;
+  if (sh > LINE_H + 1) {
+    const cap = Math.round(window.innerHeight * 0.4);
+    const h = Math.min(sh, cap);
+    ta.style.height = h + "px";
+    ta.style.overflowY = h >= cap ? "auto" : "hidden";
+  } else {
+    ta.style.overflowY = "hidden";
+  }
+}
+
+function openInput() {
+  if (isBusy()) return;
+  if (state.phase === "error" || !state.simId) { toast("Predictions need the backend — it's currently unreachable."); return; }
+  cleanupBranch();
+  map.clearVerdicts();
+  closeCharCard();
+  hide(els.summary);
+  hide(els.resultCard);
+  setAsk("input");
+  state.phase = "idle";
+  setIdleStatus();
+  requestAnimationFrame(() => { els.askInput.value = ""; els.askInput.style.height = LINE_H + "px"; els.askInput.focus(); });
+}
+
+function closeInput() {
+  setAsk("idle");
+  els.askInput.value = "";
+  els.askInput.style.height = LINE_H + "px";
+  els.askInput.blur();
+}
+
+function dismissResults() {
+  hide(els.resultCard);
+  els.resultCard.classList.remove("ab-result");
+  abRerender = null;
+  hide(els.summary);
+  map.clearVerdicts();
+  cleanupBranch();
+  setAsk("idle");
+  setIdleStatus();
+  state.phase = "idle";
+}
+
+function cancelPrediction() {
+  state.reqId++;
+  if (state.abort) { state.abort.abort(); state.abort = null; }
+  map.onProgress = null; map.onRevealComplete = null;
+  els.progress.classList.remove("indeterminate");
+  hide(els.summary);
+  hide(els.resultCard);
+  if (marketingOpen()) closeMarketing();
+  map.clearVerdicts();
+  cleanupBranch();
+  setAsk("idle");
+  setIdleStatus();
+  state.phase = "idle";
+}
+
+// heuristic framing, used only as a fallback when /parse is unavailable
+function guessFraming(question) {
+  return /\b(will|won't|by \d{4}|going to)\b/i.test(question) ||
+    /^(will|is|are|does|do|can|could|would|should)\b/i.test(question) ? "belief" : "vote";
+}
+
+// ── prediction flow ─────────────────────────────────────────────────────
+// 1) classify the question for the current city (POST /cities/<slug>/parse)
+// 2) if unsupported → a gentle "try rephrasing" card (no poll)
+// 3) if supported → poll the branch with the parsed {framing, question, description, options}
+async function runPrediction(question) {
+  question = (question || "").trim();
+  if (!question) return;
+  if (state.phase === "error" || !state.simId) { toast("Predictions need the backend — it's currently unreachable."); return; }
+
+  cleanupBranch();
+  const myReq = ++state.reqId;
+  state.abort = new AbortController();
+  const signal = state.abort.signal;
+  state.phase = "waiting";
+  setAsk("busy");
+  els.askInput.blur();
+
+  els.summaryLabel.textContent = "READING";
+  els.summaryText.textContent = question;
+  els.progressFill.style.width = "12%";
+  els.progress.classList.add("indeterminate");
+  els.progressLabel.textContent = "understanding your question… (esc to cancel)";
+  hide(els.resultCard);
+  show(els.summary);
+  map.setWaiting();
+
+  try {
+    // classify first; fall back to a heuristic binary framing if /parse is missing
+    let parsed = null;
+    try {
+      parsed = await api.parseQuestion(citySlug(), question, signal);
+    } catch (perr) {
+      console.warn("parse unavailable, falling back to binary framing:", perr);
+    }
+    if (myReq !== state.reqId) return;
+
+    if (parsed && parsed.supported === false) {
+      const routerUnavailable = /could not reach the model|router.*unavailable/i.test(parsed.reason || "");
+      if (routerUnavailable) {
+        console.warn("question router unavailable, using local framing fallback");
+        parsed = null;
+      } else {
+        showRephrase(parsed, question);
+        return;
+      }
+    }
+
+    const framing = parsed?.framing || guessFraming(question);
+    const description = parsed?.description || "";
+    const options = parsed?.options && parsed.options.length ? parsed.options : undefined;
+    const pollQuestion = parsed?.question || question;
+
+    els.summaryLabel.textContent = "PREDICTING";
+    els.progressFill.style.width = "18%";
+    els.progressLabel.textContent = "tallying the electorate… (esc to cancel)";
+
+    const branch = await api.createBranch(state.simId, { ticks: PREDICT.branch_ticks, name: "predict", signal });
+    if (myReq !== state.reqId) { api.deleteBranch(branch.branch_id); return; }
+    state.branchId = branch.branch_id;
+
+    const result = await api.poll(state.branchId, {
+      question: pollQuestion, description, framing, ...(options ? { options } : {}),
+      as_of_date: PREDICT.as_of_date, model: PREDICT.model,
+    }, signal);
+    if (myReq !== state.reqId) return;
+
+    state.lastResult = { ...result, framing, question: pollQuestion };
+
+    // p_yes drives the on-map green/red reveal for both paths; for options it is the
+    // winning option's share, so the crowd still visualizes the result's strength.
+    const verdicts = assignVerdicts(map.agents, result.p_yes, pollQuestion, map.proj.planarSize);
+    map.setRationales(result.sample_rationales);   // real per-agent reasoning → thought bubbles
+    els.progress.classList.remove("indeterminate");
+    els.progressLabel.textContent = `0 / ${map.agents.length.toLocaleString()} responses`;
+    map.onProgress = onRevealProgress;
+    map.onRevealComplete = () => { if (myReq === state.reqId) showResults(state.lastResult); };
+    state.phase = "reveal";
+    map.startReveal(verdicts, TIMING.revealMs);
+  } catch (err) {
+    if (myReq !== state.reqId) return;
+    console.error(err);
+    toast(`Poll failed: ${err.message}`);
+    hide(els.summary);
+    els.progress.classList.remove("indeterminate");
+    cleanupBranch();
+    setAsk("idle");
+    setIdleStatus();
+    state.phase = "idle";
+  }
+}
+
+let marketingPreviousFocus = null;
+const marketingOpen = () => !els.marketingModal.classList.contains("hidden");
+
+function setMarketingError(message) {
+  els.marketingError.textContent = message || "";
+  if (message) els.marketingError.focus();
+}
+
+function setMarketingBusy(busy, label = "Reading target…") {
+  els.marketingForm.setAttribute("aria-busy", busy ? "true" : "false");
+  els.marketingQuestion.disabled = busy;
+  els.marketingCopy.disabled = busy;
+  els.marketingSubmit.disabled = busy;
+  els.marketingSubmit.textContent = busy ? label : "Run simulated exposure";
+  els.marketingCancel.textContent = busy ? "Cancel test" : "Cancel";
+}
+
+function openMarketing({ preserve = false } = {}) {
+  if (isBusy()) return;
+  if (state.phase === "error" || !state.mainBranch) { toast("Marketing tests need the backend — it's currently unreachable."); return; }
+  closeInput();
+  closeCharCard();
+  marketingPreviousFocus = document.activeElement;
+  setMarketingError("");
+  setMarketingBusy(false);
+  if (!preserve || !state.lastMarketingInput) {
+    els.marketingForm.reset();
+  } else {
+    els.marketingQuestion.value = state.lastMarketingInput.question;
+    els.marketingCopy.value = state.lastMarketingInput.marketingText;
+  }
+  els.ask.dataset.mode = "marketing";
+  els.askLabel.textContent = "marketing test";
+  show(els.marketingScrim);
+  show(els.marketingModal);
+  requestAnimationFrame(() => els.marketingQuestion.focus());
+}
+
+function closeMarketing(restoreFocus = true) {
+  hide(els.marketingModal);
+  hide(els.marketingScrim);
+  delete els.ask.dataset.mode;
+  els.askLabel.textContent = els.ask.dataset.state === "busy" ? "predicting…" : "ask";
+  setMarketingBusy(false);
+  setMarketingError("");
+  if (restoreFocus && marketingPreviousFocus?.focus) marketingPreviousFocus.focus();
+}
+
+function closeOrCancelMarketing() {
+  if (isBusy()) cancelPrediction();
+  else closeMarketing();
+}
+
+async function runMarketingTest() {
+  const input = {
+    question: els.marketingQuestion.value.trim(),
+    marketingText: els.marketingCopy.value,
+  };
+  if (!input.question) { setMarketingError("Enter the yes/no question whose support you want to measure."); return; }
+  if (!input.marketingText.trim()) { setMarketingError("Enter the planned post copy to test."); return; }
+  if (input.marketingText.length > 4000) { setMarketingError("Planned post copy must be at most 4,000 characters."); return; }
+  if (state.phase === "error" || !state.mainBranch) { setMarketingError("Marketing tests need the backend — it's currently unreachable."); return; }
+
+  state.lastMarketingInput = input;
+  const myReq = ++state.reqId;
+  state.abort = new AbortController();
+  const signal = state.abort.signal;
+  state.phase = "waiting";
+  setAsk("busy");
+  setMarketingError("");
+  setMarketingBusy(true);
+
+  try {
+    const parsed = await api.parseQuestion(citySlug(), input.question, signal);
+    if (myReq !== state.reqId) return;
+    if (parsed?.supported === false) {
+      setMarketingBusy(false);
+      setMarketingError(parsed.reason || "This target could not be turned into a resident poll.");
+      setAsk("idle");
+      setIdleStatus();
+      state.phase = "idle";
+      return;
+    }
+    if (parsed?.framing !== "vote") {
+      setMarketingBusy(false);
+      setMarketingError("Use a yes/no support or voting question for this marketing test.");
+      setAsk("idle");
+      setIdleStatus();
+      state.phase = "idle";
+      return;
+    }
+
+    const pollQuestion = (parsed.question || "").trim();
+    const description = (parsed.description || "").trim();
+    if (!pollQuestion || !description) {
+      setMarketingBusy(false);
+      setMarketingError("The target parser did not return a complete binary poll. Try rephrasing the question.");
+      setAsk("idle");
+      setIdleStatus();
+      state.phase = "idle";
+      return;
+    }
+
+    els.summaryLabel.textContent = "TESTING MARKETING";
+    els.summaryText.textContent = pollQuestion;
+    els.progressFill.style.width = "18%";
+    els.progress.classList.add("indeterminate");
+    els.progressLabel.textContent = "comparing baseline with simulated exposure… (esc to cancel)";
+    hide(els.resultCard);
+    show(els.summary);
+    map.setWaiting();
+
+    setMarketingBusy(true, "Comparing responses…");
+    const branch = await api.createBranch(state.simId, {
+      ticks: PREDICT.branch_ticks,
+      name: "marketing-counterfactual",
+      signal,
+    });
+    if (myReq !== state.reqId) { api.deleteBranch(branch.branch_id); return; }
+    state.branchId = branch.branch_id;
+
+    const result = await api.counterfactual(state.branchId, {
+      question: pollQuestion,
+      description,
+      framing: parsed.framing,
+      as_of_date: PREDICT.as_of_date,
+      model: PREDICT.model,
+      population: "all",
+      marketing_text: input.marketingText,
+    }, signal);
+    if (myReq !== state.reqId) return;
+
+    const completedBranch = state.branchId;
+    state.branchId = null;
+    if (completedBranch) api.deleteBranch(completedBranch);
+    closeMarketing(false);
+
+    state.lastResult = { ...result, kind: "marketing", framing: parsed.framing, question: pollQuestion };
+    const exposed = result.exposed || {};
+    const verdicts = assignVerdicts(map.agents, exposed.p_yes, `${pollQuestion}\n${input.marketingText}`, map.proj.planarSize);
+    map.setRationales(exposed.sample_rationales || []);
+    els.progress.classList.remove("indeterminate");
+    els.progressLabel.textContent = `0 / ${map.agents.length.toLocaleString()} exposed responses`;
+    map.onProgress = onRevealProgress;
+    map.onRevealComplete = () => { if (myReq === state.reqId) showMarketingResults(state.lastResult); };
+    state.phase = "reveal";
+    map.startReveal(verdicts, TIMING.revealMs);
+  } catch (err) {
+    if (myReq !== state.reqId) return;
+    console.error(err);
+    hide(els.summary);
+    els.progress.classList.remove("indeterminate");
+    map.clearVerdicts();
+    cleanupBranch();
+    setAsk("idle");
+    setIdleStatus();
+    state.phase = "idle";
+    openMarketing({ preserve: true });
+    setMarketingError(`Marketing test failed: ${err.message}`);
+  }
+}
+
+let abPreviousFocus = null;
+const abOpen = () => !els.abModal.classList.contains("hidden");
+
+function openAbTest() {
+  if (isBusy()) return;
+  if (state.phase === "error" || !state.mainBranch) { toast("A/B tests need the backend — it's currently unreachable."); return; }
+  closeInput();
+  closeCharCard();
+  abPreviousFocus = document.activeElement;
+  els.abError.textContent = "";
+  els.ask.dataset.mode = "ab";
+  els.askLabel.textContent = "A/B test";
+  show(els.abScrim);
+  show(els.abModal);
+  requestAnimationFrame(() => els.abQuestion.focus());
+}
+
+function closeAbTest(restoreFocus = true) {
+  hide(els.abModal);
+  hide(els.abScrim);
+  delete els.ask.dataset.mode;
+  els.askLabel.textContent = "ask";
+  els.abError.textContent = "";
+  if (restoreFocus && abPreviousFocus?.focus) abPreviousFocus.focus();
+}
+
+async function runAbTest() {
+  const input = {
+    question: els.abQuestion.value.trim(),
+    variant_a: els.abA.value,
+    variant_b: els.abB.value,
+  };
+  if (!input.question || !input.variant_a.trim() || !input.variant_b.trim()) {
+    els.abError.textContent = "Question and both variants are required.";
+    return;
+  }
+  if (input.variant_a.trim() === input.variant_b.trim()) {
+    els.abError.textContent = "Variants must be different.";
+    return;
+  }
+
+  state.lastAbInput = input;
+  closeAbTest(false);
+  const myReq = ++state.reqId;
+  state.abort = new AbortController();
+  const signal = state.abort.signal;
+  state.phase = "waiting";
+  setAsk("busy");
+  hide(els.resultCard);
+  els.summaryLabel.textContent = "TESTING A/B";
+  els.summaryText.textContent = input.question;
+  els.progressFill.style.width = "18%";
+  els.progress.classList.add("indeterminate");
+  els.progressLabel.textContent = "comparing demographic groups… (esc to cancel)";
+  show(els.summary);
+  map.setWaiting();
+
+  try {
+    const result = await api.abTest(state.mainBranch, {
+      ...input,
+      as_of_date: PREDICT.as_of_date,
+      model: PREDICT.model,
+      population: "all",
+    }, signal);
+    if (myReq !== state.reqId) return;
+    state.lastResult = result;
+    const verdicts = assignVerdicts(map.agents, result.a_share, input.question, map.proj.planarSize);
+    map.setRationales(result.sample_rationales || []);
+    els.progress.classList.remove("indeterminate");
+    els.progressLabel.textContent = `0 / ${map.agents.length.toLocaleString()} responses`;
+    map.onProgress = onRevealProgress;
+    map.onRevealComplete = () => { if (myReq === state.reqId) showAbResults(result); };
+    state.phase = "reveal";
+    map.startReveal(verdicts, TIMING.revealMs);
+  } catch (err) {
+    if (myReq !== state.reqId) return;
+    console.error(err);
+    hide(els.summary);
+    els.progress.classList.remove("indeterminate");
+    setAsk("idle");
+    setIdleStatus();
+    state.phase = "idle";
+    if (err.status === 404) {
+      openAbTest();
+      els.abError.textContent =
+        "A/B testing is temporarily unavailable because the frontend and API versions do not match. Update the backend, then run the test again — your inputs are saved.";
+    } else {
+      toast(`A/B test failed: ${err.message}`);
+    }
+  }
+}
+
+function onRevealProgress(done, total) {
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  els.progressFill.style.width = `${Math.max(6, pct)}%`;
+  els.progressLabel.textContent = `${done.toLocaleString()} / ${total.toLocaleString()} responses`;
+}
+
+// ── result card ──────────────────────────────────────────────────────────
+function formatPct(value) {
+  const n = (Number(value) || 0) * 100;
+  return `${n.toFixed(1).replace(/\.0$/, "")}%`;
+}
+
+function hydraMeta(result) {
+  const hydra = result?.hydra;
+  if (!hydra) return "";
+  const status = hydra.status === "connected" ? "connected" : hydra.status || "disabled";
+  const sourceTitles = (hydra.sources || []).map((source) => source.title).filter(Boolean);
+  const sourceText = sourceTitles.length ? ` · ${sourceTitles.slice(0, 3).join(", ")}` : "";
+  return `<div class="res-meta res-hydra">HydraDB ${escapeHtml(status)} · ${Number(hydra.chunks || 0)} evidence chunks${escapeHtml(sourceText)}</div>`;
+}
+
+function showMarketingResults(result) {
+  state.phase = "results";
+  els.resultCard.classList.remove("ab-result");
+  abRerender = null;
+  setAsk("idle");
+  els.progressFill.style.width = "100%";
+  hide(els.summary);
+  clearTimeout(toastTimer); hide(els.toast);
+
+  const baseline = result.baseline || {};
+  const exposed = result.exposed || {};
+  const deltaPoints = (Number(result.delta) || 0) * 100;
+  const deltaAbs = Math.abs(deltaPoints).toFixed(1).replace(/\.0$/, "");
+  const signedDelta = `${deltaPoints > 0 ? "+" : deltaPoints < 0 ? "−" : ""}${deltaAbs} pp`;
+  const deltaClass = deltaPoints > 0 ? "positive" : deltaPoints < 0 ? "negative" : "";
+  const rationales = (exposed.sample_rationales || []).slice(0, 3);
+  const n = exposed.n_agents ?? map.agents.length;
+
+  els.resultCard.innerHTML = `
+    <div class="res-q">${escapeHtml(result.question || exposed.question || "")}</div>
+    <div class="res-cf-headline">
+      <span class="res-cf-delta ${deltaClass}">${signedDelta}</span>
+      <span class="res-cf-verb">simulated support shift</span>
+    </div>
+    <div class="res-cf-grid">
+      <div class="res-cf-arm">
+        <span class="res-cf-label">baseline support</span>
+        <span class="res-cf-value">${formatPct(baseline.p_yes)}</span>
+        <span class="res-cf-ci">95% CI ${formatPct(baseline.ci_low)}–${formatPct(baseline.ci_high)}</span>
+      </div>
+      <div class="res-cf-arm exposed">
+        <span class="res-cf-label">exposed support</span>
+        <span class="res-cf-value">${formatPct(exposed.p_yes)}</span>
+        <span class="res-cf-ci">95% CI ${formatPct(exposed.ci_low)}–${formatPct(exposed.ci_high)}</span>
+      </div>
+    </div>
+    <div class="res-meta">${n.toLocaleString()} synthetic residents · map shows exposed arm</div>
+    ${hydraMeta(exposed)}
+    <div class="res-cf-note">Model-based comparison under simulated exposure of every sampled resident to the planned copy—not an estimate of organic reach. Each arm has its own 95% CI; no separate CI was estimated for the delta, so treat small shifts cautiously.</div>
+    ${rationales.length ? `<div class="res-why"><div class="res-why-label">what exposed residents said</div><ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul></div>` : ""}
+    <div class="res-actions"><button id="res-edit-marketing" class="btn btn-primary">Edit test</button><button id="res-dismiss" class="btn">Dismiss</button></div>`;
+  show(els.resultCard);
+  $("res-edit-marketing").addEventListener("click", () => openMarketing({ preserve: true }));
+  $("res-dismiss").addEventListener("click", dismissResults);
+  requestAnimationFrame(() => $("res-edit-marketing").focus());
+}
+
+function showResults(result) {
+  state.phase = "results";
+  els.resultCard.classList.remove("ab-result");
+  abRerender = null;
+  setAsk("idle");
+  els.progressFill.style.width = "100%";
+  hide(els.summary);
+  clearTimeout(toastTimer); hide(els.toast);
+
+  if (result.framing === "options" && Array.isArray(result.p_distribution) && result.p_distribution.length) {
+    showOptionResults(result);
+    return;
+  }
+
+  const pct = Math.round((result.p_yes ?? 0) * 100);
+  const noPct = 100 - pct;
+  const belief = result.framing === "belief";
+  const ciLow = Math.round((result.ci_low ?? result.p_yes) * 100);
+  const ciHigh = Math.round((result.ci_high ?? result.p_yes) * 100);
+  const n = result.n_agents ?? map.agents.length;
+  const rationales = (result.sample_rationales || []).slice(0, 3);
+
+  // Binary polls carry the same demographic cut set as A/B tests, so they get the
+  // same advanced panel — with yes/no as the two options instead of A/B.
+  const breakdowns = normalizeBreakdowns(result.option_breakdowns);
+  abPanel.labels = belief ? { a: "yes", b: "no" } : { a: "support", b: "oppose" };
+  abPanel.view = "movers";
+  abPanel.dimension = null;
+  abPanel.cross = null;
+  const yesShare = result.p_yes ?? 0;
+  const segments = abSegments(breakdowns, yesShare, abCellLabel);
+
+  const renderPanel = () => {
+    els.resultCard.innerHTML = `
+      <div class="res-q">${escapeHtml(result.question || "")}</div>
+      <div class="res-headline">
+        <span class="res-pct">${pct}<span class="res-pct-sym">%</span></span>
+        <span class="res-verb">${belief ? "likely" : "vote yes"}</span>
+      </div>
+      <div class="res-bar">
+        <div class="res-bar-yes" style="width:${pct}%"></div>
+        <div class="res-bar-no" style="width:${noPct}%"></div>
+      </div>
+      <div class="res-legend">
+        <span><i class="dot yes"></i>${belief ? "yes" : "support"} ${pct}%</span>
+        <span><i class="dot no"></i>${belief ? "no" : "oppose"} ${noPct}%</span>
+      </div>
+      <div class="res-meta">${n.toLocaleString()} synthetic residents · 95% CI ${ciLow}–${ciHigh}%</div>
+      ${hydraMeta(result)}
+      ${breakdowns.length ? abAdvancedSection({ a_share: yesShare }, segments, breakdowns) : ""}
+      ${rationales.length ? `<div class="res-why">
+        <div class="res-why-label">what people said</div>
+        <ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>
+      </div>` : ""}
+      <div class="res-actions">
+        <button id="res-again" class="btn btn-primary">Ask another</button>
+        <button id="res-dismiss" class="btn">Dismiss</button>
+      </div>
+    `;
+    wireResultActions();
+  };
+
+  abRerender = renderPanel;
+  bindAbPanelControls();
+  renderPanel();
+  show(els.resultCard);
+  requestAnimationFrame(() => { els.resultCard.scrollTop = 0; });
+}
+
+// the "Ask another / Dismiss" footer is identical across every result card
+function wireResultActions(focusEl) {
+  const again = $("res-again");
+  again.addEventListener("click", openInput);
+  $("res-dismiss").addEventListener("click", dismissResults);
+  // preventScroll: the actions sit at the bottom of a card that now scrolls, and
+  // focusing them would push the headline out of view.
+  requestAnimationFrame(() => (focusEl || again).focus({ preventScroll: true }));
+}
+
+const RESULT_ACTIONS = `
+  <div class="res-actions">
+    <button id="res-again" class="btn btn-primary">Ask another</button>
+    <button id="res-dismiss" class="btn">Dismiss</button>
+  </div>`;
+
+// multi-option result: a horizontal bar per option (sorted desc), winner emphasized
+function showOptionResults(result) {
+  const dist = (result.p_distribution || [])
+    .filter((d) => Array.isArray(d) && d.length >= 2)
+    .map(([label, p]) => ({ label: String(label), p: Number(p) || 0 }))
+    .sort((a, b) => b.p - a.p);
+  const n = result.n_agents ?? map.agents.length;
+  const rationales = (result.sample_rationales || []).slice(0, 3);
+
+  const rows = dist.map((d, i) => {
+    const pct = Math.round(d.p * 100);
+    return `
+      <div class="res-opt${i === 0 ? " win" : ""}">
+        <div class="res-opt-head">
+          <span class="res-opt-label">${escapeHtml(d.label)}</span>
+          <span class="res-opt-pct">${pct}%</span>
+        </div>
+        <div class="res-opt-track"><div class="res-opt-fill" style="width:${pct}%"></div></div>
+      </div>`;
+  }).join("");
+
+  els.resultCard.innerHTML = `
+    <div class="res-q">${escapeHtml(result.question || "")}</div>
+    <div class="res-options">${rows}</div>
+    <div class="res-meta">${n.toLocaleString()} synthetic residents</div>
+    ${hydraMeta(result)}
+    ${rationales.length ? `<div class="res-why">
+      <div class="res-why-label">what people said</div>
+      <ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>
+    </div>` : ""}
+    ${RESULT_ACTIONS}
+  `;
+  show(els.resultCard);
+  wireResultActions();
+}
+
+const AB_DIM_LABEL = {
+  age: "Age", gender: "Gender", race: "Race / ethnicity", education: "Education",
+  income: "Income", tenure: "Housing", marital: "Marital status",
+  nativity: "Nativity", employment: "Employment", citizenship: "Citizenship",
+  geography: "Geography",
+  gender_x_age: "Gender × age",
+  race_x_income: "Race × income",
+  education_x_income: "Education × income",
+};
+
+// Short forms used inside dense cross-tab axes, where the long label won't fit.
+const AB_DIM_SHORT = {
+  age: "Age", gender: "Gender", race: "Race", education: "Education",
+  income: "Income", tenure: "Housing", marital: "Marital", nativity: "Nativity",
+  employment: "Employment", citizenship: "Citizenship", geography: "Geography",
+};
+
+const GENDER_LABEL = { women: "Women", men: "Men" };
+const MARITAL_LABEL = {
+  married: "Married", never_married: "Never married", divorced: "Divorced",
+  separated: "Separated", widowed: "Widowed",
+};
+const NATIVITY_LABEL = { us_born: "US-born", foreign_born: "Foreign-born" };
+const EMPLOYMENT_LABEL = { employed: "Employed", not_employed: "Not employed" };
+const CITIZENSHIP_LABEL = { citizen: "Citizens", noncitizen: "Non-citizens" };
+const INCOME_LABEL = {
+  q0: "Income Q1 (lowest)", q1: "Income Q2", q2: "Income Q3",
+  q3: "Income Q4", q4: "Income Q5 (highest)",
+};
+
+
+function abGroupLabel(dimension, key) {
+  if (dimension === "gender") return GENDER_LABEL[key] || key;
+  if (dimension === "race") return RACE_LABEL[key] || key;
+  if (dimension === "education") return EDUC_LABEL[key] || key;
+  if (dimension === "income") return INCOME_LABEL[key] || `Income ${String(key).toUpperCase()}`;
+  if (dimension === "tenure") return key === "own" ? "Homeowners" : "Renters";
+  if (dimension === "marital") return MARITAL_LABEL[key] || key;
+  if (dimension === "nativity") return NATIVITY_LABEL[key] || key;
+  if (dimension === "employment") return EMPLOYMENT_LABEL[key] || key;
+  if (dimension === "citizenship") return CITIZENSHIP_LABEL[key] || key;
+  if (dimension === "geography") return `PUMA ${key}`;
+  return key;
+}
+
+// Cross-tab keys arrive as `left|right`; label each axis with its own dimension.
+function abCellLabel(breakdown, key) {
+  const axes = breakdown.axes;
+  if (!axes) return abGroupLabel(breakdown.dimension, key);
+  const [left, right] = String(key).split(AB_CROSS_KEY_SEP);
+  return `${abGroupLabel(axes[0], left)} · ${abGroupLabel(axes[1], right)}`;
+}
+
+
+// Which advanced view is showing, and which dimension within it. Persisted across
+// re-renders of the panel body so switching tabs doesn't lose the user's place.
+const abPanel = { view: "movers", dimension: null, cross: null, labels: { a: "A", b: "B" } };
+// Re-render closure for the currently displayed A/B result. The panel's click
+// handler is bound once (see `bindAbPanelControls`) and routed through this, so
+// repeated tests never stack duplicate listeners on the persistent result card.
+let abRerender = null;
+let abPanelBound = false;
+
+function bindAbPanelControls() {
+  if (abPanelBound) return;
+  abPanelBound = true;
+  els.resultCard.addEventListener("click", (event) => {
+    if (!abRerender) return;
+    const viewBtn = event.target.closest("[data-ab-view]");
+    if (viewBtn) {
+      abPanel.view = viewBtn.dataset.abView;
+      abRerender();
+      els.resultCard.querySelector(`[data-ab-view="${abPanel.view}"]`)?.focus();
+      return;
+    }
+    const dimBtn = event.target.closest("[data-ab-dim]");
+    if (!dimBtn) return;
+    if (dimBtn.dataset.abKind === "cross") abPanel.cross = dimBtn.dataset.abDim;
+    else abPanel.dimension = dimBtn.dataset.abDim;
+    abRerender();
+    els.resultCard.querySelector(`[data-ab-dim="${dimBtn.dataset.abDim}"]`)?.focus();
+  });
+
+  // Roving tabindex needs arrow keys to be a conforming tab pattern.
+  els.resultCard.addEventListener("keydown", (event) => {
+    if (!abRerender) return;
+    const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+    if (!step || !event.target.closest("[data-ab-view]")) return;
+    event.preventDefault();
+    const index = AB_VIEWS.findIndex(([view]) => view === abPanel.view);
+    abPanel.view = AB_VIEWS[(index + step + AB_VIEWS.length) % AB_VIEWS.length][0];
+    abRerender();
+    els.resultCard.querySelector(`[data-ab-view="${abPanel.view}"]`)?.focus();
+  });
+}
+
+/** One demographic segment rendered as a labelled 100% A/B split bar. */
+function abSegmentRow(segment, showDimension) {
+  const a = pct(segment.aShare);
+  const b = pct(segment.bShare);
+  const lean = segment.swingPp >= 0 ? "a" : "b";
+  const thin = segment.n < AB_MIN_SEGMENT_N;
+  const dim = showDimension
+    ? `<em class="ab-group-dim">${escapeHtml(AB_DIM_LABEL[segment.dimension] || segment.dimension)}</em>`
+    : "";
+  return `<div class="ab-group">
+    <div class="ab-group-head">
+      <span>${escapeHtml(segment.label)}${dim}</span>
+      <span>${abPanel.labels.a} ${a}% · ${abPanel.labels.b} ${b}%</span>
+    </div>
+    <div class="ab-split" role="img" aria-label="${abPanel.labels.a} ${a} percent, ${abPanel.labels.b} ${b} percent">
+      <span class="ab-a" style="width:${a}%"></span><span class="ab-b" style="width:${b}%"></span>
+    </div>
+    <div class="ab-group-meta">
+      <span class="ab-swing lean-${lean}">${signedPp(segment.swingPp)} pp vs city</span>
+      <span>${Math.round(segment.weight).toLocaleString()} weighted · ${segment.n.toLocaleString()} agents</span>
+      ${thin ? `<span class="ab-thin">thin sample</span>` : ""}
+    </div>
+  </div>`;
+}
+
+/**
+ * Cross-tab matrix. Values are direct-labelled in every cell — the tint is a
+ * redundant cue, never the only way to read the number.
+ */
+function abHeatmap(breakdown, overallAShare) {
+  const { rows, cols, cells } = abCrossMatrix(breakdown);
+  const [rowDim, colDim] = breakdown.axes || [breakdown.dimension, breakdown.dimension];
+  const head = cols
+    .map((col) => `<th scope="col">${escapeHtml(abGroupLabel(colDim, col))}</th>`)
+    .join("");
+  const body = rows.map((row) => {
+    const tds = cols.map((col) => {
+      const group = cells.get(`${row}${AB_CROSS_KEY_SEP}${col}`);
+      if (!group) return `<td class="ab-cell empty" aria-label="no data">–</td>`;
+      const swing = (group.a_share - overallAShare) * 100;
+      const lean = swing >= 0 ? "a" : "b";
+      const thin = (group.n || 0) < AB_MIN_SEGMENT_N;
+      return `<td class="ab-cell lean-${lean}${thin ? " thin" : ""}" style="--lean-alpha:${abLeanAlpha(swing).toFixed(3)}"
+        title="${escapeHtml(abGroupLabel(rowDim, row))} · ${escapeHtml(abGroupLabel(colDim, col))} — ${group.n.toLocaleString()} agents">
+        <span class="ab-cell-share">${abPanel.labels.a} ${pct(group.a_share)}%</span>
+        <span class="ab-cell-swing">${signedPp(swing)}</span>
+      </td>`;
+    }).join("");
+    return `<tr><th scope="row">${escapeHtml(abGroupLabel(rowDim, row))}</th>${tds}</tr>`;
+  }).join("");
+  return `<div class="ab-matrix-wrap">
+    <table class="ab-matrix">
+      <caption class="sr-only">${abPanel.labels.a} share by ${escapeHtml(AB_DIM_SHORT[rowDim] || rowDim)} and ${escapeHtml(AB_DIM_SHORT[colDim] || colDim)}</caption>
+      <thead><tr><td></td>${head}</tr></thead>
+      <tbody>${body}</tbody>
+    </table>
+  </div>
+  <div class="ab-matrix-key">
+    <span><i class="dot ab-a-dot"></i>leans ${abPanel.labels.a} vs city</span>
+    <span><i class="dot ab-b-dot"></i>leans ${abPanel.labels.b} vs city</span>
+    <span class="ab-thin">shaded stripe = thin sample (&lt;${AB_MIN_SEGMENT_N} agents)</span>
+  </div>`;
+}
+
+// Toggle buttons rather than a second `tablist`: these filter the content of the
+// already-selected tab panel, and nesting tablists misreports the structure.
+function abChips(breakdowns, activeDimension, kind) {
+  return `<div class="ab-chips" role="group" aria-label="Demographic dimension">
+    ${breakdowns.map((breakdown) => {
+      const active = breakdown.dimension === activeDimension;
+      return `<button type="button" class="ab-chip${active ? " active" : ""}"
+        aria-pressed="${active}" data-ab-dim="${escapeHtml(breakdown.dimension)}" data-ab-kind="${kind}">
+        ${escapeHtml(AB_DIM_LABEL[breakdown.dimension] || breakdown.dimension)}</button>`;
+    }).join("")}
+  </div>`;
+}
+
+/** Body of the advanced panel for the currently selected view. */
+function abPanelBody(result, segments, breakdowns) {
+  const overall = result.a_share || 0;
+  if (abPanel.view === "movers") {
+    const movers = abTopMovers(segments);
+    if (!movers.length) {
+      return `<p class="ab-empty">No segment reached ${AB_MIN_SEGMENT_N} simulated agents, so no group is stable enough to rank.</p>`;
+    }
+    return `<p class="ab-lede">Segments that diverge most from the city-wide ${pct(overall)}% ${abPanel.labels.a}.</p>
+      ${movers.map((segment) => abSegmentRow(segment, true)).join("")}`;
+  }
+  if (abPanel.view === "cross") {
+    const crosses = breakdowns.filter(isCrossBreakdown);
+    if (!crosses.length) return `<p class="ab-empty">No cross-tabs in this result.</p>`;
+    const active = crosses.find((b) => b.dimension === abPanel.cross) || crosses[0];
+    return `${abChips(crosses, active.dimension, "cross")}
+      <p class="ab-lede">${abPanel.labels.a} share in each cell, versus the city-wide ${pct(overall)}%.</p>
+      ${abHeatmap(active, overall)}`;
+  }
+  const singles = breakdowns.filter((b) => !isCrossBreakdown(b));
+  if (!singles.length) return `<p class="ab-empty">No demographic breakdown in this result.</p>`;
+  const active = singles.find((b) => b.dimension === abPanel.dimension) || singles[0];
+  const rows = segments.filter((segment) => segment.dimension === active.dimension);
+  return `${abChips(singles, active.dimension, "single")}
+    ${rows.map((segment) => abSegmentRow(segment, false)).join("")}`;
+}
+
+const AB_VIEWS = [
+  ["movers", "Top movers"],
+  ["single", "By dimension"],
+  ["cross", "Cross-tabs"],
+];
+
+function abAdvancedSection(result, segments, breakdowns) {
+  const tabs = AB_VIEWS.map(([view, label]) => {
+    const active = abPanel.view === view;
+    return `<button type="button" role="tab" id="ab-tab-${view}" class="ab-view${active ? " active" : ""}"
+      aria-selected="${active}" aria-controls="ab-adv-body" tabindex="${active ? 0 : -1}"
+      data-ab-view="${view}">${label}</button>`;
+  }).join("");
+  return `<section class="ab-adv${abPanel.labels.a === "A" ? "" : " tone-yesno"}">
+    <div class="ab-adv-head">
+      <span class="res-why-label">advanced breakdown</span>
+      <div class="ab-views" role="tablist" aria-label="Breakdown view">${tabs}</div>
+    </div>
+    <div class="ab-adv-body" id="ab-adv-body" role="tabpanel" tabindex="0"
+      aria-labelledby="ab-tab-${abPanel.view}">${abPanelBody(result, segments, breakdowns)}</div>
+  </section>`;
+}
+
+function showAbResults(result) {
+  state.phase = "results";
+  setAsk("idle");
+  hide(els.summary);
+  els.progress.classList.remove("indeterminate");
+  els.resultCard.classList.add("ab-result");
+  const aPct = pct(result.a_share);
+  const bPct = pct(result.b_share);
+  const margin = Number(result.margin_pp || 0);
+  const winner = result.winner === "a" ? "Variant A leads" : result.winner === "b" ? "Variant B leads" : "Near tie";
+  const marginText = `${margin > 0 ? "+" : ""}${margin.toFixed(1)} pp for ${margin >= 0 ? "A" : "B"}`;
+  const breakdowns = normalizeBreakdowns(result.breakdowns);
+  const segments = abSegments(breakdowns, result.a_share || 0, abCellLabel);
+  const aCi = result.a_ci || [result.a_share, result.a_share];
+  const rationales = (result.sample_rationales || []).slice(0, 3);
+
+  // Each new test starts on the ranked view; stale dimension picks are dropped.
+  abPanel.labels = { a: "A", b: "B" };
+  abPanel.view = "movers";
+  abPanel.dimension = null;
+  abPanel.cross = null;
+
+  const renderPanel = () => {
+    els.resultCard.innerHTML = `
+      <div class="res-q">${escapeHtml(result.question || "")}</div>
+      <div class="ab-headline"><strong>${winner}</strong><span>${marginText}</span></div>
+      <div class="ab-split ab-overall" role="img" aria-label="Variant A ${aPct} percent, Variant B ${bPct} percent">
+        <span class="ab-a" style="width:${aPct}%"></span><span class="ab-b" style="width:${bPct}%"></span>
+      </div>
+      <div class="res-legend ab-legend"><span><i class="dot ab-a-dot"></i>Variant A ${aPct}%</span><span><i class="dot ab-b-dot"></i>Variant B ${bPct}%</span></div>
+      <div class="res-meta">${result.n_agents.toLocaleString()} synthetic residents · A 95% CI ${pct(aCi[0])}–${pct(aCi[1])}% · ${Math.round(result.n_eff || 0).toLocaleString()} effective sample</div>
+      ${hydraMeta(result)}
+      ${breakdowns.length ? abAdvancedSection(result, segments, breakdowns) : ""}
+      ${rationales.length ? `<div class="res-why"><div class="res-why-label">what people said</div><ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul></div>` : ""}
+      <p class="ab-note">Simulated, PUMS-weighted preference under full exposure. Segment and cross-tab figures are model estimates with no per-group significance test — read them as direction, not proof. Not causal proof or organic reach.</p>
+      <div class="res-actions"><button id="res-edit-ab" class="btn btn-primary">Edit test</button><button id="res-dismiss" class="btn">Dismiss</button></div>`;
+    $("res-edit-ab").addEventListener("click", openAbTest);
+    $("res-dismiss").addEventListener("click", dismissResults);
+  };
+
+  abRerender = renderPanel;
+  bindAbPanelControls();
+  renderPanel();
+  show(els.resultCard);
+  // The card scrolls internally, and the advanced panel makes it tall enough to
+  // overflow. Focusing the action button would scroll the winner headline out of
+  // view, so keep the scroll pinned to the top and focus without moving it.
+  requestAnimationFrame(() => {
+    els.resultCard.scrollTop = 0;
+    $("res-edit-ab").focus({ preventScroll: true });
+  });
+}
+
+// gentle "try rephrasing" card for an unsupported question (no map reveal)
+function showRephrase(parsed, question) {
+  state.phase = "results";
+  setAsk("idle");
+  els.progress.classList.remove("indeterminate");
+  hide(els.summary);
+  clearTimeout(toastTimer); hide(els.toast);
+  map.clearVerdicts();
+  cleanupBranch();
+
+  const reason = parsed.reason || "I couldn't turn that into a poll for this city.";
+  const examples = (parsed.examples || []).filter(Boolean).slice(0, 4);
+
+  els.resultCard.innerHTML = `
+    <div class="res-q">${escapeHtml(question || "")}</div>
+    <div class="res-rephrase-label">try rephrasing</div>
+    <div class="res-rephrase-reason">${escapeHtml(reason)}</div>
+    ${examples.length ? `<div class="res-examples">
+      ${examples.map((ex) => `<button type="button" class="res-example">${escapeHtml(ex)}</button>`).join("")}
+    </div>` : ""}
+    ${RESULT_ACTIONS}
+  `;
+  show(els.resultCard);
+  // clicking an example pre-fills the composer with it, ready to submit
+  els.resultCard.querySelectorAll(".res-example").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const text = btn.textContent;
+      openInput();
+      requestAnimationFrame(() => { els.askInput.value = text; els.askInput.focus(); autoGrow(); });
+    });
+  });
+  wireResultActions();
+}
+
+// ── misc ─────────────────────────────────────────────────────────────────
+let toastTimer = null;
+function toast(msg) {
+  els.toast.textContent = msg;
+  show(els.toast);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => hide(els.toast), 4200);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+const typingTarget = (el) => el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+
+// ── events ───────────────────────────────────────────────────────────────
+els.ask.addEventListener("click", () => {
+  if (isBusy()) { cancelPrediction(); return; }
+  if (inputOpen()) { els.askInput.focus(); return; }
+  openInput();
+});
+
+// multiline composer: Enter submits, Shift+Enter inserts a newline
+els.askInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runPrediction(els.askInput.value); }
+});
+els.askInput.addEventListener("input", autoGrow);
+
+els.abBtn.addEventListener("click", openAbTest);
+els.abClose.addEventListener("click", () => closeAbTest());
+els.abCancel.addEventListener("click", () => closeAbTest());
+els.abScrim.addEventListener("click", () => closeAbTest());
+els.abForm.addEventListener("submit", (e) => { e.preventDefault(); runAbTest(); });
+
+els.marketingBtn.addEventListener("click", openMarketing);
+els.marketingClose.addEventListener("click", closeOrCancelMarketing);
+els.marketingCancel.addEventListener("click", closeOrCancelMarketing);
+els.marketingScrim.addEventListener("click", closeOrCancelMarketing);
+els.marketingForm.addEventListener("submit", (e) => { e.preventDefault(); runMarketingTest(); });
+
+els.returnBtn.addEventListener("click", () => { map.returnToOverview(); });
+
+// ── character inspector (tap a character when zoomed in) ────────────────────
+const charOpen = () => !els.charCard.classList.contains("hidden");
+function closeCharCard() { stopTyping(); hide(els.charCard); }
+
+// ── typewriter ──
+// After a poll a resident "speaks" their rationale into a speech bubble. Only
+// the visual span animates: the full sentence is on the bubble's aria-label
+// from the first frame, so assistive tech never reads a half-typed string.
+let typeTimer = null;
+const REDUCED_MOTION = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)");
+function stopTyping() {
+  if (typeTimer) { clearInterval(typeTimer); typeTimer = null; }
+}
+function typeInto(el, text, caret) {
+  stopTyping();
+  if (!el) return;
+  if (REDUCED_MOTION?.matches) { el.textContent = text; caret?.remove(); return; }
+  el.textContent = "";
+  // Pace to the sentence: a long rationale still lands in about two seconds,
+  // a short one still reads as typing rather than appearing all at once.
+  const maxDuration = 2000;
+  const minStep = 12;
+  const ticks = Math.min(text.length, Math.max(1, Math.floor(maxDuration / minStep)));
+  const charsPerTick = Math.max(1, Math.ceil(text.length / ticks));
+  const step = Math.min(30, Math.max(minStep, Math.round(maxDuration / ticks)));
+  let i = 0;
+  typeTimer = setInterval(() => {
+    i = Math.min(text.length, i + charsPerTick);
+    el.textContent = text.slice(0, i);
+    if (i >= text.length) { stopTyping(); caret?.remove(); }
+  }, step);
+}
+const RACE_LABEL = { white: "white", black: "Black", asian: "Asian", hispanic: "Latino/Hispanic", pacific: "Pacific Islander", native: "Native American", other_multi: "multiracial" };
+const EDUC_LABEL = { lt_hs: "no HS diploma", hs: "high-school educated", some_college: "some college", bachelors: "bachelor's degree", graduate: "graduate degree" };
+const ISSUE_LABEL = { s_housing: "housing", s_crime: "public safety", s_homeless: "homelessness", s_cost: "cost of living", s_environment: "climate", s_immigration: "immigration" };
+function leanLabel(v, lo, hi) { if (v == null) return null; return v < -0.33 ? lo : v > 0.33 ? hi : null; }
+function topIssues(v, n = 2) {
+  if (!v) return [];
+  return Object.keys(ISSUE_LABEL).map((k) => [ISSUE_LABEL[k], v[k] ?? 0]).sort((a, b) => b[1] - a[1]).slice(0, n).map((x) => x[0]);
+}
+function showCharCard(s) {
+  if (!s || !s.name) return;                 // offline-preview agents have no persona
+  const v = s.values || {};
+  const dem = [s.age != null ? `${s.age}` : null, RACE_LABEL[s.race] || s.race, EDUC_LABEL[s.educ] || s.educ].filter(Boolean).join(" · ");
+  const tags = [leanLabel(v.economic, "economically left", "economically right"), leanLabel(v.social, "socially progressive", "socially conservative")].filter(Boolean);
+  const issues = topIssues(v, 2);
+  const isPoll = s.verdict != null;
+  const label = isPoll ? `leaning ${s.verdict}` : "thinking";
+  const labelClass = isPoll ? (s.verdict === "yes" ? "yes" : "no") : "";
+  const thought = isPoll && s.rationale ? s.rationale : s.thought;
+  const speech = thought || "…";
+  const identity = (extra = "") => `
+    <div class="char-id">
+      <div class="char-name">${escapeHtml(s.name)}</div>
+      <div class="char-sub">${escapeHtml(dem)}${s.hood ? " · " + escapeHtml(s.hood) : ""}</div>
+      ${extra}
+    </div>`;
+  const tagRow = `
+    <div class="char-tags">
+      ${tags.map((t) => `<span class="char-tag">${escapeHtml(t)}</span>`).join("")}
+      ${issues.map((i) => `<span class="char-tag issue">cares about ${escapeHtml(i)}</span>`).join("")}
+    </div>`;
+
+  stopTyping();
+  els.charCard.classList.toggle("char-card--spotlight", isPoll);
+
+  // After a poll the resident is the subject: a big portrait, and the
+  // rationale delivered as speech rather than as a quoted field.
+  els.charCard.innerHTML = isPoll
+    ? `
+      <button id="char-close" class="char-close" aria-label="Close">×</button>
+      <div class="char-speech" role="note" aria-label="${escapeHtml(speech)}">
+        <p class="char-speech-text" aria-hidden="true">
+          <span class="char-speech-ghost">${escapeHtml(speech)}</span>
+          <span class="char-speech-typed"><span id="char-typed"></span><span id="char-caret" class="char-caret"></span></span>
+        </p>
+      </div>
+      <div class="char-head">
+        <canvas id="char-portrait" class="char-portrait" width="96" height="96"></canvas>
+        ${identity(`<span class="char-verdict ${labelClass}">${escapeHtml(label)}</span>`)}
+      </div>
+      ${tagRow}`
+    : `
+      <button id="char-close" class="char-close" aria-label="Close">×</button>
+      <div class="char-head">
+        <canvas id="char-portrait" class="char-portrait" width="46" height="46"></canvas>
+        ${identity()}
+      </div>
+      ${tagRow}
+      <div class="char-think">
+        <div class="char-label ${labelClass}">${label}</div>
+        <div class="char-thought">“${escapeHtml(speech)}”</div>
+      </div>`;
+
+  show(els.charCard);
+  $("char-close").addEventListener("click", closeCharCard);
+  map.drawCharTo($("char-portrait"), s.char);
+  if (isPoll) typeInto($("char-typed"), speech, $("char-caret"));
+}
+map.onSpriteTap = showCharCard;
+map.onEmptyTap = () => { if (charOpen()) { closeCharCard(); return true; } return false; };
+
+// about card (the ? button)
+const aboutOpen = () => !els.about.classList.contains("hidden");
+function openAbout() { show(els.about); show(els.aboutScrim); }
+function closeAbout() { hide(els.about); hide(els.aboutScrim); }
+els.infoBtn.addEventListener("click", openAbout);
+els.aboutClose.addEventListener("click", closeAbout);
+els.aboutScrim.addEventListener("click", closeAbout);
+
+// click outside the dock collapses an open composer
+document.addEventListener("mousedown", (e) => {
+  if (inputOpen() && !els.dock.contains(e.target)) closeInput();
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Tab" && marketingOpen()) {
+    const focusable = [...els.marketingModal.querySelectorAll("button:not([disabled]), textarea:not([disabled])")];
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  } else if (e.key === "Escape") {
+    if (marketingOpen()) {
+      if (isBusy()) cancelPrediction(); else closeMarketing();
+    }
+    else if (abOpen()) closeAbTest();
+    else if (aboutOpen()) closeAbout();
+    else if (charOpen()) closeCharCard();
+    else if (isBusy()) cancelPrediction();
+    else if (state.phase === "results") dismissResults();
+    else if (inputOpen()) closeInput();
+    else if (map.zoomedIn) map.returnToOverview();
+  } else if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    if (!isBusy() && !inputOpen() && !marketingOpen() && !abOpen()) openInput();
+  } else if (e.key === "/" && !isBusy() && !inputOpen() && !marketingOpen() && !abOpen() && !typingTarget(document.activeElement)) {
+    e.preventDefault();
+    openInput();
+  }
+});
+
+// `?abdemo=1` renders a saved A/B response straight into the result card, so the
+// advanced breakdown can be reviewed without spending a model call. Dev affordance
+// only — it never fires unless the flag is present.
+async function showAbDemo() {
+  try {
+    const res = await fetch("fixtures/ab-sample.json");
+    if (!res.ok) throw new Error(`fixture ${res.status}`);
+    showAbResults(await res.json());
+  } catch (err) {
+    console.error(err);
+    toast(`Couldn't load the A/B demo fixture: ${err.message}`);
+  }
+}
+
+boot().then(() => {
+  if (new URLSearchParams(location.search).get("abdemo")) showAbDemo();
+});

@@ -1,0 +1,47 @@
+{
+  "nodes": [
+    {
+      "id": "source_1",
+      "provider": "webhook"
+    },
+    {
+      "id": "prompt_1",
+      "provider": "prompt",
+      "config": {
+        "instructions": [
+          "You are the question router for Sim Francisco. The context contains one JSON request with city, question, model, and output_schema fields. Read the question, apply the output_schema exactly, and return only valid JSON. A synthetic resident panel can answer vote, belief, and options questions; reject single objective facts, private-person questions, incoherent questions, and questions residents could not reasonably answer. Return a neutral restatement and description. For options, include 2-5 options."
+        ]
+      },
+      "input": [
+        {
+          "lane": "text",
+          "from": "source_1"
+        }
+      ]
+    },
+    {
+      "id": "llm_1",
+      "provider": "llm_openai",
+      "config": {
+        "profile": "openai-4o-mini",
+        "apikey": "${OPENAI_API_KEY}"
+      },
+      "input": [
+        {
+          "lane": "questions",
+          "from": "prompt_1"
+        }
+      ]
+    },
+    {
+      "id": "target_1",
+      "provider": "response",
+      "input": [
+        {
+          "lane": "answers",
+          "from": "llm_1"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>sim francisco — predict the city</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23141414' d='M12 2l1.8 5L19 9l-5.2 2L12 16l-1.8-5L5 9l5.2-2z'/%3E%3C/svg%3E" />
+
+  <!-- fonts: Pixelify Sans (title) · Neue Haas Grotesk Display (body, via Typekit) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400..700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://use.typekit.net/bsk0vur.css" />
+
+  <link rel="stylesheet" href="styles.css?v=ui-overhaul-2" />
+  <link rel="preconnect" href="https://sf-digital-twin-tp.fly.dev" />
+</head>
+<body>
+  <!-- the pixel-art city fills the entire page -->
+  <canvas id="map"></canvas>
+
+  <div id="ui">
+    <div class="map-atmosphere" aria-hidden="true">
+      <div class="map-grid"></div>
+      <div class="map-coordinates map-coordinates--west">37° 46′ N</div>
+      <div class="map-coordinates map-coordinates--east">LIVE CIVIC FIELD</div>
+    </div>
+
+    <!-- top-left: the title IS the city switcher — a glass column of city titles -->
+    <div id="title-select" class="title-select">
+      <button id="title-btn" class="title title-btn" type="button"
+              aria-haspopup="listbox" aria-expanded="false" aria-label="Switch city">
+        <span class="title-lockup">
+          <span class="title-kicker">synthetic city / 01</span>
+          <span id="title-current" class="title-current">San Francisco</span>
+        </span>
+        <svg class="title-caret" viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+          <path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"
+                stroke-linejoin="round" d="M6 9l6 6 6-6" />
+        </svg>
+      </button>
+      <div id="title-menu" class="title-menu hidden" role="listbox" aria-label="Cities"></div>
+    </div>
+
+    <!-- simulation status: city · residents · knowledge-clock (top-right) -->
+    <div id="status" class="status">waking the city…</div>
+
+    <!-- fleeting news bubble: the recent headlines that inform the residents -->
+    <div id="news-bubble" class="news-bubble hidden" aria-live="polite"></div>
+
+    <!-- boot progress: a thin line that fills while the city wakes -->
+    <div id="boot" class="boot hidden" aria-hidden="true">
+      <div class="boot-track"><div id="boot-fill" class="boot-fill"></div></div>
+    </div>
+
+    <!-- return-to-overview button (visible only when zoomed in) -->
+    <button id="return" class="return hidden" aria-label="Return to the whole city">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+        <path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"
+              d="M15 5l-7 7 7 7" />
+      </svg>
+      <span>whole city</span>
+    </button>
+
+    <!-- bottom-center dock: query progress · result card · composer row (ask + info) -->
+    <div id="dock" class="dock">
+      <!-- query summary + response progress (loading state, bottom-center) -->
+      <div id="summary" class="summary hidden" aria-live="polite">
+        <div id="summary-label" class="summary-label">PREDICTING</div>
+        <div id="summary-text" class="summary-text"></div>
+        <div id="progress" class="progress">
+          <div class="progress-track"><div id="progress-fill" class="progress-fill"></div></div>
+          <div id="progress-label" class="progress-label"></div>
+        </div>
+      </div>
+
+      <div id="result-card" class="result-card hidden" role="dialog" aria-modal="false" aria-label="Prediction result"></div>
+
+      <div class="dock-row">
+        <div class="dock-tools">
+          <button id="marketing-btn" class="info-btn marketing-btn" type="button"
+                  aria-label="Test planned marketing" title="Marketing impact">
+            <!-- megaphone: horn + handle only. The previous glyph carried
+                 sound-dashes that collapsed into mush at icon size. -->
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+              <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"
+                    d="m3 11 18-5v12L3 13z" />
+              <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"
+                    d="M11.6 16.8a3 3 0 1 1-5.8-1.6" />
+            </svg>
+          </button>
+          <button id="ab-btn" class="info-btn ab-btn" aria-label="Test two variants" title="A/B test">A/B</button>
+        </div>
+        <div id="ask" class="ask" data-state="idle">
+          <svg class="ask-search" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <circle cx="10.5" cy="10.5" r="6" fill="none" stroke="currentColor" stroke-width="2" />
+            <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M15 15l4.5 4.5" />
+          </svg>
+          <span id="ask-label" class="ask-label">ask</span>
+          <textarea id="ask-input" class="ask-input" rows="1" autocomplete="off" spellcheck="false"
+                    placeholder="predict anything — e.g. will a Democrat win the 2026 California governor race?"
+                    aria-label="Predict anything"></textarea>
+          <kbd class="ask-enter" aria-hidden="true">↵</kbd>
+        </div>
+        <div class="dock-tools dock-tools--balance">
+          <button id="info-btn" class="info-btn" aria-label="About simit" title="About">?</button>
+          <span class="dock-tool-spacer" aria-hidden="true"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- A/B test: compare two text variants across weighted demographic groups -->
+    <div id="ab-scrim" class="about-scrim hidden"></div>
+    <div id="ab-modal" class="about ab-modal hidden" role="dialog" aria-modal="true" aria-labelledby="ab-title">
+      <button id="ab-close" class="about-close" aria-label="Close A/B test">×</button>
+      <div id="ab-title" class="about-title">test A/B</div>
+      <div class="about-sub">See which synthetic demographic groups prefer each version.</div>
+      <form id="ab-form" class="ab-form">
+        <label for="ab-question">Evaluation question</label>
+        <textarea id="ab-question" rows="2" maxlength="500" required placeholder="Which message makes you more likely to support this proposal?"></textarea>
+        <label for="ab-a">Variant A</label>
+        <textarea id="ab-a" rows="4" maxlength="4000" required placeholder="Paste version A"></textarea>
+        <label for="ab-b">Variant B</label>
+        <textarea id="ab-b" rows="4" maxlength="4000" required placeholder="Paste version B"></textarea>
+        <div id="ab-error" class="ab-error" role="alert"></div>
+        <div class="res-actions">
+          <button class="btn btn-primary" type="submit">Run test</button>
+          <button id="ab-cancel" class="btn" type="button">Cancel</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- planned-marketing counterfactual: universal simulated exposure, not reach -->
+    <div id="marketing-scrim" class="about-scrim hidden"></div>
+    <div id="marketing-modal" class="about marketing-modal hidden" role="dialog" aria-modal="true"
+         aria-labelledby="marketing-title" aria-describedby="marketing-note">
+      <button id="marketing-close" class="about-close" type="button" aria-label="Close marketing test">×</button>
+      <div id="marketing-title" class="about-title">test marketing impact</div>
+      <p id="marketing-note" class="about-sub marketing-note">Compare baseline support with a simulated scenario where every sampled resident sees your exact planned post. This does not estimate organic reach, delivery, or frequency.</p>
+      <form id="marketing-form" class="ab-form marketing-form">
+        <label for="marketing-question">Target question</label>
+        <textarea id="marketing-question" rows="2" maxlength="500" required
+                  placeholder="Do you support the proposed transit measure?"></textarea>
+        <label for="marketing-copy">Planned post copy</label>
+        <textarea id="marketing-copy" rows="6" maxlength="4000" required
+                  placeholder="Paste the exact post you plan to publish."></textarea>
+        <div class="marketing-limit">Up to 4,000 characters</div>
+        <div id="marketing-error" class="ab-error" role="alert" tabindex="-1"></div>
+        <div class="res-actions">
+          <button id="marketing-submit" class="btn btn-primary" type="submit">Run simulated exposure</button>
+          <button id="marketing-cancel" class="btn" type="button">Cancel</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- about card (opened by the ? button) -->
+    <div id="about-scrim" class="about-scrim hidden"></div>
+    <div id="about" class="about hidden" role="dialog" aria-modal="true" aria-label="About simit">
+      <button id="about-close" class="about-close" aria-label="Close">×</button>
+      <div class="about-title">simit</div>
+      <div class="about-sub">simulate and predict our golden city and beyond</div>
+
+      <div class="about-h">The pitch</div>
+      <p>What if you could predict how your customers responded to releases before they went out into the real world? Or if you could get a signal on who will win an election?</p>
+      <p>We simulated the population of San Francisco distributed across real US Census data and achieved near-parity with these types of real-world events.</p>
+      <p>It now spans <b>five US cities</b> — San Francisco plus <b>New York City</b>, <b>Los Angeles</b>, <b>Chicago</b>, and <b>Miami</b> — each its own Census-sampled population. Switch between them from the title in the top-left.</p>
+
+      <div class="about-h">Historically predictive</div>
+      <p>How do we know if our simulation of SF is accurate? The honest test needs a model whose knowledge cutoff <i>predates</i> the event, so it can't have just memorized the outcome. The older Claude models with a 2023 cutoff have since been <b>retired</b> — so for this leakage-free backtest we ran <b>GPT-4o</b> (knowledge cutoff <b>October 2023</b>) and asked the twin city to predict results it had never seen. (The live app you're using runs the current <b>Claude Sonnet 4.6</b>.)</p>
+
+      <div class="about-ex">
+        <div class="about-ex-title"><i>2024 Presidency</i></div>
+        <div class="about-ex-q">In November 2024 do you vote for the Democratic presidential ticket (Harris) over the Republican (Trump)?</div>
+        <div class="about-ex-nums"><span class="actual">Actual: 83.8% Dem</span><span class="pred">Predicted: 81.3% Dem</span></div>
+      </div>
+
+      <div class="about-ex">
+        <div class="about-ex-title"><i>March 2024 · Proposition A</i></div>
+        <div class="about-ex-q">There's a measure on your March ballot, Proposition A, that would let the City borrow up to $300 million through general obligation bonds to build and preserve affordable housing — for low-income families, seniors, and working residents. It's backed by Mayor Breed and would need a two-thirds supermajority to pass. Are you voting yes or no?</div>
+        <div class="about-ex-nums"><span class="actual">Actual: 70.38% yes</span><span class="pred">Predicted: 70% yes</span></div>
+      </div>
+
+      <div class="about-h">The future</div>
+      <p>All of decision-making is predicated on our understanding of causality. How will the choices we make influence the world? How will people react?</p>
+      <p>To enable (first) SF, and then the world, to understand the causal nature of reality, we present <span class="about-name">simit</span>.</p>
+
+      <div class="about-credit">
+        Built by <b>Nandan Pericherla</b>, <b>Abhay Sudhir</b>, and <b>Mahin Bharathwaj</b>.
+      </div>
+    </div>
+
+    <!-- character inspector (tap a character when zoomed in) -->
+    <div id="char-card" class="char-card hidden" role="dialog" aria-label="Resident details"></div>
+
+    <div id="toast" class="toast hidden" role="alert" aria-live="assertive"></div>
+  </div>
+
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>
