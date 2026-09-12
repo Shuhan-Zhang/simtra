@@ -33,6 +33,14 @@ async fn neo4j_memory_roundtrip() {
     mem.ensure_population(&pop).await.unwrap();
 
     // city-wide event: every persona in sf remembers it
+    // A crashed earlier run can leave same-day filler events behind; they would push
+    // this run's event out of the recall cap, so clear them first.
+    mem.run(&[(
+        "MATCH (e:Event) WHERE e.text STARTS WITH 'Same-day filler event' DETACH DELETE e",
+        serde_json::json!({}),
+    )])
+    .await
+    .unwrap();
     let ev = mem
         .add_city_event("sf", "news", EVENT_TEXT, "2026-09-10")
         .await
