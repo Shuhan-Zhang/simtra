@@ -1717,11 +1717,10 @@ async fn parse_question_handler(
         .get(&city)
         .map(|r| r.profile.prompt_name.clone())
         .unwrap_or_else(|| "this city".to_string());
-    let model = Model::parse(
-        req.get("model")
-            .and_then(|x| x.as_str())
-            .unwrap_or("claude-sonnet-4-6"),
-    );
+    let model = match req.get("model").and_then(|x| x.as_str()) {
+        Some(m) if !m.trim().is_empty() => Model::parse(m),
+        _ => crate::predict::default_live_model(),
+    };
     let parsed = if let Some(rocketride) = &st.rocketride {
         match rocketride.parse_question(&name, &raw, model).await {
             Ok(parsed) => parsed,

@@ -54,10 +54,16 @@ The simulator polls a demographically-accurate panel of {city} residents and sup
   - belief: a yes/no probability about an external event or outcome the residents would forecast.\n\
   - options: a choice among 2 or more named options. Use this for multi-candidate races AND for any \
 non-political lifestyle/preference question (favorite cuisine, commute mode, weekend activity, where to live, etc.).\n\n\
+Business, product, pricing and marketing scenarios ARE supported: the panel is the market. A question like \
+\"what if I raise the price of my burrito bowls by 20%\" or \"should we open on Sundays\" must be answered as how \
+residents would respond as customers or the public: reframe it as a consumer-reaction question and use the \
+options framing with a sensible response set (e.g. keep buying as usual / buy less often / switch to a rival / \
+stop buying), or vote/belief when the scenario is naturally yes/no. Never reject a question merely because it is \
+hypothetical, first-person, or about a specific company, product, price, policy or event.\n\n\
 Given the user's raw question, decide if a population panel can answer it. If yes, return a NEUTRAL, \
 unbiased restatement, a short neutral one-sentence description, and — for the options framing — the list \
 of options (invent a sensible 2-5 option set if the user implied a choice but didn't enumerate it). \
-If it cannot be answered by a panel (asks for a single objective fact, targets one named private individual, \
+Only mark it unsupported when it truly cannot be answered by a panel (asks for a single objective fact, targets one named private individual, \
 is incoherent, or needs information residents wouldn't have), mark it unsupported and give 2-3 example \
 phrasings that WOULD work for {city}.\n\n\
 Return STRICT JSON only, no prose:\n\
@@ -67,10 +73,13 @@ or {{\"supported\":false,\"reason\":\"...\",\"examples\":[\"...\",\"...\"]}}"
     let user = format!("City: {city}\nUser question: {raw}");
     match client.complete(model, &sys, &user, 700).await {
         Ok(text) => from_json(&text, city),
-        Err(_) => ParsedQuestion::unsupported(
-            "The router could not reach the model to parse this question.",
-            default_examples(city),
-        ),
+        Err(e) => {
+            tracing::warn!("question router model call failed: {e:#}");
+            ParsedQuestion::unsupported(
+                "The router could not reach the model to parse this question.",
+                default_examples(city),
+            )
+        }
     }
 }
 
