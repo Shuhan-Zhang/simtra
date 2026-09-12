@@ -7,8 +7,8 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23141414' d='M12 2l1.8 5L19 9l-5.2 2L12 16l-1.8-5L5 9l5.2-2z'/%3E%3C/svg%3E" />
 
   <!-- fonts: Pixelify Sans (title) · Neue Haas Grotesk Display (body, via Typekit); skipped in ?demo=1 -->
-  <link rel="stylesheet" href="styles.css?v=persona-2" />
-  <link rel="stylesheet" href="feedpanel.css?v=6" />
+  <link rel="stylesheet" href="styles.css?v=ux-3" />
+  <link rel="stylesheet" href="feedpanel.css?v=8" />
   <script>
     if (new URLSearchParams(location.search).get("demo") !== "1") {
       for (const href of ["https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400..700&display=swap", "https://use.typekit.net/bsk0vur.css"]) {
@@ -84,88 +84,65 @@
 
       <div id="result-card" class="result-card hidden" role="dialog" aria-modal="false" aria-label="Prediction result"></div>
 
+      <!-- audience confirmation after filters are applied: a plain card, not a warning -->
+      <div id="audience-card" class="audience-card hidden" role="status" aria-live="polite">
+        <div class="audience-card-kicker">Audience</div>
+        <div id="audience-card-title" class="audience-card-title"></div>
+        <div id="audience-card-meta" class="audience-card-meta"></div>
+        <button id="audience-card-done" class="btn btn-primary" type="button">Done</button>
+      </div>
+
       <div class="dock-row">
-        <div class="dock-tools">
-          <button id="marketing-btn" class="info-btn marketing-btn" type="button"
-                  aria-label="Test planned marketing" title="Marketing impact">
-            <!-- megaphone: horn + handle only. The previous glyph carried
-                 sound-dashes that collapsed into mush at icon size. -->
-            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-              <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"
-                    d="m3 11 18-5v12L3 13z" />
-              <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"
-                    d="M11.6 16.8a3 3 0 1 1-5.8-1.6" />
+        <div id="ask" class="ask" data-state="idle" data-mode="predict" tabindex="0" role="group" aria-label="Ask a prediction question">
+          <div class="ask-main">
+            <!-- who gets asked: opens the resident filters; reads the active audience -->
+            <button id="audience-chip" class="audience-chip" type="button" aria-pressed="false"
+                    title="Filter residents" aria-label="Filter residents">
+              <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+                <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                      d="M4 5h16l-6.4 7.2v5.1L10 19v-6.8z" />
+              </svg>
+              <span id="audience-chip-text">Everyone</span>
+              <span id="audience-chip-count" class="audience-chip-count hidden"></span>
+            </button>
+            <svg class="ask-search" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <circle cx="10.5" cy="10.5" r="6" fill="none" stroke="currentColor" stroke-width="2" />
+              <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M15 15l4.5 4.5" />
             </svg>
-          </button>
-          <button id="ab-btn" class="info-btn ab-btn" aria-label="Test two variants" title="A/B test">A/B</button>
-        </div>
-        <div id="ask" class="ask" data-state="idle" tabindex="0" role="group" aria-label="Ask a prediction question">
-          <svg class="ask-search" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-            <circle cx="10.5" cy="10.5" r="6" fill="none" stroke="currentColor" stroke-width="2" />
-            <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M15 15l4.5 4.5" />
-          </svg>
-          <span id="ask-label" class="ask-label">ask</span>
-          <textarea id="ask-input" class="ask-input" rows="1" autocomplete="off" spellcheck="false"
-                    placeholder="predict anything — e.g. will a Democrat win the 2026 California governor race?"
-                    aria-label="Predict anything"></textarea>
-          <button id="ask-submit" class="ask-submit" type="button" aria-label="Submit question">Submit</button>
+            <span id="ask-label" class="ask-label">ask</span>
+            <textarea id="ask-input" class="ask-input" rows="1" autocomplete="off" spellcheck="false"
+                      placeholder="predict anything — e.g. will a Democrat win the 2026 California governor race?"
+                      aria-label="Predict anything"></textarea>
+            <button id="ask-submit" class="ask-send" type="button" aria-label="Send">
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                      d="M21 3 10.5 13.5M21 3l-7 18-3.5-7.5L3 10z" />
+              </svg>
+            </button>
+          </div>
+          <!-- question type + the extra fields each type needs; shown while composing -->
+          <div class="ask-extra">
+            <div class="ask-modes" role="radiogroup" aria-label="Question type">
+              <button type="button" class="ask-mode" role="radio" data-mode="predict" aria-checked="true">Predict</button>
+              <button type="button" class="ask-mode" role="radio" data-mode="ab" aria-checked="false">A/B</button>
+              <button type="button" class="ask-mode" role="radio" data-mode="marketing" aria-checked="false">Post test</button>
+            </div>
+            <div id="ab-fields" class="ask-fields" hidden>
+              <textarea id="ab-a" class="ask-field" rows="2" maxlength="4000" placeholder="Variant A" aria-label="Variant A"></textarea>
+              <textarea id="ab-b" class="ask-field" rows="2" maxlength="4000" placeholder="Variant B" aria-label="Variant B"></textarea>
+            </div>
+            <div id="marketing-fields" class="ask-fields" hidden>
+              <textarea id="marketing-copy" class="ask-field" rows="3" maxlength="4000"
+                        placeholder="Paste the exact post you plan to publish; every resident will see it"
+                        aria-label="Planned post copy"></textarea>
+            </div>
+            <div id="ask-error" class="ask-error" role="alert" tabindex="-1"></div>
+          </div>
         </div>
         <div class="dock-tools dock-tools--balance">
-          <button id="filter-btn" class="info-btn filter-btn" type="button"
-                  aria-label="Filter residents" aria-pressed="false" title="Filter residents">
-            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-              <path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"
-                    d="M4 5h16l-6.4 7.2v5.1L10 19v-6.8z" />
-            </svg>
-            <span id="filter-count" class="filter-count hidden" aria-hidden="true"></span>
-          </button>
           <button id="info-btn" class="info-btn" aria-label="About simit" title="About">?</button>
         </div>
       </div>
-    </div>
-
-    <!-- A/B test: compare two text variants across weighted demographic groups -->
-    <div id="ab-scrim" class="about-scrim hidden"></div>
-    <div id="ab-modal" class="about ab-modal hidden" role="dialog" aria-modal="true" aria-labelledby="ab-title">
-      <button id="ab-close" class="about-close" aria-label="Close A/B test">×</button>
-      <div id="ab-title" class="about-title">test A/B</div>
-      <div class="about-sub">See which synthetic demographic groups prefer each version.</div>
-      <form id="ab-form" class="ab-form">
-        <label for="ab-question">Evaluation question</label>
-        <textarea id="ab-question" rows="2" maxlength="500" required placeholder="Which message makes you more likely to support this proposal?"></textarea>
-        <label for="ab-a">Variant A</label>
-        <textarea id="ab-a" rows="4" maxlength="4000" required placeholder="Paste version A"></textarea>
-        <label for="ab-b">Variant B</label>
-        <textarea id="ab-b" rows="4" maxlength="4000" required placeholder="Paste version B"></textarea>
-        <div id="ab-error" class="ab-error" role="alert"></div>
-        <div class="res-actions">
-          <button class="btn btn-primary" type="submit">Run test</button>
-          <button id="ab-cancel" class="btn" type="button">Cancel</button>
-        </div>
-      </form>
-    </div>
-
-    <!-- planned-marketing counterfactual: universal simulated exposure, not reach -->
-    <div id="marketing-scrim" class="about-scrim hidden"></div>
-    <div id="marketing-modal" class="about marketing-modal hidden" role="dialog" aria-modal="true"
-         aria-labelledby="marketing-title" aria-describedby="marketing-note">
-      <button id="marketing-close" class="about-close" type="button" aria-label="Close marketing test">×</button>
-      <div id="marketing-title" class="about-title">test marketing impact</div>
-      <p id="marketing-note" class="about-sub marketing-note">Compare baseline support with a simulated scenario where every sampled resident sees your exact planned post. This does not estimate organic reach, delivery, or frequency.</p>
-      <form id="marketing-form" class="ab-form marketing-form">
-        <label for="marketing-question">Target question</label>
-        <textarea id="marketing-question" rows="2" maxlength="500" required
-                  placeholder="Do you support the proposed transit measure?"></textarea>
-        <label for="marketing-copy">Planned post copy</label>
-        <textarea id="marketing-copy" rows="6" maxlength="4000" required
-                  placeholder="Paste the exact post you plan to publish."></textarea>
-        <div class="marketing-limit">Up to 4,000 characters</div>
-        <div id="marketing-error" class="ab-error" role="alert" tabindex="-1"></div>
-        <div class="res-actions">
-          <button id="marketing-submit" class="btn btn-primary" type="submit">Run simulated exposure</button>
-          <button id="marketing-cancel" class="btn" type="button">Cancel</button>
-        </div>
-      </form>
     </div>
 
     <!-- population filters: every selected trait is combined before sampling -->
@@ -277,6 +254,6 @@
     <div id="toast" class="toast hidden" role="alert" aria-live="assertive"></div>
   </div>
 
-  <script type="module" src="src/app.js?v=persona-5"></script>
+  <script type="module" src="src/app.js?v=ux-3"></script>
 </body>
 </html>

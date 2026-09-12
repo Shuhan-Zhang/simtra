@@ -21,7 +21,7 @@ import { buildEvidenceChartModel } from "./evidence-chart.js";
 import { createPersonaChart, answerLabel } from "./persona-chart.js?v=3";
 import { buildVerifiedDataModel, renderVerifiedData, bindVerifiedData, reduceVerifiedSelection, verifiedMapSelection } from "./verified-data.js";
 import { snapshotAudience, describeAudience, audienceHeader, audienceScope } from "./audience.js";
-import { initFeedPanel, refreshFeedPanel, lineageItems } from "./feedpanel.js?v=7";
+import { initFeedPanel, refreshFeedPanel, lineageItems } from "./feedpanel.js?v=8";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -48,28 +48,22 @@ const els = {
   askLabel: $("ask-label"),
   resultCard: $("result-card"),
   toast: $("toast"),
-  abBtn: $("ab-btn"),
-  abModal: $("ab-modal"),
-  abScrim: $("ab-scrim"),
-  abClose: $("ab-close"),
-  abCancel: $("ab-cancel"),
-  abForm: $("ab-form"),
-  abQuestion: $("ab-question"),
+  askSubmit: $("ask-submit"),
+  askExtra: document.querySelector(".ask-extra"),
+  askModes: document.querySelector(".ask-modes"),
+  askError: $("ask-error"),
+  abFields: $("ab-fields"),
   abA: $("ab-a"),
   abB: $("ab-b"),
-  abError: $("ab-error"),
-  marketingBtn: $("marketing-btn"),
-  marketingModal: $("marketing-modal"),
-  marketingScrim: $("marketing-scrim"),
-  marketingClose: $("marketing-close"),
-  marketingCancel: $("marketing-cancel"),
-  marketingForm: $("marketing-form"),
-  marketingQuestion: $("marketing-question"),
+  marketingFields: $("marketing-fields"),
   marketingCopy: $("marketing-copy"),
-  marketingError: $("marketing-error"),
-  marketingSubmit: $("marketing-submit"),
-  filterBtn: $("filter-btn"),
-  filterCount: $("filter-count"),
+  audienceChip: $("audience-chip"),
+  audienceChipText: $("audience-chip-text"),
+  audienceChipCount: $("audience-chip-count"),
+  audienceCard: $("audience-card"),
+  audienceCardTitle: $("audience-card-title"),
+  audienceCardMeta: $("audience-card-meta"),
+  audienceCardDone: $("audience-card-done"),
   filterModal: $("filter-modal"),
   filterScrim: $("filter-scrim"),
   filterClose: $("filter-close"),
@@ -96,7 +90,7 @@ const show = (el) => el.classList.remove("hidden");
 const hide = (el) => el.classList.add("hidden");
 
 export const state = {
-  phase: "booting", queryMode: "simulation",
+  phase: "booting", queryMode: "simulation", askMode: "predict",
   simId: null, mainBranch: null, branchId: null,
   lastResult: null, lastAbInput: null, lastMarketingInput: null, reqId: 0, abort: null,
   residents: SIM.n, rawResidents: [],
@@ -176,12 +170,21 @@ function filterSummary(filters = state.filters) {
 }
 function syncFilterButton() {
   const count = filterCount();
-  els.filterBtn.setAttribute("aria-pressed", count ? "true" : "false");
-  els.filterBtn.disabled = state.switching || state.phase === "booting" || state.phase === "error";
-  els.filterBtn.title = count ? `Filtered: ${filterSummary()}` : "Filter residents";
-  els.filterBtn.setAttribute("aria-label", els.filterBtn.title);
-  els.filterCount.textContent = String(count);
-  count ? show(els.filterCount) : hide(els.filterCount);
+  const chip = els.audienceChip;
+  els.ask.classList.toggle("has-audience", count > 0);
+  chip.setAttribute("aria-pressed", count ? "true" : "false");
+  chip.disabled = state.switching || state.phase === "booting" || state.phase === "error";
+  const summary = count ? filterSummary() : "";
+  els.audienceChipText.textContent = count ? summary : "Everyone";
+  const source = state.filterSourceRecords;
+  if (count && source != null) {
+    els.audienceChipCount.textContent = source.toLocaleString();
+    show(els.audienceChipCount);
+  } else {
+    hide(els.audienceChipCount);
+  }
+  chip.title = count ? `Asking ${summary} · ${source != null ? source.toLocaleString() + " Census records" : "filtered sample"} · change filters` : "Everyone in the city · filter residents";
+  chip.setAttribute("aria-label", chip.title);
   els.returnBtn.querySelector("span").textContent = count ? "audience overview" : "whole city";
   els.returnBtn.setAttribute("aria-label", count ? "Return to the sampled audience overview" : "Return to the whole city");
 }
@@ -202,9 +205,31 @@ map.onNeedChatter = requestChatter;
 const isBusy = () => state.phase === "waiting" || state.phase === "reveal";
 const inputOpen = () => els.ask.dataset.state === "input";
 
+const ASK_MODE_LABEL = { predict: "ask", ab: "A/B test", marketing: "post test" };
+const ASK_MODE_PLACEHOLDER = {
+  predict: "predict anything — e.g. will a Democrat win the 2026 California governor race?",
+  ab: "Which message makes you more likely to support this proposal?",
+  marketing: "Do you support the proposed transit measure?",
+};
 function setAsk(s) {
   els.ask.dataset.state = s;
-  els.askLabel.textContent = s === "busy" ? (state.queryMode === "verified" ? "querying data…" : "predicting…") : "ask";
+  els.askLabel.textContent = s === "busy"
+    ? (state.queryMode === "verified" ? "querying data…" : state.askMode === "ab" ? "testing A/B…" : state.askMode === "marketing" ? "testing the post…" : "predicting…")
+    : ASK_MODE_LABEL[state.askMode] || "ask";
+}
+
+// One composer, three question types. The type row lives inside the box, so
+// switching never leaves the place the question is typed.
+function setAskMode(mode) {
+  state.askMode = mode;
+  els.ask.dataset.mode = mode;
+  for (const b of els.askModes.querySelectorAll(".ask-mode")) b.setAttribute("aria-checked", b.dataset.mode === mode ? "true" : "false");
+  els.abFields.hidden = mode !== "ab";
+  els.marketingFields.hidden = mode !== "marketing";
+  els.askInput.placeholder = ASK_MODE_PLACEHOLDER[mode];
+  els.askInput.setAttribute("aria-label", mode === "ab" ? "Evaluation question" : mode === "marketing" ? "Target question" : "Predict anything");
+  els.askError.textContent = "";
+  if (els.ask.dataset.state !== "busy") setAsk(els.ask.dataset.state);
 }
 
 function cleanupBranch() {
@@ -746,11 +771,9 @@ function openFilters() {
     toast("Resident filters need the backend — it's currently unreachable.");
     return;
   }
-  closeInput();
   closeCharCard();
-  if (abOpen()) closeAbTest(false);
-  if (marketingOpen()) closeMarketing(false);
-  filterPreviousFocus = document.activeElement;
+  hideAudienceCard();
+  filterPreviousFocus = els.audienceChip;
   writeFilterForm();
   setFilterError("");
   setFilterBusy(false);
@@ -797,15 +820,7 @@ async function applyPopulationFilters(filters) {
   try {
     const sim = await loadCity(state.city, { filters: requested, preserveOnError: true });
     closeFilters(false);
-    const count = filterCount(requested);
-    if (count) {
-      const source = sim?.source_records;
-      toast(source
-        ? `Filtered sample ready · ${source.toLocaleString()} Census ${source === 1 ? "record" : "records"} matched`
-        : "Filtered sample ready");
-    } else {
-      toast("Showing the whole city.");
-    }
+    showAudienceCard(sim, requested);
   } catch (err) {
     state.filters = previousFilters;
     state.filterSourceRecords = previousSourceRecords;
@@ -820,7 +835,31 @@ async function applyPopulationFilters(filters) {
   }
 }
 
-els.filterBtn.addEventListener("click", openFilters);
+// The audience card confirms who will be asked from now on. It is a plain
+// card in the dock, dismissed by Done or on its own after a moment.
+let audienceCardTimer = null;
+function showAudienceCard(sim, filters) {
+  const info = describeAudience(currentAudience());
+  const count = filterCount(filters);
+  const qual = info.qualification ? ` ${info.qualification[0].toLowerCase()}${info.qualification.slice(1)}` : "";
+  els.audienceCardTitle.textContent = count
+    ? `${info.title}${qual}`
+    : `Everyone in ${state.city?.display || "the city"}`;
+  const source = sim?.source_records ?? state.filterSourceRecords;
+  els.audienceCardMeta.textContent = [
+    info.location,
+    `${(state.residents || 0).toLocaleString()} simulated residents`,
+    source != null ? `${source.toLocaleString()} Census ${source === 1 ? "record" : "records"}` : null,
+  ].filter(Boolean).join(" · ");
+  show(els.audienceCard);
+  clearTimeout(audienceCardTimer);
+  audienceCardTimer = setTimeout(hideAudienceCard, 9000);
+  requestAnimationFrame(() => els.audienceCardDone.focus({ preventScroll: true }));
+}
+function hideAudienceCard() { clearTimeout(audienceCardTimer); hide(els.audienceCard); }
+els.audienceCardDone.addEventListener("click", () => { hideAudienceCard(); els.audienceChip.focus(); });
+els.audienceChip.addEventListener("click", (e) => { e.stopPropagation(); openFilters(); });
+els.audienceChip.addEventListener("keydown", (e) => e.stopPropagation());
 els.filterClose.addEventListener("click", () => closeFilters());
 els.filterScrim.addEventListener("click", () => closeFilters());
 els.filterForm.addEventListener("submit", (e) => {
@@ -845,9 +884,8 @@ async function onSelectCity(slug) {
   els.progress.classList.remove("indeterminate");
   cleanupBranch();
   closeCharCard();
-  if (abOpen()) closeAbTest(false);
-  if (marketingOpen()) closeMarketing(false);
   if (filterOpen()) closeFilters(false);
+  hideAudienceCard();
   hide(els.summary); hide(els.resultCard);
   if (inputOpen()) closeInput();
 
@@ -903,19 +941,27 @@ function autoGrow() {
   }
 }
 
-function openInput() {
+function openInput({ mode = "predict", preserve = false } = {}) {
   if (isBusy() || state.phase === "booting" || state.switching) return;
   if (state.queryMode !== "verified" && (state.phase === "error" || !state.simId)) { toast("Predictions need the backend — it's currently unreachable."); return; }
   cleanupBranch();
   map.clearVerdicts();
   closeCharCard();
+  hideAudienceCard();
   hide(els.summary);
   hide(els.resultCard);
+  setAskMode(mode);
   els.askInput.value = ""; els.askInput.style.height = LINE_H + "px";
+  if (!preserve) { els.abA.value = ""; els.abB.value = ""; els.marketingCopy.value = ""; }
+  else if (mode === "ab" && state.lastAbInput) {
+    els.askInput.value = state.lastAbInput.question; els.abA.value = state.lastAbInput.variant_a; els.abB.value = state.lastAbInput.variant_b;
+  } else if (mode === "marketing" && state.lastMarketingInput) {
+    els.askInput.value = state.lastMarketingInput.question; els.marketingCopy.value = state.lastMarketingInput.marketingText;
+  }
   setAsk("input");
   state.phase = "idle";
   setIdleStatus();
-  requestAnimationFrame(() => { if (inputOpen()) els.askInput.focus(); });
+  requestAnimationFrame(() => { if (inputOpen()) { autoGrow(); els.askInput.focus(); } });
 }
 
 function closeInput() {
@@ -924,6 +970,17 @@ function closeInput() {
   els.askInput.value = "";
   els.askInput.style.height = LINE_H + "px";
   els.askInput.blur();
+  els.askError.textContent = "";
+  setComposerBusy(false);
+  setAskMode("predict");
+}
+
+// While an A/B or post test runs, the composer's extra fields stay put but
+// cannot be edited; the send button doubles as the busy indicator.
+function setComposerBusy(busy) {
+  els.ask.setAttribute("aria-busy", busy ? "true" : "false");
+  for (const f of [els.askInput, els.abA, els.abB, els.marketingCopy]) f.disabled = busy;
+  els.askSubmit.disabled = busy;
 }
 
 function dismissResults() {
@@ -941,6 +998,7 @@ function dismissResults() {
 
 function cancelPrediction() {
   state.queryMode = "simulation";
+  setComposerBusy(false);
   state.reqId++;
   if (state.abort) { state.abort.abort(); state.abort = null; }
   map.onProgress = null; map.onRevealComplete = null;
@@ -1045,6 +1103,8 @@ function looksLikeVerifiedQuestion(question) {
 async function runPrediction(question) {
   question = (question || "").trim();
   if (!question) return;
+  if (state.askMode === "ab") return runAbTest();
+  if (state.askMode === "marketing") return runMarketingTest();
   if (looksLikeVerifiedQuestion(question)) return runVerifiedQuery(question);
   state.queryMode = "simulation";
   if (state.phase === "error" || !state.simId) { toast("Predictions need the backend — it's currently unreachable."); return; }
@@ -1135,64 +1195,33 @@ async function runPrediction(question) {
   }
 }
 
-let marketingPreviousFocus = null;
-const marketingOpen = () => !els.marketingModal.classList.contains("hidden");
+const marketingOpen = () => inputOpen() && state.askMode === "marketing";
 
 function setMarketingError(message) {
-  els.marketingError.textContent = message || "";
-  if (message) els.marketingError.focus();
+  els.askError.textContent = message || "";
+  if (message) { if (!inputOpen()) openInput({ mode: "marketing", preserve: true }); els.askError.focus(); }
 }
 
-function setMarketingBusy(busy, label = "Reading target…") {
-  els.marketingForm.setAttribute("aria-busy", busy ? "true" : "false");
-  els.marketingQuestion.disabled = busy;
-  els.marketingCopy.disabled = busy;
-  els.marketingSubmit.disabled = busy;
-  els.marketingSubmit.textContent = busy ? label : "Run simulated exposure";
-  els.marketingCancel.textContent = busy ? "Cancel test" : "Cancel";
+function setMarketingBusy(busy, label = "reading target…") {
+  setComposerBusy(busy);
+  if (busy) els.askLabel.textContent = label;
 }
 
 function openMarketing({ preserve = false } = {}) {
   if (isBusy()) return;
-  if (state.phase === "error" || !state.mainBranch) { toast("Marketing tests need the backend — it's currently unreachable."); return; }
-  closeInput();
-  closeCharCard();
+  if (state.phase === "error" || !state.mainBranch) { toast("Post tests need the backend — it's currently unreachable."); return; }
   resetEvidence();
-  marketingPreviousFocus = document.activeElement;
-  setMarketingError("");
-  setMarketingBusy(false);
-  if (!preserve || !state.lastMarketingInput) {
-    els.marketingForm.reset();
-  } else {
-    els.marketingQuestion.value = state.lastMarketingInput.question;
-    els.marketingCopy.value = state.lastMarketingInput.marketingText;
-  }
-  els.ask.dataset.mode = "marketing";
-  els.askLabel.textContent = "marketing test";
-  show(els.marketingScrim);
-  show(els.marketingModal);
-  requestAnimationFrame(() => els.marketingQuestion.focus());
+  openInput({ mode: "marketing", preserve });
 }
 
 function closeMarketing(restoreFocus = true) {
-  clearEvidenceSelection();
-  hide(els.marketingModal);
-  hide(els.marketingScrim);
-  delete els.ask.dataset.mode;
-  els.askLabel.textContent = els.ask.dataset.state === "busy" ? "predicting…" : "ask";
-  setMarketingBusy(false);
-  setMarketingError("");
-  if (restoreFocus && marketingPreviousFocus?.focus) marketingPreviousFocus.focus();
-}
-
-function closeOrCancelMarketing() {
-  if (isBusy()) cancelPrediction();
-  else closeMarketing();
+  closeInput();
+  if (restoreFocus) els.ask.focus();
 }
 
 async function runMarketingTest() {
   const input = {
-    question: els.marketingQuestion.value.trim(),
+    question: els.askInput.value.trim(),
     marketingText: els.marketingCopy.value,
   };
   if (!input.question) { setMarketingError("Enter the yes/no question whose support you want to measure."); return; }
@@ -1304,59 +1333,50 @@ async function runMarketingTest() {
   }
 }
 
-let abPreviousFocus = null;
-const abOpen = () => !els.abModal.classList.contains("hidden");
+const abOpen = () => inputOpen() && state.askMode === "ab";
 
 function openAbTest() {
   if (isBusy()) return;
   if (state.phase === "error" || !state.mainBranch) { toast("A/B tests need the backend — it's currently unreachable."); return; }
-  closeInput();
-  closeCharCard();
   resetEvidence();
-  abPreviousFocus = document.activeElement;
-  els.abError.textContent = "";
-  els.ask.dataset.mode = "ab";
-  els.askLabel.textContent = "A/B test";
-  show(els.abScrim);
-  show(els.abModal);
-  requestAnimationFrame(() => els.abQuestion.focus());
+  openInput({ mode: "ab", preserve: true });
 }
 
 function closeAbTest(restoreFocus = true) {
-  clearEvidenceSelection();
-  hide(els.abModal);
-  hide(els.abScrim);
-  delete els.ask.dataset.mode;
-  els.askLabel.textContent = "ask";
-  els.abError.textContent = "";
-  if (restoreFocus && abPreviousFocus?.focus) abPreviousFocus.focus();
+  closeInput();
+  if (restoreFocus) els.ask.focus();
 }
 
 async function runAbTest() {
   const input = {
-    question: els.abQuestion.value.trim(),
+    question: els.askInput.value.trim(),
     variant_a: els.abA.value,
     variant_b: els.abB.value,
   };
   if (!input.question || !input.variant_a.trim() || !input.variant_b.trim()) {
-    els.abError.textContent = "Question and both variants are required.";
+    els.askError.textContent = "Add the question and both variants.";
+    (input.question ? (input.variant_a.trim() ? els.abB : els.abA) : els.askInput).focus();
     return;
   }
   if (input.variant_a.trim() === input.variant_b.trim()) {
-    els.abError.textContent = "Variants must be different.";
+    els.askError.textContent = "The two variants are the same. Change one of them.";
+    els.abB.focus();
     return;
   }
+  if (state.phase === "error" || !state.mainBranch) { els.askError.textContent = "A/B tests need the backend — it's currently unreachable."; return; }
 
   cleanupBranch();
   state.lastAbInput = input;
   const audience = currentAudience();
   setRunAudience(audience);
-  closeAbTest(false);
+  els.askError.textContent = "";
+  closeInput();
   const myReq = ++state.reqId;
   state.abort = new AbortController();
   const signal = state.abort.signal;
   state.phase = "waiting";
   setAsk("busy");
+  els.askLabel.textContent = "testing A/B…";
   hide(els.resultCard);
   els.summaryLabel.textContent = "TESTING A/B";
   els.summaryText.textContent = input.question;
@@ -1394,7 +1414,7 @@ async function runAbTest() {
     state.phase = "idle";
     if (err.status === 404) {
       openAbTest();
-      els.abError.textContent =
+      els.askError.textContent =
         "A/B testing is temporarily unavailable because the frontend and API versions do not match. Update the backend, then run the test again — your inputs are saved.";
     } else {
       toast(`A/B test failed: ${err.message}`);
@@ -1943,14 +1963,25 @@ function escapeHtml(s) {
 
 const typingTarget = (el) => el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
 
-$("ask-submit").addEventListener("click", event => { event.stopPropagation(); runPrediction(els.askInput.value); });
+els.askSubmit.addEventListener("click", event => { event.stopPropagation(); runPrediction(els.askInput.value); });
 
 // ── events ───────────────────────────────────────────────────────────────
-els.ask.addEventListener("click", () => {
+els.ask.addEventListener("click", (e) => {
   if (isBusy()) { cancelPrediction(); return; }
-  if (inputOpen()) { els.askInput.focus(); return; }
+  if (inputOpen()) { if (!els.askExtra.contains(e.target)) els.askInput.focus(); return; }
   openInput();
 });
+els.askModes.addEventListener("click", (e) => {
+  const b = e.target.closest(".ask-mode");
+  if (!b) return;
+  e.stopPropagation();
+  setAskMode(b.dataset.mode);
+  (b.dataset.mode === "ab" && els.askInput.value ? els.abA : b.dataset.mode === "marketing" && els.askInput.value ? els.marketingCopy : els.askInput).focus();
+});
+// Enter sends the question; in the variant / post fields Enter is a newline.
+for (const f of [els.abA, els.abB, els.marketingCopy]) {
+  f.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); runPrediction(els.askInput.value); } });
+}
 
 els.ask.addEventListener("keydown", (event) => {
   if (event.target === els.ask && ["Enter", " "].includes(event.key)) { event.preventDefault(); openInput(); }
@@ -1962,17 +1993,6 @@ els.askInput.addEventListener("keydown", (e) => {
 });
 els.askInput.addEventListener("input", autoGrow);
 
-els.abBtn.addEventListener("click", openAbTest);
-els.abClose.addEventListener("click", () => closeAbTest());
-els.abCancel.addEventListener("click", () => closeAbTest());
-els.abScrim.addEventListener("click", () => closeAbTest());
-els.abForm.addEventListener("submit", (e) => { e.preventDefault(); runAbTest(); });
-
-els.marketingBtn.addEventListener("click", openMarketing);
-els.marketingClose.addEventListener("click", closeOrCancelMarketing);
-els.marketingCancel.addEventListener("click", closeOrCancelMarketing);
-els.marketingScrim.addEventListener("click", closeOrCancelMarketing);
-els.marketingForm.addEventListener("submit", (e) => { e.preventDefault(); runMarketingTest(); });
 
 els.returnBtn.addEventListener("click", () => { map.returnToOverview(); });
 
@@ -2098,18 +2118,7 @@ document.addEventListener("mousedown", (e) => {
 });
 
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Tab" && marketingOpen()) {
-    const focusable = [...els.marketingModal.querySelectorAll("button:not([disabled]), textarea:not([disabled])")];
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    if (e.shiftKey && document.activeElement === first) {
-      e.preventDefault();
-      last.focus();
-    } else if (!e.shiftKey && document.activeElement === last) {
-      e.preventDefault();
-      first.focus();
-    }
-  } else if (e.key === "Tab" && filterOpen()) {
+  if (e.key === "Tab" && filterOpen()) {
     const focusable = [...els.filterModal.querySelectorAll("button:not([disabled]), input:not([disabled]), select:not([disabled])")];
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
@@ -2125,11 +2134,8 @@ document.addEventListener("keydown", (e) => {
     if (personaOpen()) { e.preventDefault(); closePersonaModal(); return; }
     if (verified.selection.segments.length) { e.preventDefault(); clearEvidenceSelection(); return; }
     if (chart.inst?.hasSelection()) { e.preventDefault(); clearEvidenceSelection(); return; }
-    if (marketingOpen()) {
-      if (isBusy()) cancelPrediction(); else closeMarketing();
-    }
-    else if (abOpen()) closeAbTest();
-    else if (filterOpen()) closeFilters();
+    if (!els.audienceCard.classList.contains("hidden")) { hideAudienceCard(); return; }
+    if (filterOpen()) closeFilters();
     else if (aboutOpen()) closeAbout();
     else if (charOpen()) closeCharCard();
     else if (isBusy()) cancelPrediction();
