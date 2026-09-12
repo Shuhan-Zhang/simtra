@@ -365,7 +365,7 @@ pub fn parse_question(city: &str, question: &str) -> Result<QuerySpec, &'static 
     Err("Unsupported or ambiguous question. Use a documented demographic distribution or population-count question; predictions and unspecified income/gender measures are unsupported.")
 }
 
-fn empty(status: &str, question: &str, reason: &str) -> Value {
+pub fn empty(status: &str, question: &str, reason: &str) -> Value {
     json!({"status":status,"question":question,"answer":null,
         "chart":{"type":"bar","title":"No demographic answer","unit":null,"series":[]},
         "query_spec":null,"geography":null,"source":{"verification_status":"Unknown"},

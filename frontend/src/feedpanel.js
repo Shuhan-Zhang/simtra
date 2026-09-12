@@ -14,6 +14,8 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { BASE, today } from "./config.js";
+import { buildEvidenceChartModel, renderEvidenceChart, bindEvidenceChart } from "./evidence-chart.js";
+import { buildVerifiedDataModel, renderVerifiedData, bindVerifiedData, verifiedMapSelection } from "./verified-data.js";
 
 const SENTIMENTS = ["support", "oppose", "worried", "angry", "sad", "hopeful", "indifferent"];
 const REACT_N = 12;
@@ -123,7 +125,15 @@ const state = {
   getCityDisplay: () => "San Francisco",
   getResidents: () => 0,
   getNews: () => [],
-  items: [],            // lineage items (events + tests), newest first
+  // map / resident hooks supplied by the app so timeline charts can highlight
+  // residents exactly like the result card's evidence panel does
+  setSegmentSelection: () => {},
+  getSegmentSelectionSummary: () => ({ active: false, rawMatchingAgents: 0, weightedPumsCount: 0 }),
+  getRawResidents: () => [],
+  evidenceReady: () => false,
+  dimensionLabels: {},
+  chart: null,          // the one open timeline chart: { id, host, dispose, close }
+  items: [],            // lineage items (events, tests, data queries), newest first
   posts: new Map(),     // item id -> post element
   memoryOff: false,
   lineageOff: false,
@@ -195,7 +205,10 @@ function build(root) {
 }
 
 // ── public api ─────────────────────────────────────────────────────────────
-export function initFeedPanel({ getCity, getBranch, getCityDisplay, getResidents, getNews } = {}) {
+export function initFeedPanel({
+  getCity, getBranch, getCityDisplay, getResidents, getNews,
+  setSegmentSelection, getSegmentSelectionSummary, getRawResidents, evidenceReady, dimensionLabels,
+} = {}) {
   const root = document.getElementById("feed-panel");
   if (!root) return;
   state.root = root;
@@ -204,6 +217,11 @@ export function initFeedPanel({ getCity, getBranch, getCityDisplay, getResidents
   if (getCityDisplay) state.getCityDisplay = getCityDisplay;
   if (getResidents) state.getResidents = getResidents;
   if (getNews) state.getNews = getNews;
+  if (setSegmentSelection) state.setSegmentSelection = setSegmentSelection;
+  if (getSegmentSelectionSummary) state.getSegmentSelectionSummary = getSegmentSelectionSummary;
+  if (getRawResidents) state.getRawResidents = getRawResidents;
+  if (evidenceReady) state.evidenceReady = evidenceReady;
+  if (dimensionLabels) state.dimensionLabels = dimensionLabels;
   build(root);
 
   try { state.collapsed = localStorage.getItem(COLLAPSE_KEY) === "1"; } catch { /* private mode */ }
@@ -244,6 +262,7 @@ export async function refreshFeedPanel({ quiet = false } = {}) {
     const items = await loadItems(city);
     if (seq !== state.loadSeq) return;
     state.memoryOff = false;
+    if (state.chart && !items.some((i) => i.id === state.chart.id)) closeChart();
     state.items = items;
     notice("");
     renderThread();
@@ -295,12 +314,15 @@ function syncHeader() {
   const n = state.getResidents();
   const events = state.items.filter((i) => i.type === "event").length;
   const asks = state.items.filter((i) => i.type === "test").length;
+  const queries = state.items.filter((i) => i.type === "data_query").length;
   let status;
   if (state.memoryOff) status = "memory off";
   else if (!branch) status = "waking the residents…";
   else status = `${n.toLocaleString()} residents`;
-  if (events || asks) {
-    status = `${plural(events, "event")} · ${plural(asks, "question")} in memory · ${status}`;
+  if (events || asks || queries) {
+    const parts = [plural(events, "event"), plural(asks, "question")];
+    if (queries) parts.push(plural(queries, "data query", "data queries"));
+    status = `${parts.join(" · ")} in memory · ${status}`;
   }
   el.status.textContent = status;
   const canWrite = !!branch && !state.memoryOff;
@@ -319,6 +341,8 @@ function watchResultCard() {
   if (!card || typeof MutationObserver === "undefined") return;
   const apply = () => {
     const visible = !card.classList.contains("hidden");
+    // the result card owns the map highlight while it is up
+    if (visible) closeChart();
     if (visible && !state.collapsed) {
       state.autoCollapsed = true;
       state.collapsed = true;
@@ -354,11 +378,15 @@ function renderThread() {
     seen.add(item.id);
     let post = state.posts.get(item.id);
     if (!post) {
-      post = item.type === "test" ? testPost(item) : eventPost(item);
+      post = item.type === "test" ? testPost(item)
+        : item.type === "data_query" ? dataQueryPost(item)
+        : eventPost(item);
       state.posts.set(item.id, post);
     } else if (post.dataset.busy !== "true") {
       // refresh the parts that can change between loads
-      if (item.type === "test") fillTest(post, item); else fillEvent(post, item);
+      if (item.type === "test") fillTest(post, item);
+      else if (item.type === "data_query") fillDataQuery(post, item);
+      else fillEvent(post, item);
     }
     frag.appendChild(post);
   }
@@ -560,7 +588,9 @@ function testPost(item) {
     <div class="fp-result"></div>
     <div class="fp-bar" aria-hidden="true"><i class="fp-bar-yes"></i><i class="fp-bar-no"></i></div>
     <div class="fp-memory"></div>
-    <div class="fp-hypo hidden"></div>`;
+    <div class="fp-hypo hidden"></div>
+    <div class="fp-post-actions"></div>
+    <div class="fp-chart hidden"></div>`;
   fillTest(post, item);
   return post;
 }
@@ -587,6 +617,168 @@ function fillTest(post, item) {
   const hypo = post.querySelector(".fp-hypo");
   hypo.textContent = item.under_event ? `under hypothetical: ${item.under_event}` : "";
   hypo.classList.toggle("hidden", !item.under_event);
+  renderChartLink(post, item, "Explore demographic evidence");
+}
+
+// ── charts inside entries ──────────────────────────────────────────────────
+// One chart is open at a time. Opening it takes over the map highlight the same
+// way the result card's evidence panel does; closing it (or a result card
+// opening) clears the highlight.
+function renderChartLink(post, item, label) {
+  const box = post.querySelector(".fp-post-actions");
+  if (!box) return;
+  box.replaceChildren();
+  const open = state.chart?.id === item.id;
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "fp-link";
+  b.setAttribute("aria-expanded", open ? "true" : "false");
+  b.textContent = open ? "Hide chart" : label;
+  b.addEventListener("click", () => (open ? closeChart() : openChart(item)));
+  box.appendChild(b);
+}
+
+function closeChart() {
+  const c = state.chart;
+  if (!c) return;
+  state.chart = null;
+  c.dispose?.();
+  c.host.replaceChildren();
+  c.host.classList.add("hidden");
+  state.setSegmentSelection(null);
+  const item = state.items.find((i) => i.id === c.id);
+  const post = state.posts.get(c.id);
+  if (item && post) renderChartLink(post, item, item.type === "test" ? "Explore demographic evidence" : "View chart");
+}
+
+function openChart(item) {
+  closeChart();
+  const post = state.posts.get(item.id);
+  const host = post?.querySelector(".fp-chart");
+  if (!host) return;
+  host.classList.remove("hidden");
+  state.chart = { id: item.id, host, dispose: null };
+  if (item.type === "test") mountEvidenceChart(item, host);
+  else mountVerifiedChart(item, host);
+  renderChartLink(post, item, item.type === "test" ? "Explore demographic evidence" : "View chart");
+}
+
+// ids inside the chart markup are meant for the result card; inside the panel
+// they would collide with it, so strip them (bindings use classes/attributes)
+function stripIds(host) {
+  for (const el of host.querySelectorAll("[id]")) el.removeAttribute("id");
+}
+
+function mountEvidenceChart(item, host) {
+  const stored = item.breakdowns && typeof item.breakdowns === "object" ? item.breakdowns : null;
+  if (!stored) {
+    host.innerHTML = `<p class="fp-chart-empty">No demographic breakdowns were stored for this question.</p>`;
+    return;
+  }
+  const model = buildEvidenceChartModel({ question: item.question, ...stored });
+  if (!model.breakdowns.some((b) => b.groups.length)) {
+    host.innerHTML = `<p class="fp-chart-empty">No demographic breakdowns were stored for this question.</p>`;
+    return;
+  }
+  const chart = { model, selection: { segments: [] }, dimension: model.breakdowns[0].dimension };
+  const label = (d) => state.dimensionLabels[d] || d;
+  host.innerHTML = `
+    <div class="fp-chart-controls">
+      <label>Demographic dimension
+        <select class="fp-select fp-chart-dim" aria-label="Demographic dimension">
+          ${model.breakdowns.map((b) => `<option value="${esc(b.dimension)}">${esc(label(b.dimension))}</option>`).join("")}
+        </select>
+      </label>
+    </div>
+    <div class="fp-chart-host"></div>`;
+  const chartHost = host.querySelector(".fp-chart-host");
+  const ready = () => state.evidenceReady(chart.dimension);
+  const render = () => {
+    const summary = state.getSegmentSelectionSummary();
+    chart.selection.weightedCount = summary.active ? summary.weightedPumsCount : 0;
+    chartHost.innerHTML = renderEvidenceChart(
+      { ...chart.model, breakdowns: chart.model.breakdowns.filter((b) => b.dimension === chart.dimension) },
+      chart.selection,
+    );
+    stripIds(chartHost);
+    const text = chartHost.querySelector("[data-evidence-summary]");
+    if (text) {
+      const rule = chart.selection.segments.map((s) => `${s.dimension} = ${s.key}`).join(" OR ") || "none (all residents)";
+      text.textContent = ready()
+        ? `Active rule: ${rule}. Raw resident count: ${summary.rawMatchingAgents}. Weighted PWGTP population: ${summary.weightedPumsCount}.`
+        : "Selection unavailable: resident PWGTP weights or canonical segments are missing. Counts are unknown.";
+    }
+  };
+  host.querySelector(".fp-chart-dim").addEventListener("change", (e) => {
+    chart.dimension = e.target.value;
+    chart.selection = { segments: [] };
+    state.setSegmentSelection(null);
+    render();
+  });
+  chartHost.addEventListener("keydown", (e) => { if (e.key === "Escape") e.stopPropagation(); });
+  state.chart.dispose = bindEvidenceChart(chartHost, {
+    getModel: () => chart.model,
+    getSelection: () => chart.selection,
+    onSelectionChange: (next, action) => {
+      if (action.type !== "clear" && !ready()) return;
+      chart.selection = next;
+      state.setSegmentSelection(chart.selection.segments.length ? { clauses: chart.selection.segments, operator: "or" } : null);
+      render();
+    },
+  });
+  render();
+}
+
+function mountVerifiedChart(item, host) {
+  const model = buildVerifiedDataModel(item.response || {});
+  if (!model.question) model.question = item.question || "";
+  const chart = { model, selection: { segments: [] }, combine: false };
+  const render = () => {
+    const result = verifiedMapSelection(chart.model, chart.selection, state.getRawResidents(), state.getCity());
+    state.setSegmentSelection(result.selection);
+    host.innerHTML = renderVerifiedData(chart.model, chart.selection, result.count, result.ready);
+    stripIds(host);
+    const combine = host.querySelector(".combine-control input");
+    if (combine) combine.checked = chart.combine;
+  };
+  host.addEventListener("change", (e) => {
+    if (e.target.matches(".combine-control input")) chart.combine = e.target.checked;
+  });
+  state.chart.dispose = bindVerifiedData(host, {
+    getModel: () => chart.model,
+    getSelection: () => chart.selection,
+    onSelectionChange: (next, action) => {
+      chart.selection = chart.combine && action.type === "select"
+        ? { segments: [...chart.selection.segments.filter((s) => s.key !== action.key), { dimension: action.dimension, key: action.key }] }
+        : next;
+      render();
+    },
+  });
+  render();
+}
+
+// ── verified-data post ─────────────────────────────────────────────────────
+function dataQueryPost(item) {
+  const post = document.createElement("article");
+  post.className = "fp-post fp-post-query";
+  post.dataset.id = item.id;
+  post.innerHTML = `
+    ${postHead({ avatar: "#", avatarClass: "fp-avatar-data", source: "verified data", date: "" })}
+    <div class="fp-title"></div>
+    <div class="fp-answer"></div>
+    <div class="fp-post-actions"></div>
+    <div class="fp-chart hidden"></div>`;
+  fillDataQuery(post, item);
+  return post;
+}
+
+function fillDataQuery(post, item) {
+  post.querySelector(".fp-date").textContent = [fmtWhen(item.created_at), "verified data"].join(" · ");
+  post.querySelector(".fp-title").textContent = item.question || "";
+  const answer = post.querySelector(".fp-answer");
+  answer.textContent = item.answer || "";
+  answer.classList.toggle("hidden", !item.answer);
+  renderChartLink(post, item, "View chart");
 }
 
 // ── baseline headlines ─────────────────────────────────────────────────────
