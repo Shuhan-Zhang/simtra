@@ -342,22 +342,24 @@ body {
 .ask-main { display: flex; align-items: center; gap: var(--s-2); min-height: calc(var(--ctl) - 2 * var(--s-2)); }
 /* who gets asked: a chip at the head of the box, blue when a filter is on */
 .audience-chip {
-  border: 0; flex: none; display: inline-flex; align-items: center; gap: 6px;
-  max-width: 260px; height: 32px; padding: 0 12px 0 10px;
-  border-radius: var(--r-full); background: var(--fill); color: var(--ink-2);
-  font-family: var(--font); font-size: var(--fs-footnote); font-weight: var(--fw-med); line-height: 1;
+  border: 1.5px solid var(--accent); flex: none; display: inline-flex; align-items: center; gap: 7px;
+  max-width: 300px; height: 38px; padding: 0 12px 0 12px;
+  border-radius: var(--r-full); background: #fff; color: var(--accent);
+  font-family: var(--font); font-size: var(--fs-footnote); font-weight: var(--fw-semi); line-height: 1;
   cursor: pointer; transition: background var(--t) var(--ease), color var(--t) var(--ease);
 }
 .audience-chip svg { flex: none; }
-.audience-chip svg [stroke] { stroke-width: 2; }
+.audience-chip svg [stroke] { stroke-width: 2.2; }
+.audience-chip-kicker { font-weight: var(--fw-reg); color: var(--ink-3); }
 .audience-chip #audience-chip-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.audience-chip:hover { background: var(--fill-hi); color: var(--ink); }
-.audience-chip[aria-pressed="true"] { background: #edf5ff; color: var(--accent); }
-.audience-chip[aria-pressed="true"]:hover { background: #dfeeff; }
+.audience-chip:hover { background: #edf5ff; }
+.audience-chip[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
+.audience-chip[aria-pressed="true"] .audience-chip-kicker { color: rgba(255,255,255,.75); }
+.audience-chip[aria-pressed="true"]:hover { background: #0069db; }
 .audience-chip:disabled { opacity: .5; cursor: default; }
 .audience-chip-count {
   flex: none; padding: 2px 6px; border-radius: var(--r-full);
-  background: var(--accent); color: #fff; font-size: var(--fs-caption2); font-weight: var(--fw-semi);
+  background: #fff; color: var(--accent); font-size: var(--fs-caption2); font-weight: var(--fw-semi);
   font-variant-numeric: var(--nums);
 }
 /* the send action: a round accent button, same footprint as the dock icons */
@@ -414,11 +416,14 @@ body {
   font-family: var(--font); font-size: var(--fs-caption); font-weight: var(--fw-med); color: var(--ink-3);
   border-radius: var(--r-sm); padding: 2px var(--s-2); background: var(--fill);
 }
-.ask[data-state="idle"] .ask-input, .ask[data-state="idle"] .ask-enter, .ask[data-state="idle"] .ask-search { display: none; }
-.ask[data-state="idle"] .ask-label { padding: 0 var(--s-2); }
-/* idle: the chip only shows when a filter is on, so a tap on the pill starts a question */
-.ask[data-state="idle"] .audience-chip { display: none; }
-.ask[data-state="idle"].has-audience .audience-chip { display: inline-flex; }
+/* idle: the full composer is visible before the first click — audience chip, a
+   large placeholder field, and the send button — so the controls are discoverable.
+   A tap anywhere in the box opens it for typing (the mode row appears then). */
+.ask[data-state="idle"] { width: min(620px, 90vw); border-radius: var(--r-xl); }
+.ask[data-state="idle"] .ask-enter, .ask[data-state="idle"] .ask-search, .ask[data-state="idle"] .ask-label { display: none; }
+.ask[data-state="idle"] .ask-input { display: block; opacity: 1; pointer-events: none; margin-top: 4px; }
+.ask[data-state="idle"] .audience-chip { display: inline-flex; }
+.ask[data-state="idle"] .ask-send { display: flex; }
 .ask[data-state="input"] { width: min(620px, 90vw); border-radius: var(--r-xl); }
 .ask[data-state="input"] .ask-main { align-items: flex-start; }
 .ask[data-state="input"] .audience-chip { margin-top: 2px; }
@@ -1203,3 +1208,7 @@ body.offline-demo .result-card { max-height: min(60dvh, 720px); }
 .pc-compact .pc-row-label { font-size: var(--fs-caption); }
 .pc-compact .pc-svg { margin-top: var(--s-2); }
 @media (prefers-reduced-motion: reduce) { .pc-tooltip, .evidence-tooltip { transition: none; } }
+
+/* result card close: the card scrolls internally, so the button sticks to the top edge */
+.result-card { position: relative; }
+.result-card .res-close { position: sticky; top: 0; float: right; margin: -6px -6px 0 0; z-index: 3; }

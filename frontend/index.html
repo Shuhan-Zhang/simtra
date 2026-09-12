@@ -7,7 +7,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23141414' d='M12 2l1.8 5L19 9l-5.2 2L12 16l-1.8-5L5 9l5.2-2z'/%3E%3C/svg%3E" />
 
   <!-- fonts: Pixelify Sans (title) · Neue Haas Grotesk Display (body, via Typekit); skipped in ?demo=1 -->
-  <link rel="stylesheet" href="styles.css?v=ux-3" />
+  <link rel="stylesheet" href="styles.css?v=ux-6" />
   <link rel="stylesheet" href="feedpanel.css?v=8" />
   <script>
     if (new URLSearchParams(location.search).get("demo") !== "1") {
@@ -102,8 +102,10 @@
                 <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
                       d="M4 5h16l-6.4 7.2v5.1L10 19v-6.8z" />
               </svg>
-              <span id="audience-chip-text">Everyone</span>
+              <span class="audience-chip-kicker">Asking</span>
+              <span id="audience-chip-text">everyone</span>
               <span id="audience-chip-count" class="audience-chip-count hidden"></span>
+              <svg class="audience-chip-caret" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6"/></svg>
             </button>
             <svg class="ask-search" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
               <circle cx="10.5" cy="10.5" r="6" fill="none" stroke="currentColor" stroke-width="2" />
@@ -125,7 +127,6 @@
             <div class="ask-modes" role="radiogroup" aria-label="Question type">
               <button type="button" class="ask-mode" role="radio" data-mode="predict" aria-checked="true">Predict</button>
               <button type="button" class="ask-mode" role="radio" data-mode="ab" aria-checked="false">A/B</button>
-              <button type="button" class="ask-mode" role="radio" data-mode="marketing" aria-checked="false">Post test</button>
             </div>
             <div id="ab-fields" class="ask-fields" hidden>
               <textarea id="ab-a" class="ask-field" rows="2" maxlength="4000" placeholder="Variant A" aria-label="Variant A"></textarea>
@@ -254,6 +255,6 @@
     <div id="toast" class="toast hidden" role="alert" aria-live="assertive"></div>
   </div>
 
-  <script type="module" src="src/app.js?v=ux-3"></script>
+  <script type="module" src="src/app.js?v=ux-6"></script>
 </body>
 </html>
