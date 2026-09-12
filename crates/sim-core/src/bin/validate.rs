@@ -197,7 +197,9 @@ async fn run(args: Args) -> i32 {
             options: Vec::new(),
         };
         let ev = Event { text: c.event.clone(), as_of_date: c.as_of_date.clone() };
-        let (b0, b1, delta) = match engine.run_counterfactual(&pop, &base, ev).await {
+        let (b0, b1, delta) = match engine
+            .run_counterfactual(&pop, &base, ev, &simfrancisco::memory::TestTag::kind("validate"))
+            .await {
             Ok(x) => x,
             Err(err) => { eprintln!("  [{}] cf error: {err}", c.id); continue; }
         };
