@@ -16,9 +16,21 @@ const LOCAL_PORT = (() => {
   const raw = Number(QUERY.get("port"));
   return Number.isInteger(raw) && raw > 0 && raw < 65536 ? raw : 8080;
 })();
+// A deployed frontend can point at its own backend: `frontend/backend-config.js`
+// sets `window.SIMTRA_BACKEND` (edit it per deployment), or `?backend=https://…`
+// picks one for a single visit. Only https origins are accepted for the override.
+const CONFIGURED_BACKEND = (() => {
+  const fromFile = typeof globalThis.SIMTRA_BACKEND === "string" ? globalThis.SIMTRA_BACKEND.trim() : "";
+  const fromQuery = (QUERY.get("backend") || "").trim();
+  const pick = /^https:\/\/[^\s/]+/.test(fromQuery) ? fromQuery : fromFile;
+  return /^https:\/\/[^\s/]+/.test(pick) ? pick.replace(/\/+$/, "") : "";
+})();
 export const BASE = LOCAL_BACKEND
   ? `http://localhost:${LOCAL_PORT}`
-  : "https://sf-digital-twin-tp.fly.dev";
+  : CONFIGURED_BACKEND || "https://sf-digital-twin-tp.fly.dev";
+// Treat a configured backend like local mode for defaults (today's date, Gemini),
+// since it is our own server with the memory layer, not the original public one.
+const OWN_BACKEND = LOCAL_BACKEND || !!CONFIGURED_BACKEND;
 
 // Synthetic population to spin up on load. 5,000 agents → a denser, more diverse
 // crowd; poll latency stays bounded because agents are clustered into ≤160 archetypes
@@ -44,8 +56,8 @@ export function today() {
 const AS_OF_OVERRIDE = /^\d{4}-\d{2}-\d{2}$/.test(QUERY.get("as_of") || "") ? QUERY.get("as_of") : null;
 export const PREDICT = {
   branch_ticks: 2,
-  as_of_date: AS_OF_OVERRIDE || (LOCAL_BACKEND ? today() : "2026-06-13"),
-  model: QUERY.get("model") || (LOCAL_BACKEND ? "gemini-3.5-flash-lite" : "claude-sonnet-4-6"),
+  as_of_date: AS_OF_OVERRIDE || (OWN_BACKEND ? today() : "2026-06-13"),
+  model: QUERY.get("model") || (OWN_BACKEND ? "gemini-3.5-flash-lite" : "claude-sonnet-4-6"),
 };
 
 // Animation timing (ms).
