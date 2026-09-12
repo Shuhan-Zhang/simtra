@@ -29,6 +29,7 @@ pub enum Model {
     Grok43,
     Sonnet,
     Gemini35Flash,
+    Gemini35FlashLite,
 }
 
 impl Model {
@@ -39,6 +40,7 @@ impl Model {
             Model::Grok43 => "grok-4.3",
             Model::Sonnet => "claude-sonnet-4-6",
             Model::Gemini35Flash => "gemini-3.5-flash",
+            Model::Gemini35FlashLite => "gemini-3.5-flash-lite",
         }
     }
     pub fn provider(&self) -> Provider {
@@ -46,7 +48,7 @@ impl Model {
             Model::Gpt4o | Model::Gpt55 => Provider::AzureResponses,
             Model::Grok43 => Provider::AzureChat,
             Model::Sonnet => Provider::Anthropic,
-            Model::Gemini35Flash => Provider::Gemini,
+            Model::Gemini35Flash | Model::Gemini35FlashLite => Provider::Gemini,
         }
     }
     /// gpt-4o / gpt-5.5 use the /responses shape; grok-4.3 uses /chat/completions.
@@ -59,6 +61,7 @@ impl Model {
             "gpt-5.5" | "gpt55" | "gpt-55" | "5.5" => Model::Gpt55,
             "grok-4.3" | "grok" | "grok43" => Model::Grok43,
             s if s.starts_with("claude") || s == "sonnet" => Model::Sonnet,
+            s if s.starts_with("gemini") && s.contains("lite") => Model::Gemini35FlashLite,
             s if s.starts_with("gemini") => Model::Gemini35Flash,
             _ => Model::Gpt4o,
         }
@@ -362,11 +365,16 @@ impl ModelClient {
                         return Err(anyhow!("auth failed: {} / {}", status, s2));
                     }
                     if status.as_u16() == 429 || status.is_server_error() {
+                        let txt = r.text().await.unwrap_or_default();
                         if attempt >= self.max_retries {
-                            let txt = r.text().await.unwrap_or_default();
                             return Err(anyhow!("model {} status {} after retries: {}", model.id(), status, truncate(&txt, 300)));
                         }
-                        self.backoff(attempt).await;
+                        // Rate-limited providers (Gemini free tier) say how long to wait;
+                        // honoring it beats a blind exponential backoff that never recovers.
+                        match retry_after_hint(&txt) {
+                            Some(d) => tokio::time::sleep(d).await,
+                            None => self.backoff(attempt).await,
+                        }
                         attempt += 1;
                         self.usage.retries.fetch_add(1, Ordering::Relaxed);
                         continue;
@@ -389,6 +397,7 @@ impl ModelClient {
             }
         }
     }
+
 
     async fn backoff(&self, attempt: u32) {
         // exponential backoff with jitter, capped.
@@ -498,6 +507,18 @@ impl ModelClient {
                 .ok_or_else(|| anyhow!("no choices[0].message.content for {}", model.id()))
         }
     }
+}
+
+/// Parse a provider's "retry in 42.2s" / "retryDelay": "42s" hint from a 429 body.
+/// Capped so a bad hint cannot stall a request for long.
+pub fn retry_after_hint(body: &str) -> Option<Duration> {
+    let lower = body.to_ascii_lowercase();
+    let idx = lower.find("retry in ").map(|i| i + "retry in ".len())
+        .or_else(|| lower.find("\"retrydelay\"").and_then(|i| lower[i..].find(':').map(|j| i + j + 1)))?;
+    let rest: String = lower[idx..].chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+    let secs: f64 = rest.parse().ok()?;
+    if secs <= 0.0 { return None; }
+    Some(Duration::from_millis(((secs + 1.0) * 1000.0).min(75_000.0) as u64))
 }
 
 fn truncate(s: &str, n: usize) -> String {
@@ -623,5 +644,20 @@ mod tests {
             usage: Arc::new(Usage::default()),
             offline: true,
         }
+    }
+}
+
+#[cfg(test)]
+mod retry_hint_tests {
+    use super::retry_after_hint;
+    #[test]
+    fn parses_gemini_hints() {
+        let d = retry_after_hint("... limit: 20, model: gemini-3.5-flash\nPlease retry in 42.224655338s.").unwrap();
+        assert!((d.as_secs_f64() - 43.22).abs() < 0.05);
+        let d = retry_after_hint(r#"{"details":[{"retryDelay":"7s"}]}"#).unwrap();
+        assert_eq!(d.as_secs(), 8);
+        assert!(retry_after_hint("nothing here").is_none());
+        assert!(retry_after_hint("retry in 0s").is_none());
+        assert_eq!(retry_after_hint("retry in 9999s").unwrap().as_secs(), 75);
     }
 }
