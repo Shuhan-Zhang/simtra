@@ -366,6 +366,14 @@ impl ModelClient {
                     }
                     if status.as_u16() == 429 || status.is_server_error() {
                         let txt = r.text().await.unwrap_or_default();
+                        // A per-day quota will not clear by waiting: fail fast with a clear
+                        // message instead of sleeping through every retry.
+                        if status.as_u16() == 429 && is_daily_quota_exhausted(&txt) {
+                            return Err(anyhow!(
+                                "model {} daily free-tier quota exhausted (429); add billing, switch GEMINI_MODEL, or use another provider key",
+                                model.id()
+                            ));
+                        }
                         if attempt >= self.max_retries {
                             return Err(anyhow!("model {} status {} after retries: {}", model.id(), status, truncate(&txt, 300)));
                         }
@@ -509,6 +517,12 @@ impl ModelClient {
     }
 }
 
+/// Gemini reports daily caps with a quotaId like `GenerateRequestsPerDayPerProjectPerModel-FreeTier`.
+pub fn is_daily_quota_exhausted(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    lower.contains("perday") || lower.contains("per day")
+}
+
 /// Parse a provider's "retry in 42.2s" / "retryDelay": "42s" hint from a 429 body.
 /// Capped so a bad hint cannot stall a request for long.
 pub fn retry_after_hint(body: &str) -> Option<Duration> {
@@ -650,6 +664,12 @@ mod tests {
 #[cfg(test)]
 mod retry_hint_tests {
     use super::retry_after_hint;
+    #[test]
+    fn detects_daily_quota() {
+        assert!(super::is_daily_quota_exhausted(r#"{"quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier"}"#));
+        assert!(!super::is_daily_quota_exhausted(r#"{"quotaId":"GenerateRequestsPerMinutePerProjectPerModel"}"#));
+    }
+
     #[test]
     fn parses_gemini_hints() {
         let d = retry_after_hint("... limit: 20, model: gemini-3.5-flash\nPlease retry in 42.224655338s.").unwrap();
