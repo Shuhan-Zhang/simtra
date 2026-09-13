@@ -41,4 +41,4 @@ Most decisions depend on guessing how people will react. Simtra makes that guess
 
 ## Built by
 
-Mahin Bharathwaj.
+Mahin Bharathwaj, Aradhya Mishra, and Shuzan Zhang
