@@ -97,6 +97,8 @@ pub fn router(state: AppState) -> Router {
         .route("/cities/:city/parse", post(parse_question_handler))
         .route("/cities/:city/stimulus", post(describe_stimulus_handler))
         .route("/cities/:city/news", get(city_news))
+        .route("/cities/:city/locations", get(crate::locations::city_locations))
+        .route("/cities/:city/locations/areas", get(crate::locations::city_location_areas))
         .route("/cities/:city/events", post(create_city_event))
         .route("/cities/:city/events", get(list_city_events))
         .route("/cities/:city/events/:event_id/reactions", get(event_reactions))
@@ -933,9 +935,15 @@ async fn branch_poll(
                 .into_response()
         }
     };
-    let poll = match poll_from_json(&req) {
+    let mut poll = match poll_from_json(&req) {
         Ok(p) => p,
         Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({"error": e}))).into_response(),
+    };
+    let location_context = match crate::locations::apply_poll_context(
+        &ctx.city.profile.slug, req.get("location_area_id"), &mut poll,
+    ).await {
+        Ok(context) => context,
+        Err((status, error)) => return (status, Json(json!({"error": error}))).into_response(),
     };
     match st
         .engine
@@ -967,7 +975,12 @@ async fn branch_poll(
                     }
                 }
             }
-            Json(PollResponse::new(res, &ctx.population.profile)).into_response()
+            {
+                let mut response = serde_json::to_value(PollResponse::new(res, &ctx.population.profile))
+                    .expect("poll response serializes");
+                if let Some(context) = location_context { response["location_context"] = context; }
+                Json(response).into_response()
+            }
         }
         Err(e) => (
             StatusCode::BAD_GATEWAY,

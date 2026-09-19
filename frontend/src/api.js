@@ -36,6 +36,7 @@ async function req(path, { method = "GET", body, timeout = 30000, signal } = {})
       const error = new Error(`${method} ${path} → ${res.status}: ${msg}`);
       error.status = res.status;
       error.path = path;
+      error.serverMessage = data?.error || data?.message || "";
       throw error;
     }
     return data;
@@ -211,3 +212,7 @@ async function demoRequest(path, { method, body, signal }) {
   else throw new Error(`Unsupported offline fixture route: ${method} ${route}`);
   return structuredClone(result);
 }
+
+// Public geography only: no population, demand, or prediction estimates.
+export const getLocations = (city = "sf", signal) =>
+  req(`/cities/${encodeURIComponent(city)}/locations/areas`, { timeout: 12000, signal });

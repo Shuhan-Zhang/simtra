@@ -115,7 +115,7 @@
             </svg>
             <span id="ask-label" class="ask-label">ask</span>
             <textarea id="ask-input" class="ask-input" rows="1" autocomplete="off" spellcheck="false"
-                      placeholder="Ask a question — for choices, list options: bus, train, or bicycle"
+                      placeholder="Would you try a new local service offering $5 off your first order?"
                       aria-label="Predict anything"></textarea>
             <button id="ask-attach" class="ask-attach" type="button" aria-label="Add an image" title="Add an image — a storefront, product or ad residents should react to (or paste / drop one)">
               <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
@@ -134,6 +134,11 @@
           </div>
           <!-- question type + the extra fields each type needs; shown while composing -->
           <div class="ask-extra">
+            <details id="location-context" class="location-context"><summary>Location context (optional)</summary>
+              <label for="location-area">Launch area</label>
+              <select id="location-area" aria-describedby="location-note" disabled><option value="">Loading mapped places…</option></select>
+              <p id="location-note" role="status">Loading geographic context…</p>
+            </details>
             <!-- images residents react to: thumbnail + what Simtra saw, editable before sending -->
             <div id="stimulus-strip" class="stimulus-strip" hidden aria-live="polite"></div>
             <div class="ask-modes" role="radiogroup" aria-label="Question type">

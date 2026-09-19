@@ -17,6 +17,8 @@ import {
   AB_CROSS_KEY_SEP, AB_MIN_SEGMENT_N, abCrossMatrix, abLeanAlpha, abSegments,
   abTopMovers, isCrossBreakdown, normalizeBreakdowns, pct, signedPp,
 } from "./ab-analysis.js";
+import { initLocationContext, locationEvidence } from "./location-context.js";
+import { withSimulationRecovery } from "./simulation-recovery.js";
 import * as api from "./api.js?v=ws-1";
 import { buildEvidenceChartModel } from "./evidence-chart.js";
 import { createPersonaChart, answerLabel } from "./persona-chart.js?v=5";
@@ -90,6 +92,7 @@ const els = {
 };
 
 export const map = new SFMap(els.canvas);
+const locationContext = initLocationContext({ select: $("location-area"), note: $("location-note"), getLocations: api.getLocations });
 const motionPreference = matchMedia("(prefers-reduced-motion: reduce)");
 map.reducedMotion = motionPreference.matches;
 motionPreference.addEventListener("change", (event) => { map.reducedMotion = event.matches; });
@@ -216,7 +219,7 @@ const inputOpen = () => els.ask.dataset.state === "input";
 
 const ASK_MODE_LABEL = { predict: "ask", ab: "A/B test", marketing: "post test" };
 const ASK_MODE_PLACEHOLDER = {
-  predict: "Ask a question — for choices, list options: bus, train, or bicycle",
+  predict: "Would you try a new local service offering $5 off your first order?",
   ab: "Which message makes you more likely to support this proposal?",
   marketing: "Do you support the proposed transit measure?",
 };
@@ -231,6 +234,7 @@ function setAsk(s) {
 // switching never leaves the place the question is typed.
 function setAskMode(mode) {
   state.askMode = mode;
+  locationContext.setMode(mode);
   els.ask.dataset.mode = mode;
   for (const b of els.askModes.querySelectorAll(".ask-mode")) b.setAttribute("aria-checked", b.dataset.mode === mode ? "true" : "false");
   els.abFields.hidden = mode !== "ab";
@@ -244,6 +248,30 @@ function setAskMode(mode) {
 function cleanupBranch() {
   resetEvidence();
   if (state.branchId) { api.deleteBranch(state.branchId); state.branchId = null; }
+}
+
+// Recreate the same seeded, filtered population after a backend restart without
+// clearing the user's question, launch area, workspace or in-flight UI state.
+function withCurrentSimulation(run, signal) {
+  const requestId = state.reqId;
+  const city = citySlug();
+  const filters = { ...state.filters };
+  return withSimulationRecovery({run, signal, restore: async () => {
+    els.progressLabel.textContent = "reconnecting your audience after a server restart…";
+    const sim = await api.createSimulation({city, ...(filterCount(filters) ? {filters} : {})});
+    const agents = await api.getAllAgents(sim.main_branch);
+    if (signal?.aborted || requestId !== state.reqId) throw new DOMException("Request cancelled", "AbortError");
+    if (!agents.length) throw new Error("Couldn't restore the selected audience");
+    state.simId = sim.simulation_id;
+    state.mainBranch = sim.main_branch;
+    state.rawResidents = agents;
+    state.residents = agents.length;
+    state.filterSourceRecords = sim.source_records ?? state.filterSourceRecords;
+    map.setAgents(agents);
+    map.setSim(city, sim.main_branch);
+    map.setWaiting();
+    refreshFeedPanel({quiet:true});
+  }});
 }
 
 
@@ -560,6 +588,7 @@ async function loadCity(city, { filters = state.filters, preserveOnError = false
   resetEvidence();
   state.rawResidents = [];
   state.city = city;
+  void locationContext.load(city.slug);
   // Committed local tiles supply dimensions and shoreline masks without a live source call.
   const maskBase = `assets/${city.slug}_tiles.png`;
   if (city.bbox) MAP.bbox = { ...city.bbox };
@@ -1212,6 +1241,8 @@ async function runPrediction(question) {
   const audience = currentAudience();
   setRunAudience(audience);
 
+  const locationAreaId = locationContext.selectedId();
+
   cleanupBranch();
   const myReq = ++state.reqId;
   state.abort = new AbortController();
@@ -1252,12 +1283,13 @@ async function runPrediction(question) {
     els.progressFill.style.width = "18%";
     els.progressLabel.textContent = "tallying the electorate… (esc to cancel)";
 
-    const branch = await api.createBranch(state.simId, { ticks: PREDICT.branch_ticks, name: "predict", signal });
+    const branch = await withCurrentSimulation(() => api.createBranch(state.simId, { ticks: PREDICT.branch_ticks, name: "predict", signal }), signal);
     if (myReq !== state.reqId) { api.deleteBranch(branch.branch_id); return; }
     state.branchId = branch.branch_id;
 
     const result = await api.poll(state.branchId, {
       question: pollQuestion, description, framing, ...(options ? { options } : {}),
+      ...(locationAreaId ? { location_area_id: locationAreaId } : {}),
       ...(stimulus ? { stimulus } : {}),
       as_of_date: PREDICT.as_of_date, model: PREDICT.model,
     }, signal);
@@ -1377,11 +1409,11 @@ async function runMarketingTest() {
     map.setWaiting();
 
     setMarketingBusy(true, "Comparing responses…");
-    const branch = await api.createBranch(state.simId, {
+    const branch = await withCurrentSimulation(() => api.createBranch(state.simId, {
       ticks: PREDICT.branch_ticks,
       name: "marketing-counterfactual",
       signal,
-    });
+    }), signal);
     if (myReq !== state.reqId) { api.deleteBranch(branch.branch_id); return; }
     state.branchId = branch.branch_id;
 
@@ -1483,12 +1515,12 @@ async function runAbTest() {
   map.setWaiting();
 
   try {
-    const result = await api.abTest(state.mainBranch, {
+    const result = await withCurrentSimulation(() => api.abTest(state.mainBranch, {
       ...input,
       as_of_date: PREDICT.as_of_date,
       model: PREDICT.model,
       population: "all",
-    }, signal);
+    }, signal), signal);
     if (myReq !== state.reqId) return;
     state.lastResult = { ...result, audience, stimuli };
     setTimeout(() => refreshFeedPanel({ quiet: true }), 1500); // the A/B test is now a post in the feed
@@ -1542,10 +1574,10 @@ function pastMeta(result) {
 
 function hydraMeta(result) {
   const hydra = result?.hydra;
-  if (!hydra || hydra.status !== "connected" || !Number(hydra.chunks)) return "";
+  if (!hydra || hydra.status !== "connected" || !Number(hydra.chunks)) return locationEvidence(result.location_context);
   const sourceTitles = (hydra.sources || []).map((source) => source.title).filter(Boolean);
   const sourceText = sourceTitles.length ? ` · ${sourceTitles.slice(0, 3).join(", ")}` : "";
-  return `<div class="res-meta res-hydra">Additional source context${escapeHtml(sourceText)}</div>`;
+  return locationEvidence(result.location_context) + `<div class="res-meta res-hydra">Additional source context${escapeHtml(sourceText)}</div>`;
 }
 
 function showMarketingResults(result) {

@@ -18,6 +18,7 @@ pub mod hydra;
 pub mod insforge;
 pub mod lifestyle;
 pub mod jev;
+pub mod locations;
 pub mod memory;
 pub mod model;
 pub mod news;
