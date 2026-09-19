@@ -29,6 +29,6 @@ const assert=require('node:assert/strict');
  await page.locator('#char-close').click();
  assert.equal(await page.locator('#char-card').isVisible(),false);
  assert.deepEqual(errors,[]);
- const tabs=await page.locator('.fp-view').allTextContents();assert.equal(tabs.length,3);assert.ok(tabs[0].startsWith('All'));assert.ok(tabs[1].startsWith('News'));assert.ok(tabs[2].startsWith('Experiments'));
- console.log('PASS actual map click opens matching bottom-left resident profile and closes; All, News and Experiments share the tab row');
+ assert.equal(await page.locator('.fp-views').isVisible(),false);
+ console.log('PASS actual map click opens matching bottom-left resident profile and closes; one unified timeline without separate view tabs');
 }finally{await browser.close();}})().catch(e=>{console.error(e);process.exit(1)});

@@ -543,7 +543,7 @@ function openPastResult(item) {
 function setBoot(p) { els.bootFill.style.width = `${Math.round(Math.max(0, Math.min(1, p)) * 100)}%`; }
 
 async function boot() {
-  map.onZoomChange = (zoomedIn) => { zoomedIn ? show(els.returnBtn) : hide(els.returnBtn); };
+  map.onZoomChange = (zoomedIn) => { positionContext(); zoomedIn ? show(els.returnBtn) : hide(els.returnBtn); };
   map.start();
   evolution = initEvolution({map, getBranch:()=>state.mainBranch, getCity:citySlug, isReady:()=>!!state.mainBranch && !state.switching && !api.isDemo && !isBusy() && state.phase!=="booting"});
   initFeedPanel({
@@ -722,11 +722,19 @@ function setIdleStatus() {
   show(els.status);
 }
 
-// The audience can wrap to several lines. Keep news below it at every viewport.
+// The title/sample count can wrap. Anchor map controls to its measured bounds.
 function positionContext() {
-  $("ui").style.setProperty("--context-bottom", `${Math.ceil(els.status.getBoundingClientRect().bottom) + 10}px`);
+  const ui = $("ui");
+  const title = els.titleSelect.getBoundingClientRect();
+  const origin = ui.getBoundingClientRect();
+  document.body.style.setProperty("--experiment-mobile-top", `${Math.ceil(title.bottom)+12}px`);
+  ui.style.setProperty("--context-bottom", `${Math.ceil(title.bottom - origin.top) + 10}px`);
+  els.returnBtn.style.top = `${Math.ceil(title.bottom - origin.top) + 10}px`;
+  els.returnBtn.style.left = `${Math.round(title.left - origin.left)}px`;
+  els.returnBtn.style.right = "auto";
 }
-new ResizeObserver(positionContext).observe(els.status);
+new ResizeObserver(positionContext).observe(els.titleSelect);
+new MutationObserver(positionContext).observe(document.body, { attributes: true, attributeFilter: ["class"] });
 
 function fmtDate(iso) {
   const d = new Date(iso);
@@ -2395,6 +2403,18 @@ async function showAbDemo() {
 
 research = createResearchWorkspace({
   map,
+  showScenarioLocation: location => {
+    let badge=document.getElementById("scenario-map-location");
+    if(!badge){badge=document.createElement("div");badge.id="scenario-map-location";els.titleSelect.append(badge);}
+    badge.hidden=!location;badge.textContent=location ? `Scenario · ${location}` : '';
+    const previous=badge.dataset.location;badge.dataset.location=location || '';
+    if(location && previous!==location){
+      const residents=map.agents.filter(a=>a.hood===location);
+      const placed=residents.filter(a=>Number.isFinite(a.wx)&&Number.isFinite(a.wy));
+      if(placed.length)map.zoomTo(placed.reduce((n,a)=>n+a.wx,0)/placed.length,placed.reduce((n,a)=>n+a.wy,0)/placed.length);
+    }
+    positionContext();
+  },
   startTimeline: async (run, selected) => {
     if(api.isDemo) throw new Error("Timeline simulation requires the live backend. Offline results are illustrative.");
     const offer=run.experiment.scenarios[selected];

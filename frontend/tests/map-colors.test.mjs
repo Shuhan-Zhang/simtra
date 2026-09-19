@@ -70,3 +70,14 @@ test('canvas categorical markers match legend; missing demographics do not fall 
   map._drawSprites(performance.now(),0);
   assert.equal(fills.length,2);assert.equal(fills[0],fills[1]);
 });
+test('automatic demographic view supports canonical cross dimensions and readable legend',()=>{
+  const population=[{id:42,segments:{gender:'women',gender_x_age:'women|18-24',education_x_income:'lt_hs|q0'}},{id:7,segments:{gender:'men',gender_x_age:'men|65+',education_x_income:'graduate|q4'}}];
+  const crossed=researchMapColors(groups,['Yes','No'],population,'gender_x_age');
+  assert.equal(crossed.mode,'gender_x_age');
+  assert.deepEqual(crossed.legend.map(x=>x.label),['Men · 65+','Women · 18-24']);
+  assert.notEqual(crossed.colors.get(42),crossed.colors.get(7));
+  assert.equal(crossed.colors.has(9),false);
+  const education=researchMapColors(groups,['Yes','No'],population,'education_x_income');
+  assert.deepEqual(education.legend.map(x=>x.label),['Graduate degree · Income Q5 (highest)','Less than high school · Income Q1 (lowest)']);
+  assert.equal(researchMapColors(groups,['Yes','No'],population,'race').mode,'response');
+});

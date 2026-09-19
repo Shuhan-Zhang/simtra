@@ -1,3 +1,4 @@
+import { setTimelineExperiments, showCityTimeline } from "./feedpanel.js?v=18";
 import { scenarioMatrixHtml, experimentDesignHtml } from "./experiment-visuals.js";
 import { personaResultHtml } from "./persona-result.js";
 import { researchMapColors } from "./map-colors.js";
@@ -18,11 +19,16 @@ const pct = n => n == null ? "—" : `${(n * 100).toFixed(1)}%`;
 const pp = n => n == null ? "—" : `${n > 0 ? "+" : ""}${(n * 100).toFixed(1)} pp`;
 const money = n => `$${n.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
 const dimLabels = { income: "Income", age: "Age", education: "Education", gender: "Sex recorded in Census", race: "Race / ethnicity", geography: "Area", tenure: "Housing tenure" };
+const dimensionName = key => (key || "group").split("_x_").map(part=>dimLabels[part] || part.replaceAll("_"," ")).join(" × ");
 
-export function createResearchWorkspace({ map, getContext, openFilters, labelGroup, prepare, setBusy, getPersona, restoreAudience, startTimeline, compareScenarios = api.compareScenarios }) {
+export function createResearchWorkspace({ map, getContext, openFilters, labelGroup, prepare, setBusy, getPersona, restoreAudience, startTimeline, showScenarioLocation, compareScenarios = api.compareScenarios }) {
   const root = document.getElementById("research-workspace"), launcher = document.getElementById("research-launch");
   // Keep the panel outside the transformed composer so it docks to the viewport.
   document.getElementById("dock").before(root);
+  const residentPanel = document.createElement("aside");
+  residentPanel.id="experiment-person";residentPanel.className="ex-resident-panel";residentPanel.hidden=true;
+  residentPanel.setAttribute("aria-label","Resident details");document.body.append(residentPanel);
+  let reviewingSaved=false, resultSection="overview";
   const chartDialog = document.createElement("dialog");
   chartDialog.className = "ex-chart-dialog";
   chartDialog.setAttribute("aria-label", "Expanded price chart");
@@ -58,45 +64,60 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
     visible = show; root.hidden = !show;
     if(!show && chartDialog.open)closeChart();
     document.body.classList.toggle("experiment-open", show);
-    launcher.hidden = show;
+    document.body.classList.toggle("reviewing-experiment",show && reviewingSaved && view==="results");
+    if(!show){residentPanel.hidden=true;showScenarioLocation?.(null);}
+    launcher.hidden = true;
     launcher.setAttribute("aria-expanded", String(show));
   }
   function disposeChart() { chart?.destroy(); chart = null; }
-  function resetSelection() { personGeneration++; person = null; disposeChart(); map.clearSegmentSelection(); }
+  function resetSelection() { personGeneration++; person = null; residentPanel.hidden=true; disposeChart(); map.clearSegmentSelection(); }
   const chip = (label, name, value, pressed) => `<button type="button" class="ex-chip" data-${name}="${esc(value)}" aria-pressed="${pressed}">${esc(label)}</button>`;
   function render() {
     if (!visible) { visibility(false); return; }
+    document.body.classList.toggle("reviewing-experiment",reviewingSaved && view==="results");
     const scroll = root.scrollTop;
     const focused = root.contains(document.activeElement) ? document.activeElement : null;
     const attr = focused?.getAttributeNames().find(a => a.startsWith("data-"));
     const focus = attr ? `[${attr}="${CSS.escape(focused.getAttribute(attr))}"]` : null;
     disposeChart();
-    root.innerHTML = `<header class="ex-header"><span class="ex-kicker">${view === "history" ? "Saved experiments" : view === "results" ? "Experiment results" : busy ? "Experiment in progress" : "Proposed experiment"}</span><div class="ex-header-tools">${localRuns().length && view !== "history" ? `<button class="ex-link ex-history-trigger" data-action="history">History (${localRuns().length})</button>` : ""}<button class="ex-close" data-action="close" aria-label="Close experiment" ${busy ? "disabled" : ""}>×</button></div></header>
+    root.innerHTML = `<header class="ex-header"><span class="ex-kicker">${view === "history" ? "Saved experiments" : view === "results" ? "Experiment results" : busy ? "Experiment in progress" : "Proposed experiment"}</span><div class="ex-header-tools">${localRuns().length && view !== "history" ? `<button class="ex-link ex-history-trigger" data-action="history">Timeline</button>` : ""}<button class="ex-close" data-action="close" aria-label="Close experiment" ${busy ? "disabled" : ""}>×</button></div></header>
       ${saveNote ? `<p class="ex-note" role="status">${esc(saveNote)}</p>` : ""}
       ${api.isDemo ? '<p class="ex-demo">Demo mode · no model calls. <a href="?pipeline=2">Open live backend →</a></p>' : ""}
-      ${view === "history" ? historyHtml() : view === "planning" ? progressHtml() : view === "proposal" ? proposalHtml() : resultHtml()}`;
+      ${view === "planning" ? progressHtml() : view === "proposal" ? proposalHtml() : resultHtml()}`;
     if (busy) root.querySelectorAll("button, select").forEach(el => { el.disabled = el.dataset.action !== "cancel"; });
     if (view === "results") mountPeople();
     if(chartDialog.open)renderExpandedChart();
+    scheduleViewedResult();
     root.scrollTop = scroll;
     if (focus) root.querySelector(focus)?.focus({ preventScroll: true });
   }
-  function historyHtml() {
-    return `<h2>Your experiments.</h2><p class="ex-question">Reopen the research, results and people behind each decision.</p><p class="ex-note">Saved in this browser · ${esc(ctx().city)}</p><div class="ex-history-list">${!localRuns().length?'<p class="ex-note">No experiments yet. Ask a question to start one.</p>':""}${localRuns().slice().reverse().map(run=>`<button class="ex-history-entry" data-run="${esc(run.id)}"><time datetime="${esc(run.createdAt)}">${esc(new Date(run.createdAt).toLocaleString([], {dateStyle:"medium",timeStyle:"short"}))}</time><strong>${esc(run.experiment.decision)}</strong><span>${run.scenarios.length} combinations · ${run.residents.length.toLocaleString()} residents${run.researchPanel ? ` · ${(run.researchPanel.sources?.length || 0)} sources` : ""}</span><span>${esc(audienceText(run.audience))}</span><span>${run.fixture ? "Illustrative demo" : "Completed experiment"} · Read full results →</span></button>`).join("")}</div>`;
-  }
   function openHistory() {
     if(busy)return;
-    prepare();resetSelection();liveMap();view="history";visibility(true);root.scrollTop=0;render();
+    resetSelection();visibility(false);liveMap();showCityTimeline();
   }
   function executionHtml(run) {
     const events=run.executionLog || run.trace?.events || [];
     return `<details class="ex-details"><summary>Run activity</summary><p>Saved ${esc(new Date(run.createdAt).toLocaleString())}</p><ol class="ex-saved-activity">${events.map(event=>`<li><strong>${esc(event.phase || "Experiment")}</strong><span>${esc(event.message || event.kind)}</span></li>`).join("")}</ol></details>`;
   }
+  const legendHtml = colors => colors.legend.map(item=>`<span><i style="background:${esc(item.color)}"></i>${esc(item.label)}</span>`).join("");
   function mapKeyHtml(run) {
-    const colors = researchMapColors(run.scenarios[selected].response_groups, run.experiment.options, map.agents, mapColorBy);
-    mapColorBy = colors.mode;
-    return `<section class="ex-map-colors"><label for="experiment-map-color">Color residents by</label><select id="experiment-map-color" data-map-color>${colors.modes.map(mode=>`<option value="${esc(mode.key)}" ${mode.key===mapColorBy?"selected":""}>${esc(mode.label)}</option>`).join("")}</select><div class="ex-map-key">${colors.legend.map(item=>`<span><i style="background:${esc(item.color)}"></i>${esc(item.label)}</span>`).join("")}</div><p class="ex-foot">${mapColorBy==="response"?"Color shows the most likely answer for each resident’s modeled group.":mapColorBy==="factor"?"Color shows the main factor assigned to each modeled group.":"Color shows the resident’s demographic group."} Select a resident on the map to explore.</p></section>`;
+    const colors = researchMapColors(run.scenarios[selected].response_groups,run.experiment.options,map.agents,mapColorBy);
+    return `<div class="ex-map-key" aria-label="Map legend">${legendHtml(colors)}</div>`;
   }
+  function followVisibleResult() {
+    if(!visible || view!=="results" || !active)return;
+    const bounds=root.getBoundingClientRect();
+    const exposure = selector => {const el=root.querySelector(selector);if(!el || !el.getClientRects().length)return 0;const r=el.getBoundingClientRect();return Math.max(0,Math.min(r.bottom,bounds.bottom)-Math.max(r.top,bounds.top+100));};
+    const audience=exposure(".ex-audience-response"), curve=exposure(".ex-price-response"), impact=exposure(".ex-impact");
+    const desired=audience>curve && audience>impact ? chart?.dimension || "response" : impact>curve ? "factor" : "response";
+    const colors=map.mapColorMode===desired ? {mode:desired,legend:map.mapColorLegend} : map.setResearchResponses(active.scenarios[selected].response_groups,active.experiment.options,{colorBy:desired});
+    mapColorBy=colors.mode;
+    root.querySelectorAll(".ex-map-key").forEach(el=>el.innerHTML=legendHtml(colors));
+  }
+  let mapViewFrame=null;
+  const scheduleViewedResult=()=>{if(mapViewFrame!=null)return;mapViewFrame=requestAnimationFrame(()=>{mapViewFrame=null;followVisibleResult();});};
+  root.addEventListener("scroll",scheduleViewedResult,{passive:true});
+  window.addEventListener("resize",scheduleViewedResult);
   function syncControl(status, extra={}) {
     if(!control)return;
     control={...control,...extra,status,events:executionLog,updatedAt:new Date().toISOString()};
@@ -107,9 +128,9 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
     const progress=root.querySelector(".ex-progress");
     if(progress&&event.kind==="scenario.completed")progress.textContent=`${event.details.scenario} of ${compilePlan(plan).scenarios.length} combinations complete`;
   }
-  function evidenceHtml(panel) {
+  function evidenceHtml(panel, expanded=false) {
     if (!panel) return api.isDemo ? '<p class="ex-note">Offline fixture · internet research is not performed.</p>' : '';
-    return `<details class="ex-details"><summary>${(panel.sources?.length || 0)} sources · ${(panel.personas?.length || 0)} researched profiles</summary>
+    return `<details class="ex-details" ${expanded?"open":""}><summary>${(panel.sources?.length || 0)} sources · ${(panel.personas?.length || 0)} researched profiles</summary>
       <p>Qualitative customer context; Census demographics and weights remain unchanged.</p>
       ${(panel.personas || []).map(p=>`<p><b>${esc(p.label)}</b> ${(p.attributes || []).filter(a=>a.value).map(a=>`${esc(a.key.replaceAll('_',' '))}: ${esc(a.value)} (${esc(a.provenance)})`).join(' · ')}</p>`).join('')}
       ${(panel.sources || []).map(source=>{let url;try{url=new URL(source.url);if(!['https:','http:'].includes(url.protocol))url=null;}catch{}return `<p>${url?`<a href="${esc(url.href)}" target="_blank" rel="noopener noreferrer">${esc(source.title)}</a>`:esc(source.title)}</p>`;}).join('')}
@@ -152,31 +173,37 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
   const share=scenarioShare(run.scenarios[selected],exp.indices);
   const selectedPrice=current.change??current.price;
   const mode=exp.priceMode || (current.change!=null?"relative":"absolute");
-  return `<h2>${hasCurve?"The price trade-off.":"Your options, compared."}</h2><p class="ex-question">${esc(exp.decision)}</p>
+  const tabPanel = key => `id="result-section-${key}" role="tabpanel" aria-labelledby="result-tab-${key}" ${resultSection===key?"":"hidden"}`;
+  return `<nav class="ex-section-tabs" role="tablist" aria-label="Result sections">${["research","comparisons","overview","simulate"].map(key=>`<button type="button" role="tab" id="result-tab-${key}" data-section="${key}" aria-controls="result-section-${key}" aria-selected="${resultSection===key}" tabindex="${resultSection===key?0:-1}">${({research:"Data & personas",comparisons:"Design",overview:"Results",simulate:"Simulate"})[key]}</button>`).join("")}</nav><h2>${hasCurve?"The price trade-off.":"Your options, compared."}</h2><p class="ex-question">${esc(exp.decision)}</p>
     <p class="ex-audience">${esc(audienceText(run.audience))} · ${run.residents.length.toLocaleString()} synthetic residents</p>
     ${run.fixture?'<p class="ex-demo">Illustrative demo results · not model answers to your question.</p>':'<p class="ex-note">Model estimates, not observed customer behavior.</p>'}
+    <div ${tabPanel("overview")}>
     ${mapKeyHtml(run)}
     <div class="ex-metrics">${hasCurve?metric(esc(exp.metric),pct(share))+metric(esc(exp.priceAxis||"Price"),esc(priceLabel(selectedPrice,mode)))+metric("Combinations tested",String(ranked.length)):metric("Highest intent",pct(best.share))+metric("Lead over next",pp(best.delta))+metric("Options tested",String(ranked.length))}</div>
-    ${hasCurve?curveHtml(run):""}
+    ${hasCurve?`<section class="ex-price-response">${curveHtml(run)}</section>`:""}
     <section class="ex-audience-response" aria-labelledby="experiment-audience-heading">
-      <h3 id="experiment-audience-heading">How different people respond</h3>
-      <p class="ex-foot">${esc(exp.metric)} within each group for the selected scenario. Select a group to highlight its residents on the map.</p>
+      <h3 id="experiment-audience-heading">${esc(exp.metric)} by group</h3>
+      <div class="ex-map-key ex-demographic-key" aria-label="Demographic map legend"></div>
       <div id="experiment-people"></div>
       <div class="ex-resident-preview"><span>Explore residents</span><div class="ex-faces" aria-label="Synthetic personas behind the selected estimate"></div></div>
-      <div id="experiment-person" ${person==null?"hidden":""}></div>
+
     </section>
+
+    </div><div ${tabPanel("comparisons")}>
+    ${experimentDesignHtml(run)}
     ${hasCurve?factorImpactHtml(run):''}
+    ${scenarioMatrixHtml(run,selected)}
+    <div class="ex-selected"><span>${esc(current.label)}</span><small>Tap ${hasCurve?"a price or ":""}a combination to explore its people.</small></div>
+    </div><div ${tabPanel("research")}>
+    <details open class="ex-details"><summary>Who this represents</summary><p>${run.residents.length.toLocaleString()} synthetic residents; ${run.audience.sourceRecords?.toLocaleString()??"unknown"} matching Census records. Weighted group responses, not independent interviews. City-wide audience, not a separate local demand sample for each area.</p></details>
+    ${evidenceHtml(run.researchPanel,true)}
+    ${newsHtml(run)}
+    ${executionHtml(run)}
+    </div><div ${tabPanel("simulate")}>
     <button class="ex-primary" data-action="timeline">Follow this scenario over 14 days<span>→</span></button>
     <p class="ex-foot">Daily routine estimates for this offer and audience. A separate model of adaptation, not an extrapolation of purchase intent.</p>
 
-    ${scenarioMatrixHtml(run,selected)}
-    <div class="ex-selected"><span>${esc(current.label)}</span><small>Tap ${hasCurve?"a price or ":""}a combination to explore its people.</small></div>
-    ${experimentDesignHtml(run)}
-    <details class="ex-details"><summary>Who this represents</summary><p>${run.residents.length.toLocaleString()} synthetic residents; ${run.audience.sourceRecords?.toLocaleString()??"unknown"} matching Census records. Weighted group responses, not independent interviews. City-wide audience, not a separate local demand sample for each area.</p></details>
-    ${evidenceHtml(run.researchPanel)}
-    ${newsHtml(run)}
-    ${executionHtml(run)}
-    <div class="ex-next"><button class="ex-link" data-action="refine">Refine this experiment ↗</button><button class="ex-link" data-action="new-audience">Try another audience ↗</button></div>
+    </div><div class="ex-next"><button class="ex-link" data-action="refine">Refine this experiment ↗</button><button class="ex-link" data-action="new-audience">Try another audience ↗</button></div>
     ${run.parentId?`<button class="ex-link ex-parent" data-run="${esc(run.parentId)}">← Previous experiment</button>`:""}<p class="ex-foot">${run.saved?"Saved in this browser":"Saved for this session only"} · ${esc(new Date(run.createdAt).toLocaleDateString())}</p>`;
 }
   function factorImpactHtml(run) {
@@ -187,7 +214,7 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
       const matches=exp.scenarios.map((scenario,index)=>({scenario,index})).filter(r=>others.every(k=>r.scenario[k]===chosen[k]));
       const baseline=f.id==='price'?matches[0]:(matches.find(r=>r.scenario[key]!==chosen[key]) || matches[0]);if(!baseline)return '';
       const delta=share-scenarioShare(run.scenarios[baseline.index],exp.indices);
-      return `<div><span>${esc(f.label)}<small>vs. ${esc(f.id==='price'?priceLabel(baseline.scenario[key],exp.priceMode):baseline.scenario[key])}</small></span><strong>${pp(delta)}</strong></div>`;
+      return `<button class="ex-factor-impact" type="button" data-scenario="${baseline.index}" aria-label="Compare ${esc(f.label)}: ${esc(baseline.scenario.label)}"><span>${esc(f.label)}<small>vs. ${esc(f.id==='price'?priceLabel(baseline.scenario[key],exp.priceMode):baseline.scenario[key])}</small></span><strong>${pp(delta)}</strong></button>`;
     });
     return `<section class="ex-impact"><h3>What changes modeled interest?</h3>${rows.join('')}<p class="ex-foot">Other tested factors held fixed for each comparison. Demographic differences are associations, not causal effects. Operating costs and profit are not estimated.</p></section>`;
   }
@@ -196,25 +223,27 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
   const exp=run.experiment, series=priceSeries(run,selected), ref=exp.scenarios[selected];
   const values=series.map(r=>r.scenario.change??r.scenario.price), min=Math.min(...values),max=Math.max(...values);
   const mode=exp.priceMode || (ref.change!=null?"relative":"absolute");
-  const X=x=>52+(x-min)/(max-min||1)*412,Y=y=>142-y*110;
+  const X=x=>80+(x-min)/(max-min||1)*400,Y=y=>190-y*130;
   const dense = series.length > 8;
   const tickStep = Math.ceil((series.length-1)/5);
   const points=series.map(r=>({...r,x:X(r.scenario.change??r.scenario.price),share:scenarioShare(r.result,exp.indices)}));
   const yLabel = /buy/i.test(exp.metric) ? "Estimated audience who would buy (%)" : `Estimated audience · ${exp.metric} (%)`;
-  return `<div class="ex-chart-heading"><div class="ex-chart-label">${esc(exp.metric)} by ${esc((exp.priceAxis||"price").toLowerCase())}</div>${expanded?"":'<button type="button" class="ex-link" data-action="expand-chart" aria-label="Expand price chart">Expand ↗</button>'}</div>
+  return `<div class="ex-chart-heading"><div class="ex-chart-label">${esc(exp.metric)} by ${esc((exp.priceAxis||"price").toLowerCase())}</div></div>
     ${ref.location?`<div class="ex-curve-controls">${["location","format"].map(key=>`<div class="ex-quick-filter"><span>${key==="location"?"Location":esc(exp.factors?.find(f=>f.id==="format")?.label||"Service format")}</span><div class="ex-filter-pills" role="group" aria-label="${key==="location"?"Location":"Service format"}">${[...new Set(exp.scenarios.map(s=>s[key]))].map(value=>`<button type="button" data-curve="${key}" data-value="${esc(value)}" aria-pressed="${value===ref[key]}">${esc(value)}</button>`).join("")}</div></div>`).join("")}</div>`:""}
-    <p class="ex-y-label">↑ ${esc(yLabel)}</p>
-    <svg class="ex-curve pc-svg ${dense?"ex-curve-dense":""}" viewBox="0 0 528 190" role="group" aria-label="${esc(yLabel)} by ${esc(exp.priceAxis||"price")}">
-    ${[0,.5,1].map(v=>`<line class="pc-grid" x1="52" x2="464" y1="${Y(v)}" y2="${Y(v)}"/><text class="pc-axis" x="42" y="${Y(v)+4}" text-anchor="end">${Math.round(v*100)}%</text>`).join("")}
+    <div class="ex-plot-heading"><p class="ex-y-label">↑ ${esc(yLabel)}</p></div>
+    <div class="ex-plot-wrap">${expanded?"":'<button type="button" class="ex-expand-chart" data-action="expand-chart" aria-label="Expand price chart" title="Expand chart"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M14 4h6v6M20 4l-8 8M10 5H5a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1v-5"/></svg></button>'}
+    <svg class="ex-curve pc-svg ${dense?"ex-curve-dense":""}" ${expanded?"":'data-expand-plot="true"'} viewBox="0 0 560 262" role="group" aria-label="${esc(yLabel)} by ${esc(exp.priceAxis||"price")}">
+    ${[0,.5,1].map(v=>`<line class="pc-grid" x1="80" x2="480" y1="${Y(v)}" y2="${Y(v)}"/><text class="pc-axis" x="64" y="${Y(v)+4}" text-anchor="end">${Math.round(v*100)}%</text>`).join("")}
     <polyline class="pc-line" points="${points.map(p=>`${p.x},${Y(p.share)}`).join(" ")}"/>
-    ${points.map((p,i)=>`<g class="pc-lpt ${selected===p.index?"sel":""}" role="button" tabindex="0" data-scenario="${p.index}" aria-pressed="${selected===p.index}" aria-label="${esc(p.scenario.label)}: ${pct(p.share)}"><title>${esc(priceLabel(p.scenario.change??p.scenario.price,mode))}: ${pct(p.share)}</title><circle class="ex-price-point" cx="${p.x}" cy="${Y(p.share)}" r="${dense?(selected===p.index?5:3):6}"/><circle class="ex-hit" cx="${p.x}" cy="${Y(p.share)}" r="${dense?9:18}"/>${!dense||selected===p.index?`<text class="pc-axis" x="${p.x}" y="${Y(p.share)-14}" text-anchor="middle">${pct(p.share)}</text>`:""}${!dense||i%tickStep===0||i===points.length-1?`<text class="pc-axis" x="${p.x}" y="163" text-anchor="middle">${esc(priceLabel(p.scenario.change??p.scenario.price,mode))}</text>`:""}</g>`).join("")}
-    <text class="pc-axis" x="264" y="186" text-anchor="middle">${esc(exp.priceAxis||"Price")} →</text></svg>
+    ${points.map((p,i)=>`<g class="pc-lpt ${selected===p.index?"sel":""}" role="button" tabindex="0" data-scenario="${p.index}" aria-pressed="${selected===p.index}" aria-label="${esc(p.scenario.label)}: ${pct(p.share)}"><title>${esc(priceLabel(p.scenario.change??p.scenario.price,mode))}: ${pct(p.share)}</title><circle class="ex-price-point" cx="${p.x}" cy="${Y(p.share)}" r="${dense?(selected===p.index?5:3):6}"/><circle class="ex-hit" cx="${p.x}" cy="${Y(p.share)}" r="${dense?9:18}"/>${!dense||selected===p.index?`<text class="pc-axis ex-point-value" x="${p.x}" y="${Y(p.share)-18}" text-anchor="${i===0?"start":i===points.length-1?"end":"middle"}">${pct(p.share)}</text>`:""}${!dense||i%tickStep===0||i===points.length-1?`<text class="pc-axis ex-price-tick ${i!==0&&i!==points.length-1&&(dense?Math.round(i/tickStep):i)%2?"ex-minor-tick":""}" x="${p.x}" y="218" text-anchor="middle">${esc(priceLabel(p.scenario.change??p.scenario.price,mode))}</text>`:""}</g>`).join("")}
+    <text class="pc-axis" x="280" y="253" text-anchor="middle">${esc(exp.priceAxis||"Price")} →</text></svg></div>
     <div class="ex-curve-legend"><span>${dense?`${points.length} tested prices · select the line to inspect`:'<i></i>Tested price'}</span><span><i class="selected"></i>Selected price</span></div>
     <p class="ex-foot">Percentages are modeled shares of the simulated audience, not sales or profit. Location and format stay fixed. Lines connect tested prices; values between them have not been tested. ${mode==="absolute"?"Prices are experimental assumptions.":""}</p>`;
 }
   function mountPeople() {
     const run = active, scenario = run.scenarios[selected], exp = run.experiment;
     map.setResearchResponses?.(scenario.response_groups, exp.options, {colorBy:mapColorBy});
+    showScenarioLocation?.(exp.scenarios[selected].location);
     const answers = new Map();
     for (const group of scenario.response_groups) for (const id of group.agent_ids) {
       const p = metricShare(group.probabilities,exp.indices);
@@ -230,10 +259,11 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
       question:exp.question,framing:"options",options:[exp.metric,"Other responses"],topIndex:0,model,residents:run.residents,answers,
       answersNote:"Inherited demographic-group estimates, not individual interviews.",type:"bar",compact:true,showHeading:false,showChartTypes:false,
       dimension: [demographicDimension,"income","age"].find(d=>model.breakdowns.some(b=>b.dimension===d && b.groups.length)),
-      onDimensionChange:dimension=>{ demographicDimension=dimension; },
-      labels:{dimension:d=>dimLabels[d]||d,group:labelGroup},drawHead:(canvas,id)=>map.drawHeadTo(canvas,id),
+      onDimensionChange:dimension=>{ demographicDimension=dimension;scheduleViewedResult();root.querySelector("#experiment-audience-heading").textContent=`${exp.metric} by ${dimensionName(dimension).toLowerCase()}`; },
+      labels:{dimension:dimensionName,group:labelGroup},drawHead:(canvas,id)=>map.drawHeadTo(canvas,id),
       openPerson:r=>inspect(r.id),onGroupSelect:segments=>map.setSegmentSelection(segments?.length?{clauses:segments,operator:"or"}:null),
     });
+    root.querySelector("#experiment-audience-heading").textContent=`${exp.metric} by ${dimensionName(chart.dimension).toLowerCase()}`;
     const faces = run.residents.filter(r=>answers.has(r.id)).slice(0,6);
     const host = root.querySelector(".ex-faces");
     host.innerHTML = `${faces.map(r=>`<button data-person="${r.id}" aria-label="Inspect ${esc(r.name)}" title="${esc(r.name)}"><canvas width="40" height="40"></canvas></button>`).join("")}`;
@@ -245,16 +275,17 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
     const resident = active.residents.find(r=>r.id===Number(id));
     if (!resident) return false;
     person=resident.id; const seq=++personGeneration, run=active;
-    const host=root.querySelector("#experiment-person"); host.hidden=false;
+    const host=residentPanel; host.hidden=false;
     host.innerHTML=personaResultHtml(run,id,selected);
     map.drawHeadTo(host.querySelector("canvas"),id);
-    if(scroll) host.scrollIntoView({block:"nearest",behavior:"smooth"});
+    if(scroll) host.scrollTop=0;
     try { const detail=await getPersona?.(run,id); if(seq===personGeneration && detail?.persona) host.querySelector(".ex-person-story").textContent=detail.persona; } catch { /* Stored demographics remain available. */ }
     return true;
   }
   let lastQuestion = "";
   async function openDecision(question) {
     if(busy || !ctx().ready) return;
+    reviewingSaved=false;resultSection="overview";
     lastQuestion=question; researchPanel=null; researchProgress="Checking saved research…"; parentId=null; plan=null; error=""; areasOpen=false; allRanks=false; resetSelection(); prepare(); liveMap();
     planningLog=[]; executionLog=[{kind:"client.plan_requested",phase:"Plan",message:api.isDemo?"Demo recipe selected locally. No model will be called.":"Requesting a proposal from the backend; waiting for execution evidence."}];
     control={id:crypto.randomUUID(),createdAt:new Date().toISOString(),question,city:ctx().city,model:PREDICT.model,population:ctx().residents.length,fixture:api.isDemo};syncControl("planning");
@@ -294,7 +325,7 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
       try {await store.save(run);} catch {run.saved=false;saveNote="Browser storage is unavailable. Keep this tab open to retain the experiment.";}
       if(seq!==generation) return;
       controlWriter.write(controlRecordFromRun(run));controlWriter.flush().catch(()=>{});control.status="completed";
-      runs.push(run);active=run;parentId=null;selected=run.experiment.priceMode==="relative" ? Math.max(0,run.experiment.scenarios.findIndex(s=>s.change===Number(Number(run.draft?.percent).toFixed(2)))) : rankScenarios(run)[0].index;
+      runs.push(run);setTimelineExperiments(runs,openRun);active=run;parentId=null;selected=run.experiment.priceMode==="relative" ? Math.max(0,run.experiment.scenarios.findIndex(s=>s.change===Number(Number(run.draft?.percent).toFixed(2)))) : rankScenarios(run)[0].index;
       resetSelection();view="results";map.setAgents(residents);map.clearVerdicts();root.scrollTop=0;
     } catch(e) {if(seq===generation) { addLog({kind:"client.failed",message:e.message});syncControl("failed",{error:e.message});error=e.status===404?"The backend needs the updated experiment endpoint. Your proposal is preserved.":e.message; }}
     finally {if(seq===generation) {busy=false;abort=null;setBusy(false);render();}}
@@ -309,6 +340,7 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
   function openRun(id) {
     if(busy) return;
     const run=localRuns().find(r=>r.id===id); if(!run) return;
+    reviewingSaved=true;resultSection="overview";
     prepare();resetSelection();active=run;selected=run.experiment.priceMode==="relative" ? Math.max(0,run.experiment.scenarios.findIndex(s=>s.change===Number(Number(run.draft?.percent).toFixed(2)))) : rankScenarios(run)[0].index;view="results";
     map.setAgents(run.residents);map.clearVerdicts();visibility(true);root.scrollTop=0;render();
   }
@@ -327,12 +359,16 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
     } catch {saveNote="Could not restore this audience. Reconnect and try again.";render();}
   }
   root.addEventListener("change",e=>{
-    if(e.target.matches("[data-map-color]") && active && !busy) { mapColorBy=e.target.value;render(); }
+
   });
+  residentPanel.addEventListener("keydown",e=>{if(e.target.matches("g[data-scenario]") && ["Enter"," "].includes(e.key)){e.preventDefault();e.target.dispatchEvent(new MouseEvent("click",{bubbles:true}));}});
   root.addEventListener("keydown",e=>{if(e.target.matches("g[data-scenario]") && ["Enter"," "].includes(e.key)){e.preventDefault();e.target.dispatchEvent(new MouseEvent("click",{bubbles:true}));}});
   function handleResearchClick(e) {
-    const b=e.target.closest("button, g[data-scenario]"); if(!b || (busy && b.dataset.action!=="cancel")) return;
+    const b=e.target.closest("button, g[data-scenario]");
+    if(!b && !busy && active && e.target.closest("[data-expand-plot]")) {renderExpandedChart();chartDialog.showModal();return;}
+    if(!b || (busy && b.dataset.action!=="cancel")) return;
     const d=b.dataset;
+    if(d.section) {resultSection=d.section;root.scrollTop=0;render();root.querySelector(`[data-section="${resultSection}"]`)?.focus({preventScroll:true});return;}
     if(d.action==="close-chart")return closeChart();
     if(d.action==="expand-chart") {renderExpandedChart();chartDialog.showModal();return;}
     if(d.curve && active && !busy) {
@@ -353,7 +389,7 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
     if(d.action==="all-ranks") {allRanks=!allRanks;render();return;}
     if(d.run) return openRun(d.run);
     if(d.person) return inspect(d.person);
-    if(d.action==="close-person") {person=null;personGeneration++;render();return;}
+    if(d.action==="close-person") {residentPanel.hidden=true;person=null;personGeneration++;render();return;}
     if(d.scenario!=null) {selected=Number(d.scenario);render();return;}
     if(!plan || view!=="proposal") return;
     error="";
@@ -367,8 +403,14 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
   }
   root.addEventListener("click",handleResearchClick);
   chartDialog.addEventListener("click",handleResearchClick);
+  residentPanel.addEventListener("click",handleResearchClick);
+  root.addEventListener("keydown",event=>{
+    if(!event.target.matches("[data-section]") || !["ArrowLeft","ArrowRight","Home","End"].includes(event.key))return;
+    event.preventDefault();const tabs=[...root.querySelectorAll("[data-section]")],i=tabs.indexOf(event.target);
+    tabs[event.key==="Home"?0:event.key==="End"?tabs.length-1:(i+(event.key==="ArrowRight"?1:-1)+tabs.length)%tabs.length].click();
+  });
   launcher.addEventListener("click",openHistory);
-  store.list().then(saved=>{runs=[...saved.filter(s=>!runs.some(r=>r.id===s.id)),...runs];render();}).catch(()=>{saveNote="Runs will remain in this tab; browser storage is unavailable.";render();});
+  store.list().then(saved=>{runs=[...saved.filter(s=>!runs.some(r=>r.id===s.id)),...runs];setTimelineExperiments(runs,openRun);render();}).catch(()=>{saveNote="Runs will remain in this tab; browser storage is unavailable.";render();});
   visibility(false);
   return {
     inspect,openDecision,cancel,

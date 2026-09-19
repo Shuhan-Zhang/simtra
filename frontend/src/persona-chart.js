@@ -22,7 +22,6 @@ const CHART_TITLES = { bar: "Share by group", histogram: "How support is spread 
 const NUMERIC_DIMENSIONS = new Set(["age", "income"]);
 const ORDERED_DIMENSIONS = new Set(["age", "income", "education"]);
 const HEAD_CAP = 12;
-const PEOPLE_PAGE = 20;
 const SCATTER_CAP = 1500;
 const HIST_BINS = 10;
 
@@ -208,7 +207,7 @@ export function createPersonaChart(host, opts) {
 
   // ── people list (the residents behind a statistic) ──
   function openPeople({ title, subtitle, rows, segments }) {
-    st.people = { title, subtitle, rows: byStrength(rows), shown: PEOPLE_PAGE, seq: (st.people?.seq || 0) + 1 };
+    st.people = { title, subtitle, rows: byStrength(rows), shown: 3, seq: (st.people?.seq || 0) + 1 };
     o.onGroupSelect(segments || null);
     renderPeople();
     el.people.classList.remove("hidden");
@@ -255,11 +254,11 @@ export function createPersonaChart(host, opts) {
       </div>
       ${!p.rows.length ? `<p class="pc-empty">No residents in this group in the current simulation.</p>` : ""}
       <ul class="pc-list">${rows.map((r) => personRow(r)).join("")}</ul>
-      ${p.rows.length > p.shown ? `<button type="button" class="pc-link pc-people-more">Show ${Math.min(PEOPLE_PAGE, p.rows.length - p.shown)} more</button>` : ""}`;
+      ${p.rows.length > p.shown ? `<button type="button" class="pc-link pc-people-more">Show all ${p.rows.length} residents</button>` : ""}`;
     paintHeads(el.people);
     for (const c of el.people.querySelectorAll(".pc-person-portrait")) o.drawHead(c, Number(c.dataset.agent));
     el.people.querySelector(".pc-people-back").addEventListener("click", () => { clearSelection(); render(); });
-    el.people.querySelector(".pc-people-more")?.addEventListener("click", () => { p.shown += PEOPLE_PAGE; renderPeople(); askPersonal(); });
+    el.people.querySelector(".pc-people-more")?.addEventListener("click", () => { p.shown = p.rows.length; renderPeople(); askPersonal(); });
     for (const li of el.people.querySelectorAll(".pc-person")) {
       li.addEventListener("click", () => {
         const row = p.rows.find((r) => r.resident.id === Number(li.dataset.agent));

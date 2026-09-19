@@ -8,6 +8,8 @@ const makeRun = () => {
 test('persona gives selected estimate and six controlled prices, not 24 repeated combinations', () => {
   const html = personaResultHtml(makeRun(),7,5);
   assert.equal((html.match(/data-scenario=/g)||[]).length,6);
+  assert.match(html,/pr-price-line/);
+  assert.doesNotMatch(html,/pr-price-bars/);
   assert.match(html,/30.0%/);
   assert.match(html,/80.0%/);
   assert.match(html,/-50.0/);

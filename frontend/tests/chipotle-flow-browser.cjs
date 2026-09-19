@@ -16,7 +16,7 @@ const ask=async page=>{await page.locator('#ask-input').fill(question);await pag
   // The offline path remains explicit and does not contact external providers.
   const offline=await browser.newPage({viewport:{width:1440,height:1000}}),external=[];
   await offline.route('**/*',r=>r.request().url().startsWith(base+'/')?r.continue():(external.push(r.request().url()),r.abort()));
-  await offline.goto(base+'/?demo=1');await ready(offline);await ask(offline);await offline.locator('.ex-matrix-cell').first().waitFor();
+  await offline.goto(base+'/?demo=1');await ready(offline);await ask(offline);await offline.locator('.ex-matrix-cell').first().waitFor({state:'attached'});
   assert.match(await offline.locator('.ex-curve').textContent(),/20%/);
   assert.equal(await offline.locator('input[type=file]').count(),0,'image upload removed from entry');
   assert.equal(await offline.locator('.ask-options').count(),0);
@@ -75,10 +75,12 @@ const ask=async page=>{await page.locator('#ask-input').fill(question);await pag
   assert.deepEqual(compareBody.research_panel,{id:panel.id,version:1,content_hash:'pinned-hash',role:'research_context_only'});
   assert.equal(compareBody.scenarios.length,84);assert.ok(compareBody.scenarios.some(s=>s.change===0));assert.ok(compareBody.scenarios.some(s=>s.change===20));
   await page.screenshot({path:'/tmp/simtra-chipotle-plan.png'});comparisonRelease();
-  await page.locator('.ex-matrix-cell').first().waitFor();
+  await page.locator('.ex-matrix-cell').first().waitFor({state:'attached'});
   assert.equal(await page.locator('.ex-curve [data-scenario]').count(),21);
+  await page.locator('[data-section=comparisons]').click();
   assert.match(await page.locator('.ex-impact').innerText(),/Price|Location/);
   assert.match(await page.locator('#research-workspace').innerText(),/20%/);
+  await page.locator('[data-section=overview]').click();
   await page.locator('#experiment-people').waitFor();
   assert.equal(await page.locator('details.ex-people').count(),0);
   assert.equal(await page.locator('#experiment-people .pc-type').count(),0);
@@ -88,7 +90,8 @@ const ask=async page=>{await page.locator('#ask-input').fill(question);await pag
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),390,'no horizontal overflow on mobile');
   await page.screenshot({path:'/tmp/simtra-chipotle-result-mobile.png'});
   await page.setViewportSize({width:1440,height:1000});
-  await page.locator('[data-action=timeline]').click();await page.locator('[data-clock]').filter({hasText:'Day 1'}).waitFor();
+  await page.locator('[data-section=simulate]').click();
+ await page.locator('[data-action=timeline]').click();await page.locator('[data-clock]').filter({hasText:'Day 1'}).waitFor();
   await page.locator('#evo-message').focus();
   assert.match(evolutionBody.scenario,/20%/);assert.equal(evolutionBody.research_panel.id,panel.id);
   await page.locator('#evo-message').fill('A competitor cuts bowl prices by 10%');await page.locator('[data-composer] button').click();

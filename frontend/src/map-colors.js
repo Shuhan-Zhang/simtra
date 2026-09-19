@@ -1,10 +1,11 @@
 import { COLORS } from './config.js';
 import { factorText } from './model-display.js';
+import { SEGMENT_DIMENSIONS } from './segment-selection.js';
 
 const PALETTE = ['#1676D2', '#A34EBC', '#D68B00', '#008B8B', '#D44F84', '#7364B9', '#8C643B', '#457B45'];
 export const MAP_COLOR_MODES = Object.freeze([
   { key: 'response', label: 'Response' }, { key: 'factor', label: 'Main factor' },
-  { key: 'income', label: 'Income' }, { key: 'age', label: 'Age' },
+  ...SEGMENT_DIMENSIONS.map(key => ({ key, label: key.replaceAll('_x_', ' × ').replaceAll('_', ' ').replace(/^./, first => first.toUpperCase()) })),
 ]);
 function categoryColor(index) {
   if (PALETTE[index]) return PALETTE[index];
@@ -14,6 +15,17 @@ function categoryColor(index) {
     return Math.round(255 * (.42 - .252 * Math.max(-1, Math.min(k - 3, 9 - k, 1))));
   };
   return '#' + [channel(0), channel(8), channel(4)].map(value => value.toString(16).padStart(2, '0')).join('');
+}
+export function mapSegmentLabel(dimension, key) {
+  if (dimension.includes('_x_')) return dimension.split('_x_').map((axis, index) => mapSegmentLabel(axis, key.split('|')[index] || 'Unknown')).join(' · ');
+  if (dimension === 'age') return key === 'u18' ? 'Under 18' : key;
+  if (dimension === 'income' && /^q[0-4]$/.test(key)) {
+    const quintile = Number(key[1]) + 1;
+    return `Income Q${quintile}${quintile === 1 ? ' (lowest)' : quintile === 5 ? ' (highest)' : ''}`;
+  }
+  const labels = { lt_hs: 'Less than high school', hs: 'High school', bachelors: 'Bachelor’s degree', graduate: 'Graduate degree', other_multi: 'Other / multiracial', own: 'Homeowners', rent: 'Renters', us_born: 'US-born', foreign_born: 'Foreign-born', noncitizen: 'Non-citizens' };
+  if (dimension === 'geography') return `PUMA ${key}`;
+  return labels[key] || key.replaceAll('_', ' ').replace(/^./, first => first.toUpperCase());
 }
 const validId = value => value !== null && value !== '' && Number.isFinite(Number(value));
 export function validResponseGroup(group, options) {
@@ -26,7 +38,7 @@ export function validResponseGroup(group, options) {
 // All mappings use source resident IDs and canonical segment keys. A dot describes
 // a group's strongest modeled response, never a separately sampled individual vote.
 export function researchMapColors(groups, options, residents = [], colorBy = 'response') {
-  const modes = MAP_COLOR_MODES.filter(mode => !['income', 'age'].includes(mode.key)
+  const modes = MAP_COLOR_MODES.filter(mode => !SEGMENT_DIMENSIONS.includes(mode.key)
     || residents.some(resident => typeof resident.segments?.[mode.key] === 'string'));
   const mode = modes.some(item => item.key === colorBy) ? colorBy : 'response';
   const membership = new Map();
@@ -44,7 +56,7 @@ export function researchMapColors(groups, options, residents = [], colorBy = 're
       verdicts.set(Number(id), options.length === 2 && winner !== null ? winner === 0 ? 'yes' : 'no' : null);
     }
   }
-  if (mode === 'income' || mode === 'age') {
+  if (SEGMENT_DIMENSIONS.includes(mode)) {
     membership.clear();
     for (const resident of residents) {
       const id = resident.seed ?? resident.id;
@@ -55,7 +67,7 @@ export function researchMapColors(groups, options, residents = [], colorBy = 're
   const keys = mode === 'response' ? (options || []).map((_, i) => `option-${i}`)
     : [...new Set([...membership.values()].filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   const legend = keys.map((key, i) => ({ key,
-    label: mode === 'response' ? options[i] : key.replaceAll('_', ' '),
+    label: mode === 'response' ? options[i] : mode === 'factor' ? key : mapSegmentLabel(mode, key),
     color: mode === 'response' && options.length === 2 ? i === 0 ? COLORS.yes : COLORS.no
       : categoryColor(i),
   }));

@@ -1190,13 +1190,13 @@ body.offline-demo .result-card { max-height: min(60dvh, 720px); }
 
 /* bar rows: the result card's own option-bar anatomy */
 .pc-rows { margin-top: var(--s-4); display: flex; flex-direction: column; gap: var(--s-3); }
-.pc-row { border-radius: var(--r-sm); cursor: pointer; margin: 0 calc(-1 * var(--s-2)); padding: var(--s-1) var(--s-2); }
+.pc-row { position: relative; border-radius: var(--r-sm); cursor: pointer; margin: 0 calc(-1 * var(--s-2)); padding: var(--s-1) var(--s-2); }
 .pc-row:hover, .pc-row:focus-visible { background: var(--fill); outline: none; }
 .pc-row[aria-pressed="true"] { background: var(--fill); }
-.pc-row-head { display: flex; align-items: center; gap: var(--s-2); min-height: 22px; }
-.pc-row-label { font-size: var(--fs-footnote); font-weight: var(--fw-med); color: var(--ink-2); line-height: var(--lh-tight); white-space: nowrap; }
+.pc-row-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 12px; min-height: 22px; }
+.pc-row-label { font-size: var(--fs-footnote); font-weight: var(--fw-med); color: var(--ink-2); line-height: var(--lh-body); min-width: 0; overflow-wrap: anywhere; }
 .pc-row[aria-pressed="true"] .pc-row-label, .pc-row:hover .pc-row-label { color: var(--ink); }
-.pc-row-pct { margin-left: auto; font-size: var(--fs-subhead); font-weight: var(--fw-bold); color: var(--ink); flex: none; font-variant-numeric: var(--nums); }
+.pc-row-pct { grid-column: 2; grid-row: 1; margin-left: auto; font-size: var(--fs-subhead); font-weight: var(--fw-bold); color: var(--ink); flex: none; font-variant-numeric: var(--nums); }
 .pc-track { margin-top: var(--s-2); height: 8px; border-radius: var(--r-full); overflow: hidden; background: var(--fill); display: flex; }
 .pc-fill { display: block; height: 100%; border-radius: var(--r-full); background: var(--accent); }
 .pc-seg { display: block; height: 100%; }
@@ -1206,6 +1206,12 @@ body.offline-demo .result-card { max-height: min(60dvh, 720px); }
 .pc-legend { margin-top: var(--s-3); display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-4); font-size: var(--fs-caption); color: var(--ink-2); }
 .pc-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .pc-sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+/* Keep group explanations inside the chart instead of centering off its edge. */
+.pc-row .pc-tip-wrap { position: static; }
+.pc-row .pc-tooltip { left: 8px; right: 8px; bottom: calc(100% + 4px); transform: none; width: auto; max-width: none; overflow-wrap: anywhere; }
+.pc-row .pc-heads-slot { grid-column: 1 / -1; grid-row: 2; min-width: 0; }
+.pc-row .pc-heads { flex-wrap: wrap; max-width: 100%; }
 
 /* sprite heads inside the chart */
 .pc-heads-slot { display: none; min-height: 20px; }
@@ -1329,3 +1335,10 @@ body.offline-demo .result-card { max-height: min(60dvh, 720px); }
 .manual-step + .about-h { margin-top: var(--s-5); }
 
 .title-sample{font-size:12px;font-weight:400;letter-spacing:0;line-height:1.4;color:var(--ink-2);margin-top:3px;overflow-wrap:anywhere}
+
+#scenario-map-location { font-size:13px; line-height:1.35; color:#0068d9; margin-top:8px; max-width:260px; white-space:normal; }
+#scenario-map-location[hidden] { display:none; }
+
+#scenario-map-location { background:#fcfcfd; padding:8px 12px; border-radius:12px; box-shadow:0 2px 8px #0001; }
+
+.ask .ask-head[hidden] { display:none; }

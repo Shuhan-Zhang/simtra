@@ -34,12 +34,12 @@ async function request(path,body){
 
 export function initEvolution({map,getBranch,getCity,isReady}){
   const root=document.createElement('section');root.id='evolution';root.hidden=true;root.setAttribute('aria-label','City behavior simulation');
-  root.innerHTML=`<div class="evo-heading"><div><span class="evo-eyebrow">CITY SIMULATION</span><h2>What changes across the city?</h2></div><button data-close aria-label="Close city simulation">×</button></div>
+  root.innerHTML=`<div class="evo-heading"><div><span class="evo-eyebrow">CITY SIMULATION</span><h2>Response over 14 days</h2></div><button data-close aria-label="Close city simulation">×</button></div>
     <div data-setup class="evo-setup"><label for="evo-scenario">What happens?</label><textarea id="evo-scenario" maxlength="2000" rows="3" placeholder="Chipotle raises menu prices by 20% in San Francisco."></textarea><div class="evo-examples"><button data-example="Chipotle raises menu prices by 20% in this city.">Restaurant prices +20%</button><button data-example="A serious public safety incident occurs downtown. How do residents change their outings?">Safety incident</button><button data-example="Public transit fares increase by 50% across this city.">Transit fares +50%</button></div><p class="evo-empty">Watch how everyday choices change over 14 simulated days.</p></div>
-    <div data-results hidden class="evo-results"><p class="evo-scenario-text" data-scenario></p>
-      <div class="evo-overview"><div><span class="evo-eyebrow">CHANGED THEIR ROUTINE</span><div class="evo-headline"><strong data-count>0</strong><span data-share>0%</span></div><p data-denominator></p></div><span class="evo-delta" data-delta></span></div>
+    <div data-results hidden class="evo-results"><p class="evo-scenario-text" data-scenario></p><details class="evo-method"><summary>Scenario details</summary><p data-scenario-details></p></details>
+      <div class="evo-overview"><div><span class="evo-eyebrow">MODELED RESPONSE</span><div class="evo-headline"><strong data-count>0</strong><span data-share>0%</span></div><p data-denominator></p></div><span class="evo-delta" data-delta></span></div>
       <div class="pc evo-chart"><div class="pc-head"><h3 class="pc-title">What people do</h3><span class="pc-caption" data-chart-caption></span></div><div class="pc-rows" data-bars></div></div>
-      <div class="pc evo-trend"><div class="pc-head"><h3 class="pc-title" data-trend-title>Changed routines over time</h3><button class="pc-dim" data-all hidden>Show all changes</button></div><div data-trend></div></div>
+      <div class="pc evo-trend"><div class="pc-head"><h3 class="pc-title" data-trend-title>Modeled changes over time</h3><button class="pc-dim" data-all hidden>Show all changes</button></div><div data-trend></div></div>
       <p class="pc-note">Census-weighted model estimates, not observed behavior. Counts are scaled to the simulated population.</p>
       <div class="evo-updates" data-updates aria-live="polite"></div>
       <details class="evo-method"><summary>How this is estimated</summary><p data-method></p></details>
@@ -64,10 +64,10 @@ export function initEvolution({map,getBranch,getCity,isReady}){
     t('[data-step-forward]').disabled=busy||initializing||index>=limit;
     t('[data-new]').disabled=busy||initializing||messageBusy;
     t('[data-reset]').disabled=!run;t('[data-latest]').disabled=!run||index===max;
-    t('[data-scrub]').disabled=!run||max===0;t('[data-scrub]').max=max;t('[data-scrub]').value=index;
+    t('[data-scrub]').disabled=!run||max===0;t('[data-scrub]').max=limit;t('[data-scrub]').value=index;
     t('[data-clock]').textContent=day(index);t('[data-step]').textContent=`${index} / ${limit} days`;
     t('[data-mode]').textContent=index<max?'REPLAY':busy?'UPDATING':playing?'RUNNING':run?'PAUSED':'READY';
-    t('[data-latency]').textContent=busy?'Updating city choices…':'';
+    t('[data-latency]').textContent=busy?'Calculating next day…':run&&max<limit?`Calculated through day ${max}`:'';
     q('#evo-scenario').disabled=initializing||busy;
     q('[data-composer]').hidden=!run;
     q('[data-composer] button').disabled=busy||initializing||messageBusy;
@@ -77,7 +77,8 @@ export function initEvolution({map,getBranch,getCity,isReady}){
     renderControls();if(!opened)return;
     q('[data-setup]').hidden=!!run;q('[data-results]').hidden=!run;if(!run)return;
     const f=frameAt(run,index),prev=frameAt(run,Math.max(0,index-1));
-    q('[data-scenario]').textContent=run.scenario;
+    q('[data-scenario]').textContent=run.scenario.split('Selected experiment scenario:')[0].trim();
+    q('[data-scenario-details]').textContent=run.scenario;
     q('[data-count]').textContent=number(f.changed_count);q('[data-share]').textContent=percent(f.changed_share);
     q('[data-denominator]').textContent=`of ${number(run.population)} simulated residents`;
     const delta=(f.changed_share-prev.changed_share)*100;
@@ -88,7 +89,7 @@ export function initEvolution({map,getBranch,getCity,isReady}){
       return `<button class="evo-bar pc-row" data-outcome="${esc(o.id)}" aria-pressed="${metric===o.id}" aria-label="${esc(o.label)}: ${number(total?.count)} people, ${percent(share)}"><span class="evo-bar-head"><span>${esc(o.label)}</span><span><b>${number(total?.count)}</b><small>${percent(share)}</small></span></span><span class="evo-bar-track"><span style="width:${share*100}%;background:${COLORS[o.id]||'#007aff'}"></span></span></button>`;
     }).join('');
     const chosen=run.outcomes.find(o=>o.id===metric);
-    q('[data-trend-title]').textContent=chosen?`${chosen.label} over time`:'Changed routines over time';
+    q('[data-trend-title]').textContent=chosen?`${chosen.label} over time`:'Modeled changes over time';
     q('[data-all]').hidden=!chosen;q('[data-trend]').innerHTML=trendSvg(run.frames,index,metric);
     q('[data-method]').textContent=`${run.groups.length} demographic cohorts represent all ${number(run.population)} simulated residents. Choice probabilities are weighted by Census person weights. Dots are a stable illustration sampled from cohort probabilities; weighted totals can differ from raw dot counts. The reference starts with no changes caused by the scenario. Jev reevaluates choices each day using prior choices, time to adapt, and the previous citywide behavior mix. Only updates you add are assumed, from the next uncomputed day. Questions estimate agreement at the viewed day without changing recorded behavior. These estimates have not been calibrated to real-world outcomes.`;
     q('[data-updates]').innerHTML=[...(run.events||[]).map(e=>`<article><small>Hypothetical update · Day ${e.effective_day}${e.effective_day>index?' · scheduled':''}</small><p>${esc(e.text)}</p></article>`),...(run.questions||[]).filter(a=>a.tick<=index).map(a=>`<article><small>Day ${a.tick} · modeled agreement</small><p>${esc(a.question)}</p><b>${percent(a.shares.yes)} yes · ${percent(a.shares.no)} no · ${percent(a.shares.unsure)} unsure</b></article>`)].join('');
@@ -154,7 +155,7 @@ export function initEvolution({map,getBranch,getCity,isReady}){
   t('[data-new]').addEventListener('click',()=>{pause();generation++;researchPanel=null;pinnedNews=null;if(run)q('#evo-scenario').value=run.scenario;run=null;index=0;metric='changed';try{sessionStorage.removeItem(storageKey());}catch{}map.setEvolution(null);q('[data-error]').textContent='';render();q('#evo-scenario').focus();});
   t('[data-reset]').addEventListener('click',()=>{pause();index=0;render();});
   t('[data-latest]').addEventListener('click',()=>{pause();index=(run?.frames.length||1)-1;render();});
-  t('[data-scrub]').addEventListener('input',e=>{const nextIndex=Number(e.target.value);pause();index=nextIndex;render();});
+  t('[data-scrub]').addEventListener('input',e=>{const requested=Number(e.target.value);pause();index=Math.min(requested,(run?.frames.length||1)-1);render();if(requested>index){playing=true;renderControls();void advance();}});
   root.addEventListener('click',e=>{const ex=e.target.closest('[data-example]');if(ex)q('#evo-scenario').value=ex.dataset.example;const bar=e.target.closest('[data-outcome]');if(bar){metric=metric===bar.dataset.outcome?'changed':bar.dataset.outcome;render();}});
   q('[data-all]').addEventListener('click',()=>{metric='changed';render();});
   q('#evo-scenario').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();playing=true;void advance();}});

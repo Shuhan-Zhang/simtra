@@ -349,3 +349,10 @@
 @keyframes fp-spin { to { transform: rotate(360deg); } }
 @keyframes fp-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 @media (prefers-reduced-motion: reduce) { .fp-spinner, .fp-status.is-loading::before, .fp-skel-line { animation: none; } }
+
+.fp-views[hidden] { display:none; }
+.fp-experiment-open { display:block; width:100%; text-align:left; border:0; padding:0; background:transparent; font:inherit; color:inherit; cursor:pointer; }
+.fp-experiment-open .fp-title { display:block; }
+.fp-experiment-meta { display:block; color:var(--ink-2); font-size:14px; margin-top:10px; }
+.fp-experiment-link { display:block; color:var(--accent); font-size:14px; margin-top:12px; }
+.fp-experiment-open:hover .fp-title { color:var(--accent); }

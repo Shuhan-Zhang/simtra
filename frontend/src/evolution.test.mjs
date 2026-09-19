@@ -21,7 +21,7 @@ function harness(){
 }
 test('reset during pending step retains baseline and records result for exact replay',async()=>{
  const h=harness();await h.start();h.t('[data-reset]').fire();h.resolveStep(1);await flush();
- assert.equal(h.map.evolution.frame.tick,0);assert.equal(h.t('[data-scrub]').max,1);
+ assert.equal(h.map.evolution.frame.tick,0);assert.equal(h.t('[data-scrub]').max,14);
  h.t('[data-step-forward]').fire();await flush();assert.equal(h.map.evolution.frame.tick,1);assert.equal(h.pending.length,0);
 });
 test('closing during inference never restores the overlay or schedules further calls',async()=>{
@@ -31,7 +31,7 @@ test('closing during inference never restores the overlay or schedules further c
 });
 test('duplicate step clicks create only one request and pause preserves the viewed frame',async()=>{
  const h=harness();await h.start();h.t('[data-step-forward]').fire();assert.equal(h.pending.length,1);
- h.resolveStep(1);await flush();assert.equal(h.t('[data-scrub]').max,1);
+ h.resolveStep(1);await flush();assert.equal(h.t('[data-scrub]').max,14);
 });
 test('failure preserves timeline and next step retries the same position',async()=>{
  const h=harness();await h.start();const pending=h.pending.shift();pending.resolve({error:'bad'});await flush();
@@ -86,3 +86,5 @@ test('failed timeline question retains the draft and recorded frame',async()=>{
  assert.equal(h.q('#evo-message').value,'Why would residents change?');
  assert.equal(h.map.evolution.frame.tick,1);assert.equal(h.pending.length,0);
 });
+
+test('future timeline positions keep the full horizon and start calculating instead of showing nonexistent frames',async()=>{const h=harness();await h.start();h.resolveStep(1);await flush();const slider=h.t('[data-scrub]');slider.value='14';slider.fire('input',{target:slider});await flush();assert.equal(slider.max,14);assert.equal(h.map.evolution.frame.tick,1);assert.equal(h.pending.length,1);h.resolveStep(2);await flush();assert.equal(h.map.evolution.frame.tick,2);});

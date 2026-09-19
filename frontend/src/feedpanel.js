@@ -156,6 +156,8 @@ const state = {
   getPopulationKey: () => null,
   openPastResult: null,
   chart: null,          // the one open timeline chart: { id, host, dispose, close }
+  experiments: [],
+  openExperiment: () => {},
   items: [],            // lineage items (events, tests, data queries), newest first
   posts: new Map(),     // item id -> post element
   memoryOff: false,
@@ -214,7 +216,7 @@ function build(root) {
       </div>
     </div>
     <div id="fp-body" class="fp-body">
-      <div class="fp-views" role="tablist" aria-label="Show">
+      <div class="fp-views" hidden>
         ${VIEWS.map(([v, label]) => `<button type="button" role="tab" class="fp-view" data-view="${v}" aria-selected="${v === "all"}" title="${VIEW_TITLES[v]}">${label}<span class="fp-view-n"></span></button>`).join("")}
       </div>
       <div class="fp-composer">
@@ -299,6 +301,16 @@ function syncViews() {
 // lineage items as last loaded (newest first); the app reads these to build the
 // "over time" history of a question without a second fetch
 export function lineageItems() { return state.items; }
+export function setTimelineExperiments(runs, openRun) {
+  state.experiments = runs;
+  state.openExperiment = openRun;
+  if(state.el.thread) renderThread();
+}
+export function showCityTimeline() {
+  state.collapsed=false;state.autoCollapsed=false;state.view="all";
+  if(state.root) {applyCollapsed();renderThread();state.el.thread.scrollTop=0;}
+}
+
 
 export function initFeedPanel({
   getCity, getBranch, getCityDisplay, getResidents, getNews, onScenario,
@@ -330,7 +342,7 @@ export function initFeedPanel({
   build(root);
 
   state.collapsed = false; // always expanded on load; the caret folds it for this session only
-  try { const v = localStorage.getItem(VIEW_KEY); if (VIEWS.some(([k]) => k === v)) state.view = v; } catch { /* private mode */ }
+  state.view = "all"; // One chronological timeline for news and saved experiments.
   applyCollapsed();
   for (const b of root.querySelectorAll(".fp-collapse")) b.addEventListener("click", () => {
     state.autoCollapsed = false;
@@ -563,8 +575,15 @@ function renderThread() {
   const seen = new Set();
   const frag = document.createDocumentFragment();
   syncViews();
-  for (const item of state.items) {
-    if (!inView(item)) continue;
+  const timestamp = item => Date.parse(item.created_at || item.as_of_date || item.date || "") || 0;
+  const entries = [
+    ...state.items,
+    ...state.experiments.filter(run=>run.city===state.getCity()).map(run=>({type:"experiment",id:`experiment:${run.id}`,created_at:run.createdAt,run})),
+    ...(state.getNews() || []).slice(0,6).map((article,index)=>({type:"headline",id:`headline:${index}`,date:article.date,article})),
+  ].sort((a,b)=>timestamp(b)-timestamp(a));
+  for (const item of entries) {
+    if(item.type==="headline") {frag.appendChild(newsPost(item.article));continue;}
+    if(item.type==="experiment") {frag.appendChild(experimentPost(item.run));continue;}
     seen.add(item.id);
     let post = state.posts.get(item.id);
     if (!post) {
@@ -573,7 +592,6 @@ function renderThread() {
         : eventPost(item);
       state.posts.set(item.id, post);
     } else if (post.dataset.busy !== "true") {
-      // refresh the parts that can change between loads
       if (item.type === "test") fillTest(post, item);
       else if (item.type === "data_query") fillDataQuery(post, item);
       else fillEvent(post, item);
@@ -581,9 +599,6 @@ function renderThread() {
     frag.appendChild(post);
   }
   for (const id of [...state.posts.keys()]) if (!seen.has(id)) state.posts.delete(id);
-  // the city's baseline headlines: what residents already know, as plain posts
-  const news = state.view === "all" || state.view === "news" ? (state.getNews() || []) : [];
-  for (const a of news.slice(0, 6)) frag.appendChild(newsPost(a));
   const stillWaking = !state.getBranch() && !state.memoryOff;
   if (!frag.childElementCount && (!state.loaded || stillWaking) && !state.memoryOff) {
     // still fetching (or seeding a fresh workspace): skeleton rows, not an empty state
@@ -990,6 +1005,15 @@ function fillDataQuery(post, item) {
   answer.textContent = item.answer || "";
   answer.classList.toggle("hidden", !item.answer);
   renderChartLink(post, item, "View chart");
+}
+
+function experimentPost(run) {
+  const post=document.createElement("article");
+  post.className="fp-post fp-post-experiment";
+  post.dataset.run=run.id;
+  post.innerHTML=`${postHead({avatar:"↗",source:"Experiment",date:fmtDate(run.createdAt)})}<button type="button" class="fp-experiment-open"><span class="fp-title">${esc(run.experiment.decision)}</span><span class="fp-experiment-meta">${run.scenarios.length} combinations · ${run.residents.length.toLocaleString()} residents${run.researchPanel?.sources?.length?` · ${run.researchPanel.sources.length} sources`:""}</span><span class="fp-experiment-link">View research and results →</span></button>`;
+  post.querySelector("button").addEventListener("click",()=>state.openExperiment(run.id));
+  return post;
 }
 
 // ── baseline headlines ─────────────────────────────────────────────────────
