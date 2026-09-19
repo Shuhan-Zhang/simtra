@@ -42,6 +42,7 @@ pub struct CityRuntime {
 
 #[derive(Clone)]
 pub struct AppState {
+    pub audience_research: crate::audience_api::ResearchState,
     pub client: ModelClient,
     pub engine: Engine,
     pub hydra: Option<HydraClient>,
@@ -87,6 +88,7 @@ pub fn router(state: AppState) -> Router {
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
+    let research = state.audience_research.clone();
     Router::new()
         .route("/health", get(health))
         .route("/", get(root))
@@ -121,6 +123,7 @@ pub fn router(state: AppState) -> Router {
         // answered question is remembered in the city's timeline when memory is on.
         .route("/data-query", post(data_query_handler))
         .with_state(state)
+        .merge(crate::audience_api::router(research))
         .layer(cors)
 }
 
@@ -2384,7 +2387,9 @@ pub fn build_state(
         }
     }
 
+    let audience_research = crate::audience_api::ResearchState::new(client.clone(), state_db)?;
     Ok(AppState {
+        audience_research,
         client,
         engine,
         hydra,
