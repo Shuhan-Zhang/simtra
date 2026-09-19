@@ -359,3 +359,8 @@
 
 .fp-news-image { display:block; width:100%; aspect-ratio:16 / 9; object-fit:cover; border-radius:12px; margin:12px 0; background:#eef1f5; }
 .fp-news-source { display:inline-block; margin-top:10px; font-size:13px; color:var(--blue, #0780ff); text-decoration:none; }
+
+.fp-experiment-archive { margin-left:auto; padding:5px 9px; border:0; border-radius:7px; background:var(--surface-2, #f1f2f4); color:var(--ink-2); font:inherit; font-size:12px; cursor:pointer; }
+.fp-experiment-archive:hover { color:var(--ink); background:#e5e7eb; }
+.fp-archive-notice { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 14px; font-size:13px; }
+.fp-archive-notice button { border:0; background:none; color:var(--accent); font:inherit; cursor:pointer; }

@@ -53,3 +53,4 @@ data/*.aux.xml
 .vercel
 
 .local-memory/
+.env*

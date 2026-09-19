@@ -14,7 +14,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { BASE, today } from "./config.js";
-import { workspaceHeaders, shareUrl, startNewWorkspace } from "./workspace.js?v=2";
+import { WORKSPACE, workspaceHeaders, shareUrl, startNewWorkspace } from "./workspace.js?v=2";
 import { detectKind } from "./detect-kind.js";
 import { buildEvidenceChartModel } from "./evidence-chart.js";
 import { createPersonaChart } from "./persona-chart.js?v=5";
@@ -28,6 +28,12 @@ const PREVIEW_POSTS = 5;   // event posts near the top fetch their comment previ
 const PREVIEW_N = 3;
 const COLLAPSE_KEY = "simtra.feed.collapsed";
 const VIEW_KEY = "simtra.feed.view";
+const ARCHIVE_KEY = `simtra.feed.archived-experiments.${WORKSPACE}`;
+const archivedExperiments = (() => {
+  try { const ids=JSON.parse(localStorage.getItem(ARCHIVE_KEY) || "[]"); return new Set(Array.isArray(ids)?ids:[]); }
+  catch { return new Set(); }
+})();
+let lastArchivedExperiment = null;
 const VIEWS = [["all", "All"], ["news", "News"]];
 const VIEW_TITLES = { all: "Show everything", news: "Only posted news and events", asks: "Only surveys you ran", data: "Only verified Census data queries" };
 const TEST_KINDS = {
@@ -575,10 +581,21 @@ function renderThread() {
   const seen = new Set();
   const frag = document.createDocumentFragment();
   syncViews();
+  if(lastArchivedExperiment){
+    const notice=document.createElement("div");
+    notice.className="fp-archive-notice";notice.setAttribute("role","status");
+    notice.innerHTML='Experiment archived <button type="button">Undo</button>';
+    notice.querySelector("button").addEventListener("click",()=>{
+      archivedExperiments.delete(lastArchivedExperiment);lastArchivedExperiment=null;
+      try{localStorage.setItem(ARCHIVE_KEY,JSON.stringify([...archivedExperiments]));}catch{}
+      renderThread();
+    });
+    frag.appendChild(notice);
+  }
   const timestamp = item => Date.parse(item.created_at || item.as_of_date || item.date || "") || 0;
   const entries = [
     ...state.items,
-    ...state.experiments.filter(run=>run.city===state.getCity()).map(run=>({type:"experiment",id:`experiment:${run.id}`,created_at:run.createdAt,run})),
+    ...state.experiments.filter(run=>run.city===state.getCity()&&!archivedExperiments.has(run.id)).map(run=>({type:"experiment",id:`experiment:${run.id}`,created_at:run.createdAt,run})),
     ...(state.getNews() || []).map((article,index)=>({type:"headline",id:`headline:${index}`,date:article.date,article})),
   ].sort((a,b)=>timestamp(b)-timestamp(a));
   for (const item of entries) {
@@ -1012,7 +1029,17 @@ function experimentPost(run) {
   post.className="fp-post fp-post-experiment";
   post.dataset.run=run.id;
   post.innerHTML=`${postHead({avatar:"↗",source:"Experiment",date:fmtDate(run.createdAt)})}<button type="button" class="fp-experiment-open"><span class="fp-title">${esc(run.experiment.decision)}</span><span class="fp-experiment-meta">${run.scenarios.length} combinations · ${run.residents.length.toLocaleString()} residents${run.researchPanel?.sources?.length?` · ${run.researchPanel.sources.length} sources`:""}</span><span class="fp-experiment-link">View research and results →</span></button>`;
-  post.querySelector("button").addEventListener("click",()=>state.openExperiment(run.id));
+  post.querySelector(".fp-experiment-open").addEventListener("click",()=>state.openExperiment(run.id));
+  const archive=document.createElement("button");
+  archive.type="button";archive.className="fp-experiment-archive";archive.textContent="Archive";
+  archive.setAttribute("aria-label",`Archive experiment: ${run.experiment.decision}`);
+  archive.title="Remove from timeline";
+  archive.addEventListener("click",()=>{
+    archivedExperiments.add(run.id);lastArchivedExperiment=run.id;
+    try{localStorage.setItem(ARCHIVE_KEY,JSON.stringify([...archivedExperiments]));}catch{}
+    renderThread();
+  });
+  post.querySelector(".fp-post-head").appendChild(archive);
   return post;
 }
 
