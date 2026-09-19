@@ -251,7 +251,13 @@ function build(root) {
     notice: q(".fp-notice"),
     thread: q(".fp-thread"),
   };
-  if (experiments) root.querySelector(".fp-menu-wrap").before(experiments);
+  if (experiments) {
+    experiments.classList.add("fp-view");
+    experiments.setAttribute("role", "tab");
+    experiments.setAttribute("aria-selected", "false");
+    experiments.innerHTML = 'Experiments<span class="fp-view-n"></span>';
+    state.el.views.append(experiments);
+  }
   state.el.formPost.elements.as_of_date.value = today();
   const text = state.el.formPost.elements.text;
   text.addEventListener("input", () => {
@@ -261,7 +267,7 @@ function build(root) {
   state.el.kind.addEventListener("change", () => { state.kindManual = true; setKind(state.el.kind.value); });
   state.el.views.addEventListener("click", (e) => {
     const b = e.target.closest(".fp-view");
-    if (b) setView(b.dataset.view);
+    if (b?.dataset.view) setView(b.dataset.view);
   });
 }
 

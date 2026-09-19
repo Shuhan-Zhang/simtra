@@ -210,3 +210,40 @@ body.experiment-open .feed-panel { visibility: hidden; pointer-events: none; }
 .ex-saved-activity { list-style:none; padding:0; }
 .ex-saved-activity li { display:grid; border-left:2px solid #d4e6ff; padding:8px 12px; gap:4px; }
 .ex-saved-activity span { color:#59616c; overflow-wrap:anywhere; }
+
+.ex-chart-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:22px 0 10px; }
+.ex-chart-heading .ex-chart-label { margin:0; }
+.ex-chart-heading button { flex:none; font-size:14px; }
+.ex-y-label { color:#414851; font-size:15px; font-weight:600; margin:22px 0 4px; }
+.ex-curve-legend { display:flex; flex-wrap:wrap; gap:18px; color:#414851; font-size:14px; margin:12px 0; }
+.ex-curve-legend span { display:flex; align-items:center; gap:8px; }
+.ex-curve-legend i { width:12px; height:12px; border:2px solid #007aff; border-radius:50%; background:white; }
+.ex-curve-legend i.selected { background:#007aff; }
+.ex-chart-dialog { width:min(1040px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); box-sizing:border-box; overflow:auto; border:1px solid #dce2ea; border-radius:24px; padding:28px; background:#fcfcfd; color:#18212c; font:16px/1.5 var(--font); box-shadow:0 24px 100px #0004; }
+.ex-chart-dialog::backdrop { background:rgba(15,25,40,.45); backdrop-filter:blur(3px); }
+.ex-expanded-head { display:flex; align-items:center; justify-content:space-between; gap:20px; }
+.ex-expanded-head h2 { margin:0; font-size:26px; }
+.ex-chart-dialog .ex-curve-controls { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+.ex-chart-dialog button { cursor:pointer; font-family:inherit; }
+.ex-chart-dialog .ex-curve { width:100%; }
+.ex-chart-dialog .ex-foot { font-size:14px; color:#59616c; }
+.ex-chart-dialog .ex-curve .pc-axis { font-size:13px; }
+@media(max-width:600px) { .ex-chart-dialog { padding:18px; border-radius:18px; }.ex-chart-dialog .ex-curve-controls { grid-template-columns:1fr; }.ex-expanded-head h2 { font-size:22px; }.ex-chart-dialog .ex-curve .pc-axis { font-size:21px; } }
+
+/* Demographic responses stay alongside the selected price and map. */
+.ex-audience-response { margin: 24px 0; padding: 20px 0; border-block: 1px solid var(--sep); }
+.ex-audience-response h3 { margin: 0 0 8px; font-size: 20px; line-height: 1.3; }
+.ex-audience-response .pc { margin-top: 12px; padding-top: 0; border-top: none; }
+.ex-audience-response .pc-dim { font-size: 16px; min-height: 40px; max-width: 100%; }
+.ex-audience-response .pc-row-label { font-size: 16px; white-space: normal; }
+.ex-audience-response .pc-types[hidden] { display: none; }
+.ex-resident-preview { margin-top: 20px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.ex-resident-preview > span { font-size: 15px; color: var(--ink-2); }
+.ex-resident-preview .ex-faces { margin: 0; }
+
+.ex-curve-dense .pc-lpt:not(.sel) .ex-price-point { opacity:0; }
+.ex-curve-dense .pc-lpt:hover .ex-price-point,.ex-curve-dense .pc-lpt:focus .ex-price-point { opacity:1; }
+.ex-chart-dialog .ex-hit { fill:transparent; pointer-events:all; }
+
+.fp-view.experiment-reopen { padding:5px 11px; font-size:var(--fs-footnote); font-weight:var(--fw-med); color:var(--ink-2); line-height:1; }
+.fp-view.experiment-reopen:hover { background:var(--fill); color:var(--ink); text-decoration:none; }

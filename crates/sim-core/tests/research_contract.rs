@@ -228,7 +228,7 @@ async fn research_holds_context_and_population_constant_and_returns_inherited_an
         "invalid inputs must not spend model calls"
     );
     let mut factorial = input.clone();
-    factorial["scenarios"] = json!((0..24).map(|i| json!({"label":format!("Combination {i}"),"description":format!("Restaurant area {}, format {}, meal price ${}", i/12, (i/6)%2, 10+(i%6)*2)})).collect::<Vec<_>>());
+    factorial["scenarios"] = json!((0..84).map(|i| json!({"label":format!("Combination {i}"),"description":format!("Restaurant area {}, format {}, price change {}%", i/42, (i/21)%2, i%21)})).collect::<Vec<_>>());
     let combinations: Value = c
         .post(format!("{base}/branches/{bid}/research"))
         .json(&factorial)
@@ -240,12 +240,12 @@ async fn research_holds_context_and_population_constant_and_returns_inherited_an
         .json()
         .await
         .unwrap();
-    assert_eq!(combinations["scenarios"].as_array().unwrap().len(), 24);
-    assert_eq!(combinations["trace"]["events"].as_array().unwrap().iter().filter(|e| e["kind"]=="scenario.completed").count(), 24);
+    assert_eq!(combinations["scenarios"].as_array().unwrap().len(), 84);
+    assert_eq!(combinations["trace"]["events"].as_array().unwrap().iter().filter(|e| e["kind"]=="scenario.completed").count(), 84);
     factorial["scenarios"]
         .as_array_mut()
         .unwrap()
-        .push(json!({"label":"Twenty-fifth","description":"Exceeds bounded design"}));
+        .push(json!({"label":"Eighty-fifth","description":"Exceeds bounded design"}));
     let count = seen.lock().unwrap().len();
     assert_eq!(
         c.post(format!("{base}/branches/{bid}/research"))

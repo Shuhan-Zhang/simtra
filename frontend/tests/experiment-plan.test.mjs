@@ -21,10 +21,10 @@ test('explicit marketplace budget stays a constraint, not an invented allocation
   assert.equal(exp.factors[2].label,'Fulfillment');
   assert.match(exp.assumptions,/No budget allocation/);assert.equal(exp.incentiveBudget,undefined);
 });
-test('relative price range has six values without inventing a current menu price',()=>{
+test('relative price range has 21 values without inventing a current menu price',()=>{
   const plan=autoPlan('what if I raise chipotle price by 20%',{...route,kind:'price'}),exp=compilePlan(plan);
-  assert.deepEqual(exp.scenarios.slice(0,6).map(s=>s.change),[0,4,8,12,16,20]);
-  assert.equal(exp.scenarios.length,24);assert.match(exp.assumptions,/No absolute menu price/);
+  assert.deepEqual(exp.scenarios.slice(0,21).map(s=>s.change),Array.from({length:21},(_,i)=>i));
+  assert.equal(exp.scenarios.length,84);assert.match(exp.assumptions,/No absolute menu price/);
   assert.ok(exp.scenarios.every(s=>!s.description.includes('$')));
   assert.equal(autoPlan('Reduce restaurant price by 12.5 percent',{...route,kind:'price'}).percent,-12.5);
   for(const q of ['Cut price 100%','Raise price by 0%'])assert.throws(()=>autoPlan(q,{...route,kind:'price'}));
@@ -79,10 +79,24 @@ test('Chipotle demo without a stated price uses a bounded relative bowl sweep',(
   assert.equal(plan.business,'restaurant');
   assert.equal(plan.priceMode,'relative');
   assert.equal(plan.priceSuggested,true);
-  assert.deepEqual(exp.scenarios.slice(0,6).map(s=>s.change),[0,4,8,12,16,20]);
-  assert.equal(exp.scenarios.length,24);
+  assert.deepEqual(exp.scenarios.slice(0,21).map(s=>s.change),Array.from({length:21},(_,i)=>i));
+  assert.equal(exp.scenarios.length,84);
   assert.match(exp.question,/buy a bowl/);
   assert.match(exp.assumptions,/No absolute menu price is assumed/);
   assert.match(exp.assumptions,/same city-wide audience/);
   assert.ok(exp.scenarios.every(s=>s.price===undefined && !s.description.includes('$')));
+});
+
+test('dense relative grids preserve endpoints, stay bounded and retain historical drafts',()=>{
+  const plan=autoPlan('Raise Chipotle prices 10%',{...route,kind:'price'});
+  assert.equal(compilePlan(plan).scenarios.length,44);
+  const old=structuredClone(plan);delete old.priceResolution;
+  assert.equal(compilePlan(old).scenarios.length,24);
+  for(const percent of [-12.5, .5, 20, -20, 21, 1000]){
+    const exp=compilePlan({...plan,percent}),values=exp.scenarios.filter(s=>s.location===plan.locations[0]&&s.format===plan.context.values[0]).map(s=>s.change);
+    assert.equal(values[0],0);assert.equal(values.at(-1),percent);
+    assert.equal(new Set(values).size,values.length);assert.ok(exp.scenarios.length<=84);
+    if(Math.abs(percent)<=20)assert.ok(values.slice(1).every((v,i)=>Math.abs(v-values[i])<=1));
+    else assert.equal(values.length,21);
+  }
 });

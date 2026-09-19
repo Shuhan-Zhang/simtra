@@ -116,7 +116,7 @@ export function createPersonaChart(host, opts) {
     model: { breakdowns: [], options: [] },
     residents: [], answers: null, answersNote: "",
     history: [], events: [],
-    dimension: null, type: null, compact: false,
+    dimension: null, type: null, compact: false, showHeading: true, showChartTypes: true, onDimensionChange: () => {},
     labels: { dimension: (d) => d, group: (d, k) => k },
     drawHead: () => {}, drawPortrait: () => {},
     openPerson: () => {}, onGroupSelect: () => {}, onOpenAsk: null,
@@ -156,11 +156,11 @@ export function createPersonaChart(host, opts) {
   host.classList.toggle("pc-compact", !!o.compact);
   host.innerHTML = `
     <div class="pc-head">
-      <span class="res-why-label pc-kicker">by demographic${tip("Group shares are the simulation's predicted answers within each group, weighted by Census person weights. Residents inherit their archetype's answer, so groups can look chunky.")}</span>
-      <h3 class="pc-title">How different groups answered</h3>
+      ${o.showHeading ? `<span class="res-why-label pc-kicker">by demographic${tip("Group shares are the simulation's predicted answers within each group, weighted by Census person weights. Residents inherit their archetype's answer, so groups can look chunky.")}</span>
+      <h3 class="pc-title">How different groups answered</h3>` : ""}
       <div class="pc-controls">
         <select class="pc-dim" aria-label="Demographic dimension">${dims.map((d) => `<option value="${esc(d)}">${esc(o.labels.dimension(d))}</option>`).join("")}</select>
-        <div class="pc-types" role="tablist" aria-label="Chart type">${CHART_TYPES.map((t) => `<button type="button" role="tab" class="pc-type" data-type="${t}" aria-selected="false" title="${CHART_TITLES[t]}">${t}</button>`).join("")}</div>
+        <div class="pc-types" role="tablist" aria-label="Chart type" ${o.showChartTypes ? "" : "hidden"}>${(o.showChartTypes ? CHART_TYPES : []).map((t) => `<button type="button" role="tab" class="pc-type" data-type="${t}" aria-selected="false" title="${CHART_TITLES[t]}">${t}</button>`).join("")}</div>
       </div>
     </div>
     <div class="pc-note hidden"></div>
@@ -177,7 +177,7 @@ export function createPersonaChart(host, opts) {
   if (dims.length < 2) el.dim.hidden = true;
 
   function on(target, type, fn, options) { target.addEventListener(type, fn, options); st.listeners.push(() => target.removeEventListener(type, fn, options)); }
-  on(el.dim, "change", () => { st.dimension = el.dim.value; if (!st.manual) st.type = autoType(); clearSelection(); render(); });
+  on(el.dim, "change", () => { st.dimension = el.dim.value; o.onDimensionChange(st.dimension); if (!st.manual) st.type = autoType(); clearSelection(); render(); });
   on(el.types, "click", (e) => {
     const b = e.target.closest(".pc-type"); if (!b) return;
     st.type = b.dataset.type; st.manual = true; clearSelection(); render();

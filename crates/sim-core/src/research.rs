@@ -67,8 +67,8 @@ impl ResearchRequest {
         {
             return Err("Provide 2 to 5 nonempty response options");
         }
-        if !(2..=24).contains(&self.scenarios.len()) {
-            return Err("Compare 2 to 24 scenarios");
+        if !(2..=84).contains(&self.scenarios.len()) {
+            return Err("Compare 2 to 84 scenarios");
         }
         let mut options = std::collections::HashSet::new();
         if self
@@ -205,6 +205,17 @@ mod tests {
     use super::*;
     fn request() -> ResearchRequest {
         serde_json::from_value(serde_json::json!({"question":"Would you buy?", "assumptions":"Same product", "options":["Yes","No"], "as_of_date":"2026-09-19", "model":"jev-1.13.0", "scenarios":[{"label":"Current","description":"Price $10"},{"label":"+20%","description":"Price $12"}]})).unwrap()
+    }
+    #[test]
+    fn dense_price_grid_is_bounded_at_84_scenarios() {
+        let mut r = request();
+        r.scenarios = (0..84).map(|i| Scenario {
+            label: format!("Combination {i}"),
+            description: format!("Price change {}%, area {}, format {}", i % 21, i / 42, (i / 21) % 2),
+        }).collect();
+        assert!(r.validate().is_ok());
+        r.scenarios.push(Scenario { label: "85th".into(), description: "Additional scenario".into() });
+        assert_eq!(r.validate(), Err("Compare 2 to 84 scenarios"));
     }
     #[test]
     fn rejects_ambiguous_and_unbounded_comparisons() {

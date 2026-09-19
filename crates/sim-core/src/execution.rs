@@ -24,7 +24,7 @@ impl Trace {
     pub async fn scope<F: Future>(&self, future: F) -> F::Output { CURRENT.scope(self.clone(), future).await }
     pub fn record(&self, kind: &str, message: &str, details: Value) {
         let mut events = self.0.events.lock().unwrap();
-        // Requests are bounded to 24 scenarios. Cap retained/streamed metadata too.
+        // Requests are bounded to 84 scenarios. Cap retained/streamed metadata too.
         if events.len() >= 2000 { return; }
         let event = json!({"run_id":self.0.id,"seq":events.len()+1,"elapsed_ms":self.0.start.elapsed().as_millis() as u64,
             "kind":kind,"message":message,"details":details});

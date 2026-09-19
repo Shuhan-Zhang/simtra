@@ -73,13 +73,15 @@ const ask=async page=>{await page.locator('#ask-input').fill(question);await pag
   await page.locator('.ex-factor-grid').waitFor();
   assert.deepEqual(researchBody,{question,market:'sf'});
   assert.deepEqual(compareBody.research_panel,{id:panel.id,version:1,content_hash:'pinned-hash',role:'research_context_only'});
-  assert.equal(compareBody.scenarios.length,24);assert.ok(compareBody.scenarios.some(s=>s.change===0));assert.ok(compareBody.scenarios.some(s=>s.change===20));
+  assert.equal(compareBody.scenarios.length,84);assert.ok(compareBody.scenarios.some(s=>s.change===0));assert.ok(compareBody.scenarios.some(s=>s.change===20));
   await page.screenshot({path:'/tmp/simtra-chipotle-plan.png'});comparisonRelease();
   await page.locator('.ex-matrix-cell').first().waitFor();
-  assert.equal(await page.locator('.ex-curve [data-scenario]').count(),6);
+  assert.equal(await page.locator('.ex-curve [data-scenario]').count(),21);
   assert.match(await page.locator('.ex-impact').innerText(),/Price|Location/);
   assert.match(await page.locator('#research-workspace').innerText(),/20%/);
-  if(!await page.locator('.ex-people').evaluate(el=>el.open))await page.locator('.ex-people summary').click();await page.locator('#experiment-people').waitFor();
+  await page.locator('#experiment-people').waitFor();
+  assert.equal(await page.locator('details.ex-people').count(),0);
+  assert.equal(await page.locator('#experiment-people .pc-type').count(),0);
   assert.equal(await page.locator('[data-action=timeline]').count(),1);
   await page.screenshot({path:'/tmp/simtra-chipotle-result.png'});
   await page.setViewportSize({width:390,height:844});
@@ -96,6 +98,6 @@ const ask=async page=>{await page.locator('#ask-input').fill(question);await pag
   await page.waitForFunction(()=>document.querySelector('[data-updates]')?.textContent.includes('60.0%'));assert.equal(questionBody.tick,2);
   await page.screenshot({path:'/tmp/simtra-chipotle-timeline.png'});
   assert.deepEqual(errors,[]);
-  console.log('PASS exact Chipotle prompt: image-free entry, offline relative curve, research-before-plan, pinned evidence handoff, 24 combinations, line curve, factor impacts, demographics, timeline with pinned context, news affecting the next day, question on viewed day, mobile. HTTP responses mocked; no live provider verification.');
+  console.log('PASS exact Chipotle prompt: image-free entry, offline relative curve, research-before-plan, pinned evidence handoff, 84 combinations, line curve, factor impacts, demographics, timeline with pinned context, news affecting the next day, question on viewed day, mobile. HTTP responses mocked; no live provider verification.');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exit(1)});

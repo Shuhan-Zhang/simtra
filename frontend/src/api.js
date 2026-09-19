@@ -271,7 +271,11 @@ async function demoRequest(path, { method, body, signal }) {
     const fixtures = body.scenarios.length <= 3 ? [.67, .58, .45] : [.43, .61, .55, .38, .52, .49];
     result = { fixture_mode: true, context_policy: "explicit_assumptions_only", n_agents: row.agents.length,
       scenarios: body.scenarios.map((scenario, index) => {
-        const p = body.scenarios.length>6 ? Math.max(.12,.72-(index%6)*.075-Math.floor(index/6)*.025) : fixtures[index];
+        const prices = [...new Set(body.scenarios.map(s=>s.change??s.price))];
+        const groups = [...new Set(body.scenarios.map(s=>JSON.stringify([s.location,s.format])))];
+        const pricePosition = prices.indexOf(scenario.change??scenario.price) / Math.max(1,prices.length-1);
+        const groupPosition = groups.indexOf(JSON.stringify([scenario.location,scenario.format]));
+        const p = body.scenarios.length>6 ? Math.max(.12,.72-pricePosition*.375-groupPosition*.025) : fixtures[index];
         const probabilities = body.options.length === 2 ? [p, 1-p] : [(1-p)*.6, (1-p)*.4, p*.7, p*.3];
         return { scenario,
         result: { ...row.binary, question: body.question, p_distribution: body.options.map((o, i) => [o, probabilities[i]]),

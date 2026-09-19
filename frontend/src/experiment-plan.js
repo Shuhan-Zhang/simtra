@@ -1,6 +1,6 @@
 // Bounded, visible hypotheses. Never treat assumed prices, costs or formats as facts.
 import { MEASURES, scenarioShare } from "./research.js";
-export const MAX_SCENARIOS = 24;
+export const MAX_SCENARIOS = 84;
 export const PRICE_RANGES = [[10,20],[8,18],[12,22]];
 export const signed = n => `${n > 0 ? "+" : ""}${Number(n.toFixed(2))}%`;
 export const priceLabel = (value, mode) => mode === "relative" ? (value === 0 ? "Current" : signed(value)) : `$${Number(value.toFixed(2))}`;
@@ -25,7 +25,17 @@ export function priceRangeFrom(question) {
 }
 export function sweep(from, to, count=6) {
   const values=Array.from({length:count},(_,i)=>Number((from+(to-from)*i/(count-1)).toFixed(2)));
-  if(new Set(values).size!==count) throw new Error("Choose a wider price range for six distinct test points.");
+  if(new Set(values).size!==count) throw new Error("Choose a wider price range for distinct test points.");
+  return values;
+}
+// New plans test one-percentage-point increments up to 20%; larger ranges stay bounded.
+// Missing resolution preserves the six-point design of saved version-3 drafts.
+function relativeSweep(percent, resolution) {
+  if (resolution !== 1) return sweep(0, percent);
+  if (Math.abs(percent) > 20) return sweep(0, percent, 21);
+  const direction = Math.sign(percent), magnitude = Math.abs(percent);
+  const values = Array.from({length: Math.floor(magnitude) + 1}, (_, i) => i === 0 ? 0 : i * direction);
+  if (values.at(-1) !== percent) values.push(percent);
   return values;
 }
 export function autoPlan(question, route) {
@@ -43,7 +53,7 @@ export function autoPlan(question, route) {
   const budget=/\b(budget|have|spend|fund|capital)\b/i.test(question)?budgetFrom(question):null;
   return {version:3,decision:question.trim(),kind:route.kind,business,
     measure:route.measure==="repeat"&&commercial?"frequency":route.measure==="support"&&!commercial?"support":"intent",
-    priceMode:route.kind==="price" && !explicitRange?"relative":"absolute",priceRange:explicitRange || [10,20],priceSuggested:!explicitRange,percent,
+    priceMode:route.kind==="price" && !explicitRange?"relative":"absolute",priceRange:explicitRange || [10,20],priceSuggested:!explicitRange,percent,priceResolution:1,
     locations,availableLocations:[...new Set([...(route.available_locations || []),...locations])],
     context:{...structuredClone(contexts[business]),...(/\bbowls?\b/i.test(question)?{item:"one consistent bowl"}:{})},budget,alternatives:explicitAlternatives(question)};
 }
@@ -64,7 +74,7 @@ export function compilePlan(plan) {
     if(plan.priceMode!=="absolute"&&plan.priceMode!=="relative")throw new Error("Invalid price mode.");
     if(plan.priceMode==="absolute"&&(!plan.priceRange.every(Number.isFinite)||plan.priceRange[0]<=0||plan.priceRange[1]<=plan.priceRange[0]||plan.priceRange[1]>100000))throw new Error("Choose a valid price range.");
     if(plan.priceMode==="relative"&&(!Number.isFinite(plan.percent)||plan.percent===0||plan.percent<=-100||plan.percent>1000))throw new Error("Choose a valid price change.");
-    const values=plan.priceMode==="absolute"?sweep(...plan.priceRange):sweep(0,plan.percent);
+    const values=plan.priceMode==="absolute"?sweep(...plan.priceRange):relativeSweep(plan.percent,plan.priceResolution);
     exp.priceMode=plan.priceMode;exp.priceAxis=plan.priceMode==="relative"?"Price change":plan.context.price;
     exp.factors=[{id:"location",label:"Location",levels:plan.locations},{id:"price",label:exp.priceAxis,levels:values.map(v=>priceLabel(v,plan.priceMode))},{id:"format",label:plan.context.factor,levels:plan.context.values}];
     if(plan.business==="restaurant"&&plan.measure==="intent")exp.question=`Would you buy ${plan.context.item.replace("one consistent", "a")} from this restaurant at the scenario's price at least once in the next 30 days?`;
