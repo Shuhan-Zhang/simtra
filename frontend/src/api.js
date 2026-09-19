@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { BASE, SIM, PREDICT, BACKEND_SETUP_MESSAGE } from "./config.js";
+import { readExecutionStream } from "./execution-log.js";
 
 async function req(path, { method = "GET", body, timeout = 30000, signal } = {}) {
   if (isDemo && path === "/data-query") return {
@@ -35,11 +36,13 @@ async function req(path, { method = "GET", body, timeout = 30000, signal } = {})
       const error = new Error(`${method} ${path} → ${res.status}: ${msg}`);
       error.status = res.status;
       error.path = path;
+      error.trace = data.trace;
       throw error;
     }
     return data;
   } catch (e) {
     if (e.name === "AbortError") throw new Error(`${method} ${path} timed out`);
+    if (e instanceof TypeError) throw new Error("Cannot reach the live backend. Start the local API server and configure TYPESAFE_API_KEY. No demo results were substituted.");
     throw e;
   } finally {
     clearTimeout(t);
@@ -129,6 +132,38 @@ export const poll = (branchId, payload, signal) =>
     signal,
   });
 
+export async function compareScenarios(branchId, payload, signal, onLog = () => {}) {
+  if (isDemo) {
+    const event = { kind:"demo.fixture", elapsed_ms:0, message:"DEMO: fixed illustrative responses loaded. Zero model requests, zero resident evaluations.", details:{fixture:true} };
+    onLog(event);
+    const result = await req(`/branches/${encodeURIComponent(branchId)}/research`, { method:"POST", body:payload, signal });
+    return { ...result, trace:{provider_requests:0,cache_hits:0,events:[event]} };
+  }
+  if (!BASE) throw new Error(BACKEND_SETUP_MESSAGE);
+  const controller = new AbortController(), cancel = () => controller.abort();
+  const timer = setTimeout(cancel, 540000);
+  if (signal?.aborted) cancel(); else signal?.addEventListener("abort", cancel, { once:true });
+  try {
+    const response = await fetch(`${BASE}/branches/${encodeURIComponent(branchId)}/research/stream`, {
+      method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({...payload,model:PREDICT.model}), signal:controller.signal,
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      const error = new Error(data.error || `Experiment backend returned HTTP ${response.status}.`);
+      error.status = response.status; error.trace = data.trace; throw error;
+    }
+    if (!response.headers.get("content-type")?.includes("application/x-ndjson")) throw new Error("The backend needs the updated streaming experiment endpoint.");
+    return await readExecutionStream(response, onLog);
+  } catch (error) {
+    if (error.name === "AbortError") throw new Error(signal?.aborted ? "Experiment cancelled." : "Experiment timed out. No complete result was saved.");
+    throw error;
+  } finally { clearTimeout(timer); signal?.removeEventListener("abort", cancel); }
+}
+
+// Planning selects a recipe; no synthetic resident is polled until approval.
+export const proposeExperiment = (city, question, signal) =>
+  req(`/cities/${encodeURIComponent(city)}/experiment-plan`, { method: "POST", body: { question, city }, signal, timeout: 60000 });
+
 // Missing or failed live endpoints are errors. Saved fixtures are available
 // only through the explicitly labeled ?demo=1 mode in req().
 export const abTest = (branchId, payload, signal) =>
@@ -163,9 +198,30 @@ export const deleteBranch = (branchId) => {
 // backend response; probabilities are fixed test responses, never live answers.
 export const isDemo = typeof location !== "undefined" && new URLSearchParams(location.search).get("demo") === "1";
 let demoData, demoSequence = 0;
+const demoPopulations = new Map();
+async function demoPopulation(entry) {
+  const slug = entry.city.slug;
+  if (!demoPopulations.has(slug)) {
+    const pending = (async () => {
+      const response = await fetch(new URL(`../fixtures/population-demo/${entry.file}`, import.meta.url));
+      if (!response.ok) throw new Error(`Demo population unavailable: ${response.status}`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      // Some static hosts decode Content-Encoding automatically, while the local
+      // server serves the .gz file as bytes. Accept either without double decoding.
+      const compressed = bytes[0] === 0x1f && bytes[1] === 0x8b;
+      const stream = new Blob([bytes]).stream();
+      const row = await new Response(compressed ? stream.pipeThrough(new DecompressionStream("gzip")) : stream).json();
+      if (row.agents.length !== entry.n_agents || new Set(row.agents.map(a => a.id)).size !== entry.n_agents) throw new Error("Demo population is incomplete");
+      return row;
+    })();
+    demoPopulations.set(slug, pending);
+    pending.catch(() => demoPopulations.delete(slug));
+  }
+  return demoPopulations.get(slug);
+}
 async function demoRequest(path, { method, body, signal }) {
   signal?.throwIfAborted();
-  demoData ||= fetch(new URL("../fixtures/evidence-demo.json", import.meta.url)).then(async (r) => {
+  demoData ||= fetch(new URL("../fixtures/population-demo/manifest.json", import.meta.url)).then(async (r) => {
     if (!r.ok) throw new Error(`Demo fixture unavailable: ${r.status}`);
     return r.json();
   });
@@ -173,23 +229,42 @@ async function demoRequest(path, { method, body, signal }) {
   signal?.throwIfAborted();
   const url = new URL(path, "http://local.invalid");
   const route = decodeURIComponent(url.pathname);
-  const slug = route.match(/demo:([^/:]+)/)?.[1] || body?.city || "sf";
-  const row = data.cities.find((entry) => entry.city.slug === slug);
-  if (!row) throw new Error(`No committed demo snapshot for ${slug}`);
+  if (route === "/cities") return { cities: structuredClone(data.cities.map(r => r.city)) };
+  const slug = route.match(/demo:([^/:]+)/)?.[1] || route.match(/^\/cities\/([^/]+)/)?.[1] || body?.city || "sf";
+  const entry = data.cities.find((entry) => entry.city.slug === slug);
+  if (!entry) throw new Error(`No committed demo snapshot for ${slug}`);
+  const row = await demoPopulation(entry);
+  signal?.throwIfAborted();
   let result;
-  if (route === "/cities") result = { cities: data.cities.map((r) => r.city) };
-  else if (route.endsWith("/news")) result = { articles: [] };
+  if (route.endsWith("/news")) result = { articles: [] };
   else if (route.endsWith("/chatter")) result = { chatter: {} };
   else if (route.endsWith("/parse")) {
     const options = /which|choose|prioriti[sz]e/i.test(body.question);
     result = { supported: true, framing: options ? "options" : "vote", question: body.question,
       description: "Offline fixture demonstration; saved outcomes do not answer this question.",
       ...(options ? { options: row.options.p_distribution.map(([label]) => label) } : {}) };
+  } else if (route.endsWith("/experiment-plan")) {
+    const areas = [...new Set(row.agents.map(a => a.neighborhood).filter(Boolean))];
+    const kind = /\b(price|prices|pricing)\b/i.test(body.question) ? "price" : /\b(launch\w*|marketplace|start a|open\w* a|business)\b/i.test(body.question) ? "launch" : "compare";
+    result = { kind, measure: /frequen|repeat|often/i.test(body.question) ? "repeat" : kind === "compare" ? "support" : "trial",
+      locations: areas.slice(0,2), available_locations: areas, source: "demo_recipe" };
   } else if (route === "/simulations") result = { simulation_id: `demo:${slug}`, main_branch: `demo:${slug}:main` };
   else if (route.startsWith("/simulations/") && route.endsWith("/branches")) result = { branch_id: `demo:${slug}:prediction:${++demoSequence}` };
   else if (route.endsWith("/agents")) {
     const offset = Number(url.searchParams.get("offset") || 0), limit = Number(url.searchParams.get("limit") || 1000);
     result = { agents: row.agents.slice(offset, offset + limit), total_matched: row.agents.length };
+  } else if (route.endsWith("/research")) {
+    // Explicitly illustrative fixed curves/rankings, never answers to the query.
+    const fixtures = body.scenarios.length <= 3 ? [.67, .58, .45] : [.43, .61, .55, .38, .52, .49];
+    result = { fixture_mode: true, context_policy: "explicit_assumptions_only", n_agents: row.agents.length,
+      scenarios: body.scenarios.map((scenario, index) => {
+        const p = body.scenarios.length>6 ? Math.max(.12,.72-(index%6)*.075-Math.floor(index/6)*.025) : fixtures[index];
+        const probabilities = body.options.length === 2 ? [p, 1-p] : [(1-p)*.6, (1-p)*.4, p*.7, p*.3];
+        return { scenario,
+        result: { ...row.binary, question: body.question, p_distribution: body.options.map((o, i) => [o, probabilities[i]]),
+          option_breakdowns: row.binary.option_breakdowns.map(b => ({ ...b, groups: b.groups.map(g => ({ ...g, shares: probabilities })) })) },
+        response_groups: [{ agent_ids: row.agents.map(a => a.id), probabilities, archetype: "offline-fixture", factor: "Fixed demo response; no model evaluation." }],
+      }; }) };
   } else if (route.endsWith("/poll")) result = body.framing === "options" ? row.options : row.binary;
   else if (route.endsWith("/counterfactual")) result = { baseline: row.binary, exposed: row.binary, delta: 0, fixture_mode: true };
   else if (route.endsWith("/ab-test")) result = { ...row.binary, ...body, a_share: row.binary.p_yes, b_share: 1-row.binary.p_yes,

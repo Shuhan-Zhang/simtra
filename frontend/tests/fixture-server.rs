@@ -17,7 +17,11 @@ async fn main() {
                     let criteria = question["criteria"].as_object().unwrap();
                     let selected = if id == "route" {
                         if body["state"]["candidate_options"].as_array().map_or(0, Vec::len) >= 2 { "explicit_options" } else { "vote" }
-                    } else { criteria.keys().next().unwrap().as_str() };
+                    } else if id == "design" {
+                        let q = body["state"]["decision"].as_str().unwrap_or("").to_lowercase();
+                        if q.contains("price") { "price" } else if q.contains("launch") { "launch" } else { "compare" }
+                    } else if id == "measure" { "trial" }
+                    else { criteria.keys().next().unwrap().as_str() };
                     let probabilities: Map<String, Value> = criteria.keys().map(|k| (k.clone(),json!(if k == selected { 1.0 } else { 0.0 }))).collect();
                     json!({"type":"choice","choice":selected,"probabilities":probabilities,"confidence":1.0})
                 },
@@ -31,6 +35,7 @@ async fn main() {
     let model_url = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, fixture).await.unwrap(); });
     std::env::set_var("MODEL_OFFLINE", "0");
+    std::env::set_var("MODEL_FIXTURE", "1");
     std::env::set_var("TYPESAFE_API_KEY", "local-fixture");
     std::env::set_var("TYPESAFE_BASE_URL", &model_url);
     std::env::set_var("JEV_MODEL", "jev-1.13.0");

@@ -9,6 +9,7 @@
   <!-- fonts: Pixelify Sans (title) · Neue Haas Grotesk Display (body, via Typekit); skipped in ?demo=1 -->
   <link rel="stylesheet" href="styles.css?v=pa-1" />
   <link rel="stylesheet" href="feedpanel.css?v=9" />
+  <link rel="stylesheet" href="research.css?v=2" />
   <script>
     if (new URLSearchParams(location.search).get("demo") !== "1") {
       for (const href of ["https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400..700&display=swap", "https://use.typekit.net/bsk0vur.css"]) {
@@ -70,6 +71,8 @@
 
     <!-- bottom-center dock: query progress · result card · composer row (ask + info) -->
     <div id="dock" class="dock">
+      <button id="research-launch" class="experiment-reopen" type="button" aria-controls="research-workspace" aria-expanded="false" hidden>Experiments</button>
+      <section id="research-workspace" class="experiment-card" aria-label="Experiment" hidden></section>
       <!-- query summary + response progress (loading state, bottom-center) -->
       <div id="summary" class="summary hidden" aria-live="polite">
         <div id="summary-label" class="summary-label">PREDICTING</div>
@@ -92,7 +95,7 @@
       </div>
 
       <div class="dock-row">
-        <div id="ask" class="ask" data-state="idle" data-mode="predict" tabindex="0" role="group" aria-label="Ask a prediction question">
+        <div id="ask" class="ask" data-state="idle" data-mode="research" tabindex="0" role="group" aria-label="Ask a prediction question">
           <!-- row 1: who gets asked; row 2: the question and send -->
           <div class="ask-head">
             <button id="audience-chip" class="audience-chip" type="button" aria-pressed="false"
@@ -114,8 +117,8 @@
             </svg>
             <span id="ask-label" class="ask-label">ask</span>
             <textarea id="ask-input" class="ask-input" rows="1" autocomplete="off" spellcheck="false"
-                      placeholder="Ask a question — for choices, list options: bus, train, or bicycle"
-                      aria-label="Predict anything"></textarea>
+                      placeholder="What decision are you considering?"
+                      maxlength="2000" aria-label="Decision to research"></textarea>
             <button id="ask-submit" class="ask-send" type="button" aria-label="Send">
               <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
                 <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
@@ -126,7 +129,8 @@
           <!-- question type + the extra fields each type needs; shown while composing -->
           <div class="ask-extra">
             <div class="ask-modes" role="radiogroup" aria-label="Question type">
-              <button type="button" class="ask-mode" role="radio" data-mode="predict" aria-checked="true">Predict</button>
+              <button type="button" class="ask-mode" role="radio" data-mode="research" aria-checked="true">Experiment</button>
+              <button type="button" class="ask-mode" role="radio" data-mode="predict" aria-checked="false">Quick prediction</button>
               <button type="button" class="ask-mode" role="radio" data-mode="ab" aria-checked="false">A/B</button>
               <button type="button" class="ask-mode" role="radio" data-mode="marketing" aria-checked="false">Post test</button>
             </div>
@@ -214,6 +218,7 @@
       <button id="about-close" class="about-close" aria-label="Close">×</button>
       <div class="about-title">simit</div>
       <div class="about-sub">simulate and predict our golden city and beyond</div>
+      <p><a id="control-panel-link" href="control.html" target="_blank" rel="noopener">Developer control panel ↗</a></p>
 
       <div class="about-h">The pitch</div>
       <p>What if you could predict how your customers responded to releases before they went out into the real world? Or if you could get a signal on who will win an election?</p>

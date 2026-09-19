@@ -383,7 +383,7 @@ p_yes is a probability between 0 and 1. Be realistic and calibrated to {city_nam
 
     /// Run a poll over a population. Returns weighted result + breakdowns + CI.
     pub async fn run_poll(&self, pop: &Population, poll: &Poll) -> Result<PollResult> {
-        self.run_poll_inner(pop, poll, None, false, &TestTag::poll()).await
+        self.run_poll_inner(pop, poll, None, false, &TestTag::poll(), None).await
     }
 
     /// Same as `run_poll`, with provenance for the memory layer (kind, sim, branch).
@@ -393,7 +393,18 @@ p_yes is a probability between 0 and 1. Be realistic and calibrated to {city_nam
         poll: &Poll,
         tag: &TestTag,
     ) -> Result<PollResult> {
-        self.run_poll_inner(pop, poll, None, false, tag).await
+        self.run_poll_inner(pop, poll, None, false, tag, None).await
+    }
+
+    /// Controlled research uses explicit context only. No mutable news, retrieval,
+    /// memory recall or memory writes can contaminate sibling scenarios.
+    pub async fn run_research_poll(
+        &self, pop: &Population, poll: &Poll,
+    ) -> Result<(PollResult, Vec<crate::research::ResponseGroup>)> {
+        let mut responses = Vec::new();
+        let result = self.run_poll_inner(pop, poll, None, true,
+            &TestTag::kind("research_scenario"), Some(&mut responses)).await?;
+        Ok((result, responses))
     }
 
     pub async fn run_ab_test(
@@ -435,7 +446,7 @@ p_yes is a probability between 0 and 1. Be realistic and calibrated to {city_nam
             memory::StimulusRecord { label: "A".into(), text: variant_a.to_string() },
             memory::StimulusRecord { label: "B".into(), text: variant_b.to_string() },
         ];
-        self.run_poll_inner(pop, &poll, Some(&stimuli), true, &tag).await
+        self.run_poll_inner(pop, &poll, Some(&stimuli), true, &tag, None).await
     }
 
     async fn run_poll_inner(
@@ -445,16 +456,21 @@ p_yes is a probability between 0 and 1. Be realistic and calibrated to {city_nam
         ab_stimuli: Option<&AbStimuli<'_>>,
         fail_on_model_error: bool,
         tag: &TestTag,
+        mut research_responses: Option<&mut Vec<crate::research::ResponseGroup>>,
     ) -> Result<PollResult> {
+        let research = research_responses.is_some();
         let model = poll.model();
         let clusters = cluster_agents(pop, self.max_clusters);
+        if research {
+            crate::execution::emit("population.clustered", "Residents grouped into representative personas; responses will be inherited by group members.", serde_json::json!({"residents":pop.agents.len(),"archetypes":clusters.len(),"batches":clusters.len().div_ceil(self.batch_size)}));
+        }
         let cutoffs = pop.income_cutoffs;
         // Persona memory (Neo4j): what each archetype representative remembers as of
         // the poll date — city news, stimuli it was shown, tests it already answered.
         // Appended to the representative's profile so the whole archetype reasons with
         // it. Deterministic ordering keeps prompts (and cache keys) stable.
         let pop_key = memory::population_key_of(pop);
-        let memory_by_rep: HashMap<usize, String> = if let Some(mem) = &self.memory {
+        let memory_by_rep: HashMap<usize, String> = if let Some(mem) = self.memory.as_ref().filter(|_| !research) {
             let rep_ids: Vec<u32> = clusters.iter().map(|c| pop.agents[c.rep_idx].id).collect();
             match mem.recall(&pop_key, &rep_ids, &poll.as_of_date).await {
                 Ok(recalled) => clusters
@@ -480,12 +496,12 @@ p_yes is a probability between 0 and 1. Be realistic and calibrated to {city_nam
         let sys = Self::system_prompt(poll.framing, &pop.profile, ab_stimuli.is_some());
         // Inject today's news into ordinary live polls only. A/B tests are isolated
         // from mutable/news UI state and use only the immutable population context.
-        let news_block = if ab_stimuli.is_none() && poll.as_of_date.as_str() >= "2025-06-01" {
+        let news_block = if !research && ab_stimuli.is_none() && poll.as_of_date.as_str() >= "2025-06-01" {
             crate::news::prompt_block(&pop.profile.slug)
         } else {
             String::new()
         };
-        let (hydra_block, hydra_evidence) = if let Some(hydra) = &self.hydra {
+        let (hydra_block, hydra_evidence) = if let Some(hydra) = self.hydra.as_ref().filter(|_| !research) {
             let query = format!(
                 "City: {}\nQuestion: {}\nNeutral description: {}\nRetrieve only factual demographic, survey, civic, and news context relevant to this prediction.",
                 pop.profile.prompt_name, poll.question, poll.description
@@ -562,12 +578,14 @@ p_yes is a probability between 0 and 1. Be realistic and calibrated to {city_nam
             let evidence = hydra_block.clone();
             let stimuli = ab_stimuli.map(|s| (s.variant_a.to_string(), s.variant_b.to_string()));
             futs.push(async move {
+                if research { crate::execution::emit("batch.started", "Evaluating representative personas in this batch.", serde_json::json!({"first_archetype":idxs[0]+1,"archetypes":idxs.len()})); }
                 let resp = if model.is_jev() {
                     crate::jev::poll_batch(&client, model, &poll, &profiles, &city, &sys2,
                         &news, &evidence, stimuli.as_ref().map(|(a,b)| (a.as_str(),b.as_str()))).await
                 } else {
                     client.complete(model, &sys2, &user, 1600).await.and_then(|text| extract_json(&text))
                 };
+                if research { crate::execution::emit(if resp.is_ok() { "batch.completed" } else { "batch.failed" }, if resp.is_ok() { "Batch answers received; checking population coverage next." } else { "Batch failed; this scenario cannot be reported as complete." }, serde_json::json!({"first_archetype":idxs[0]+1,"archetypes":idxs.len()})); }
                 (idxs, resp)
             });
             calls += 1;
@@ -641,7 +659,10 @@ p_yes is a probability between 0 and 1. Be realistic and calibrated to {city_nam
         } else {
             n_answered as f64 / clusters.len() as f64
         };
-        let min_coverage = if fail_on_model_error { 0.80 } else { 0.20 };
+        let min_coverage = if research { 1.0 } else if fail_on_model_error { 0.80 } else { 0.20 };
+        if research && clusters.is_empty() {
+            return Err(anyhow!("research audience is empty"));
+        }
         if n_batches > 0 && coverage < min_coverage {
             let detail = last_error
                 .map(|e| e.to_string())
@@ -659,6 +680,18 @@ p_yes is a probability between 0 and 1. Be realistic and calibrated to {city_nam
                 "degraded poll: {n_answered}/{} archetypes answered ({n_failed}/{n_batches} batches failed)",
                 clusters.len()
             );
+        }
+
+        if let Some(responses) = research_responses.as_mut() {
+            crate::execution::emit("population.coverage", "All representative answers validated; computing weighted metrics and demographic breakdowns.", serde_json::json!({"answered_archetypes":n_answered,"total_archetypes":clusters.len(),"coverage":coverage}));
+            for (ci, cluster) in clusters.iter().enumerate() {
+                responses.push(crate::research::ResponseGroup {
+                    agent_ids: cluster.member_idx.iter().map(|&i| pop.agents[i].id).collect(),
+                    probabilities: dist_by_cluster[ci].clone(),
+                    factor: rationale[ci].clone(),
+                    archetype: pop.agents[cluster.rep_idx].archetype_key(&cutoffs),
+                });
+            }
         }
 
         // multi-option framing: aggregate the per-archetype distribution over agents.
@@ -740,10 +773,10 @@ p_yes is a probability between 0 and 1. Be realistic and calibrated to {city_nam
                 memory_test_id: None,
             };
             let mut result = result;
-            self.remember_test(
+            if !research { self.remember_test(
                 pop, poll, &mut result, &pop_key, tag, &clusters, &answered, &p_by_cluster,
                 &dist_by_cluster, &rationale,
-            );
+            ); }
             return Ok(result);
         }
 
@@ -875,10 +908,10 @@ p_yes is a probability between 0 and 1. Be realistic and calibrated to {city_nam
             memory_test_id: None,
         };
         let mut result = result;
-        self.remember_test(
+        if !research { self.remember_test(
             pop, poll, &mut result, &pop_key, tag, &clusters, &answered, &p_by_cluster,
             &dist_by_cluster, &rationale,
-        );
+        ); }
         Ok(result)
     }
 

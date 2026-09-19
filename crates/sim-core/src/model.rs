@@ -295,6 +295,15 @@ impl ModelClient {
     /// include endpoint, model, state and typed questions in the deterministic key.
     pub async fn evaluate(&self, model: Model, state: Value,
         questions: std::collections::BTreeMap<String, crate::jev::Question>) -> Result<crate::jev::Evaluation> {
+        let result = self.evaluate_inner(model, state, questions).await;
+        if let Err(error) = &result {
+            crate::execution::emit("model.failed", crate::execution::failure_message(error), json!({"model":model.id()}));
+        }
+        result
+    }
+
+    async fn evaluate_inner(&self, model: Model, state: Value,
+        questions: std::collections::BTreeMap<String, crate::jev::Question>) -> Result<crate::jev::Evaluation> {
         if !model.is_jev() { return Err(anyhow!("typed evaluations require a Jev model")); }
         if questions.is_empty() { return Err(anyhow!("at least one Jev question is required")); }
         for question in questions.values() { question.validate()?; }
@@ -304,6 +313,7 @@ impl ModelClient {
             let result: crate::jev::Evaluation = serde_json::from_str(&hit)?;
             result.validate(&questions)?;
             self.usage.cache_hits.fetch_add(1, Ordering::Relaxed);
+            crate::execution::emit("model.cache_hit", "Exact cached model response reused; no provider request.", json!({"model":model.id(),"questions":questions.len()}));
             return Ok(result);
         }
         if self.offline { return Err(anyhow!("offline mode: cache miss for {}", model.id())); }
@@ -312,6 +322,8 @@ impl ModelClient {
         let mut attempt = 0;
         loop {
             self.usage.calls.fetch_add(1, Ordering::Relaxed);
+            let request_started = std::time::Instant::now();
+            crate::execution::emit("model.request", "Sending typed evaluation to Jev.", json!({"model":model.id(),"attempt":attempt+1,"questions":questions.len()}));
             let response = self.http.post(&self.jev_url).bearer_auth(&self.jev_key).json(&body).send().await;
             match response {
                 Ok(response) => {
@@ -321,6 +333,7 @@ impl ModelClient {
                         .filter(|s| s.is_finite() && *s >= 0.0).map(|s| Duration::from_secs_f64(s.min(30.0)));
                     if !status.is_success() {
                         if (status.as_u16() == 429 || status.is_server_error()) && attempt < self.max_retries {
+                            crate::execution::emit("model.retry", "Provider returned a retryable error; waiting before retry.", json!({"status":status.as_u16(),"attempt":attempt+1}));
                             if let Some(wait) = retry_after { tokio::time::sleep(wait).await; }
                             else { self.backoff(attempt).await; }
                         } else {
@@ -332,10 +345,14 @@ impl ModelClient {
                         result.validate(&questions)?;
                         self.record_usage(&json!({"usage":result.usage}));
                         if let Some(cache) = &self.cache { cache.put(&key, model.id(), &serde_json::to_string(&result)?); }
+                        crate::execution::emit("model.response", "Provider response received and validated.", json!({"model":model.id(),"duration_ms":request_started.elapsed().as_millis() as u64,"questions":questions.len()}));
                         return Ok(result);
                     }
                 }
-                Err(_) if attempt < self.max_retries => self.backoff(attempt).await,
+                Err(_) if attempt < self.max_retries => {
+                    crate::execution::emit("model.retry", "Connection failed; waiting before retry.", json!({"attempt":attempt+1}));
+                    self.backoff(attempt).await;
+                },
                 Err(_) => return Err(anyhow!("Jev connection failed after retries")),
             }
             attempt += 1;
