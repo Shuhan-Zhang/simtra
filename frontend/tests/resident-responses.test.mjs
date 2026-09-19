@@ -85,3 +85,35 @@ test('research results render green and red head markers, not merely labels',asy
  map.clearVerdicts();fills.length=0;map._drawSprites(performance.now(),0);
  assert.deepEqual(fills,[]);
 });
+
+test('leaving research clears markers without waiting for animation and preserves simulation',async()=>{
+ const {SFMap}=await import('../src/map.js');
+ const evolution={frame:{tick:4}};
+ const map=Object.assign(Object.create(SFMap.prototype),{
+  agents:[{seed:7}],reducedMotion:false,evolution,bubbleIdx:[0],bubbleT:100,
+ });
+ map.setResearchResponses([{agent_ids:[7],probabilities:[.8,.2]}],['Yes','No']);
+ map.clearVerdicts();
+ assert.equal(map.mode,'idle');assert.equal(map.hasResearchResponses,false);
+ assert.deepEqual(map.mapColorLegend,[]);assert.deepEqual(map.bubbleIdx,[]);
+ assert.ok(map.agents.every(a=>a.verdict===null&&a.markerColor===null&&a.response===null));
+ assert.equal(map.evolution,evolution);
+ // Explicit cleanup must also remove a stale marker if the mode/flag drifted.
+ map.agents[0].verdict='no';map.agents[0].markerColor='#ff0000';
+ map.clearResearchResponses();
+ assert.equal(map.agents[0].verdict,null);assert.equal(map.agents[0].markerColor,null);
+});
+
+test('simulation keeps matching resident sprites opaque and dims only other behaviors',async()=>{
+ const {SFMap}=await import('../src/map.js');
+ const alpha=[];
+ const map=Object.assign(Object.create(SFMap.prototype),{
+  ctx:{fillRect(){alpha.push(this.globalAlpha)}},cam:{zoom:.2},cssW:400,cssH:400,
+  reducedMotion:true,spriteReady:false,_segmentResult:{summary:{active:false}},
+  worldToScreen:(x,y)=>({x,y}),_isLand:()=>true,
+  agents:[7,9].map(seed=>({seed,wx:50,wy:100,ang:0,speed:0,turnClock:1,frameClock:0,char:0})),
+ });
+ map.setEvolution({groups:[{id:'a',members:[7]},{id:'b',members:[9]}],frame:{behaviors:[{group:'a',probabilities:{switch:1}},{group:'b',probabilities:{same:1}}]},activeAction:'switch'});
+ map._drawSprites(performance.now(),0);
+ assert.deepEqual(alpha,[.92,.23]);
+});

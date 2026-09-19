@@ -8,7 +8,8 @@
       "topic": "labor",
       "salience": "cost",
       "url": "https://www.sfchronicle.com/realestate/article/sf-security-guard-strike-office-buildings-22437964.php",
-      "date": "2026-09-18"
+      "date": "2026-09-18",
+      "image_url": "https://s.hdnux.com/photos/01/67/30/34/31295241/3/rawImage.jpg"
     },
     {
       "headline": "Front Street hosts Oktoberfest",
@@ -24,7 +25,8 @@
       "topic": "public safety",
       "salience": "none",
       "url": "https://sfstandard.com/2026/09/18/mountain-lion-spotted-outer-sunset/",
-      "date": "2026-09-18"
+      "date": "2026-09-18",
+      "image_url": "https://assets.sfstandard.com/image/994911177489/image_ss4tlsnv9t5m980449kr6igs1j/-C100.00%25x78.80%25%2C0.00%25%2C9.47%25-S1200x630-FPNG"
     },
     {
       "headline": "California gasoline reaches $6 a gallon",
@@ -32,7 +34,8 @@
       "topic": "cost of living",
       "salience": "cost",
       "url": "https://www.sfchronicle.com/california/article/gas-prices-6-gallon-22431085.php",
-      "date": "2026-09-14"
+      "date": "2026-09-14",
+      "image_url": "https://s.hdnux.com/photos/01/67/25/67/31284734/3/rawImage.jpg"
     },
     {
       "headline": "Raising Cane’s announces first San Francisco opening",
@@ -40,7 +43,8 @@
       "topic": "restaurants",
       "salience": "cost",
       "url": "https://www.sfchronicle.com/sf/article/raising-cane-restaurant-fishermans-wharf-opening-22431099.php",
-      "date": "2026-09-14"
+      "date": "2026-09-14",
+      "image_url": "https://s.hdnux.com/photos/01/26/46/14/22700807/9/rawImage.jpg"
     },
     {
       "headline": "Dreamforce brings conference activity to downtown",
@@ -48,7 +52,161 @@
       "topic": "business",
       "salience": "none",
       "url": "https://www.sfchronicle.com/sf/article/dreamforce-tech-ai-22428059.php",
-      "date": "2026-09-14"
+      "date": "2026-09-14",
+      "image_url": "https://s.hdnux.com/photos/01/67/26/02/31285377/3/rawImage.jpg"
+    },
+    {
+      "headline": "Hi NRG opens permanent coffee shop in San Francisco's Richmond",
+      "summary": "The Richmond District coffee pop-up has opened a permanent space serving food, wine and beer alongside music.",
+      "topic": "news",
+      "salience": "none",
+      "url": "https://www.sfchronicle.com/food/restaurants/article/hi-nrg-coffee-opens-sf-22426484.php",
+      "date": "2026-09-17",
+      "image_url": "https://s.hdnux.com/photos/01/67/27/31/31290945/3/rawImage.jpg"
+    },
+    {
+      "headline": "KEXP plans music hub at San Francisco's Haight-Ashbury",
+      "summary": "KEXP was selected to help turn a Haight-Ashbury site into a music venue with broadcasts, performances and classes.",
+      "topic": "news",
+      "salience": "none",
+      "url": "https://www.sfchronicle.com/sf/article/kexp-haight-ashbury-music-hub-22433742.php",
+      "date": "2026-09-17",
+      "image_url": "https://s.hdnux.com/photos/01/67/27/35/31291237/3/rawImage.jpg"
+    },
+    {
+      "headline": "Uber plans 253 layoffs at San Francisco headquarters",
+      "summary": "State filings outline 390 planned Bay Area job cuts at Uber, including 253 at its San Francisco headquarters.",
+      "topic": "news",
+      "salience": "none",
+      "url": "https://www.sfchronicle.com/tech/article/uber-layoffs-san-francisco-22437191.php",
+      "date": "2026-09-17",
+      "image_url": "https://s.hdnux.com/photos/01/63/10/46/30181822/3/rawImage.jpg"
+    },
+    {
+      "headline": "BART delays ease after plastic debris fire near 24th Street Mission",
+      "summary": "Burning plastic on the tracks near 24th Street Mission caused major delays on September 17; service subsequently improved.",
+      "topic": "news",
+      "salience": "none",
+      "url": "https://www.sfchronicle.com/bayarea/article/bart-major-delays-24th-st-mission-22437168.php",
+      "date": "2026-09-17",
+      "image_url": "https://s.hdnux.com/photos/01/63/36/60/30272545/3/rawImage.jpg"
+    },
+    {
+      "headline": "San Francisco film production surges 28% amid new film incentives",
+      "summary": "A new report puts film and television production up 28% in the latest fiscal year, with local spending reaching $32.3 million.",
+      "topic": "news",
+      "salience": "none",
+      "url": "https://www.sfchronicle.com/entertainment/movies-tv/article/san-francisco-film-production-22437237.php",
+      "date": "2026-09-17",
+      "image_url": "https://s.hdnux.com/photos/01/46/34/12/26854031/12/rawImage.jpg"
+    },
+    {
+      "headline": "San Francisco Opera and orchestra reach tentative deal to end strike",
+      "summary": "The opera company and its orchestra reached a provisional contract agreement after a strike disrupted performances.",
+      "topic": "news",
+      "salience": "none",
+      "url": "https://www.sfchronicle.com/entertainment/classical/article/sf-opera-orchestra-tentative-deal-ends-strike-22437423.php",
+      "date": "2026-09-17",
+      "image_url": "https://s.hdnux.com/photos/01/67/30/26/31294883/3/rawImage.jpg"
+    },
+    {
+      "headline": "Sutro Hall to fill empty restaurant space in historic SF building",
+      "summary": "Restaurant veterans plan to open Sutro Hall in the vacant restaurant space at 140 New Montgomery downtown.",
+      "topic": "news",
+      "salience": "none",
+      "url": "https://www.sfchronicle.com/food/restaurants/article/sutro-hall-opening-downtown-sf-22426230.php",
+      "date": "2026-09-15",
+      "image_url": "https://s.hdnux.com/photos/01/67/23/61/31276144/6/rawImage.jpg"
+    },
+    {
+      "headline": "First look at downtown San Francisco's proposed 910-foot office tower",
+      "summary": "New renderings show the proposed Fifty at First office tower, planned to stand 910 feet tall in downtown San Francisco.",
+      "topic": "news",
+      "salience": "none",
+      "url": "https://www.sfchronicle.com/realestate/article/downtown-tower-fiftyatfirst-oceanwide-22428915.php",
+      "date": "2026-09-15",
+      "image_url": "https://s.hdnux.com/photos/01/67/26/22/31286418/3/rawImage.jpg"
+    },
+    {
+      "headline": "Athleta launches partnership with Golden State Valkyries",
+      "summary": "Athleta announced a multiyear partnership with the Golden State Valkyries basketball team.",
+      "topic": "news",
+      "salience": "none",
+      "url": "https://www.sfchronicle.com/entertainment/article/athleta-valkyries-sf-merchandise-22427828.php",
+      "date": "2026-09-15",
+      "image_url": "https://s.hdnux.com/photos/01/67/26/17/31286239/5/rawImage.jpg"
+    },
+    {
+      "headline": "Melanie C to perform at Castro Theatre before Portola festival debut",
+      "summary": "Melanie C announced a Castro Theatre performance ahead of her DJ debut at the Portola Music Festival.",
+      "topic": "news",
+      "salience": "none",
+      "url": "https://www.sfchronicle.com/entertainment/music/article/spice-girls-melanie-c-sf-22427781.php",
+      "date": "2026-09-15",
+      "image_url": "https://s.hdnux.com/photos/01/67/24/42/31279242/3/rawImage.jpg"
+    },
+    {
+      "headline": "Highway 101 weekend closure planned for repair work",
+      "summary": "Caltrans plans to close a stretch of Highway 101 in San Francisco for weekend repairs, according to KTVU.",
+      "topic": "news",
+      "salience": "",
+      "url": "https://www.ktvu.com/news/san-francisco-highway-101-weekend-closure",
+      "date": "2026-09-18",
+      "image_url": "https://imgs.search.brave.com/uyvwoKFgxZdtfB1e-NeoZi0fLIJoAx06QNo1_X7nijQ/rs:fit:200:200:1:0/g:ce/aHR0cHM6Ly9pbWFn/ZXMuZm94dHYuY29t/L3N0YXRpYy5rdHZ1/LmNvbS93d3cua3R2/dS5jb20vY29udGVu/dC91cGxvYWRzLzIw/MjYvMDkvMTIwMC82/MzAvdHJhZmZpYy1h/ZHZpc29yeS0yMDI2/LTA5LTA5LXVzMTAx/LWhvc3BpdGFsLWN1/cnZlLWZ1bGwtY2xv/c3VyZS5qcGc_dmU9/MSZhbXA7dGw9MQ"
+    },
+    {
+      "headline": "State funding planned for legal help for domestic violence survivors",
+      "summary": "The Standard reports that California is poised to provide $1.5 million for free legal representation for domestic violence survivors through the city’s Mayor’s Office for Victims’ Rights.",
+      "topic": "news",
+      "salience": "",
+      "url": "https://sfstandard.com/2026/09/17/state-funding-domestic-violence-san-francisco",
+      "date": "2026-09-17",
+      "image_url": "https://imgs.search.brave.com/VaKurYGXp7RkNn8Xa1m89nByWivVjMb3wZ7oLudxO-U/rs:fit:200:200:1:0/g:ce/aHR0cHM6Ly9hc3Nl/dHMuc2ZzdGFuZGFy/ZC5jb20vaW1hZ2Uv/OTk0OTExMTc3NDg5/L2ltYWdlXzlnc2Vi/aWM2OXAyZHBlMnI1/OWNtNWxtcTA4Ly1T/MTIwMHg2MzAtRlBO/Rw"
+    },
+    {
+      "headline": "Noe Valley running store hit by another burglary",
+      "summary": "CBS reports that burglars stole shoes and clothing from a Noe Valley running store, its fourth break-in in less than two years.",
+      "topic": "news",
+      "salience": "",
+      "url": "https://www.cbsnews.com/sanfrancisco/news/san-francisco-noe-valley-running-wylder-store-burglaries/",
+      "date": "2026-09-19",
+      "image_url": "https://imgs.search.brave.com/fsO5g_Wc8LXtLbV68wEr6Zr-y5YV5CxIuKZf7YTqWic/rs:fit:200:200:1:0/g:ce/aHR0cHM6Ly9hc3Nl/dHMxLmNic25ld3Nz/dGF0aWMuY29tL2h1/Yi9pL3IvMjAyNi8w/OS8xOS9hOGIyNzJm/YS04NTMxLTRhNWQt/YjM4NC1lODA5ZDBj/NmJkZjMvdGh1bWJu/YWlsLzEyMDB4NjMw/LzMyNjliODM5MGU4/Y2M2ZDM2ZWM0Yzdh/OWQyOGRmZGM4L2Iy/MGEyOWQ3ZmM0ZDE5/ZDA5OTczNjBhYThl/ZGJjYWZjLmpwZw"
+    },
+    {
+      "headline": "Former employee files discrimination lawsuit against SF Standard",
+      "summary": "Mission Local reports allegations of gender discrimination and harassment in a lawsuit against the San Francisco Standard and its CEO. These are allegations, not findings.",
+      "topic": "news",
+      "salience": "",
+      "url": "https://missionlocal.org/2026/09/san-francisco-standard-griffin-gaffney-gender-discrimination-lawsuit/",
+      "date": "2026-09-17",
+      "image_url": "https://imgs.search.brave.com/pjfAMUDWg1vMpzlPV36S5TFh9jUN-whh5aKfbP9JjM0/rs:fit:200:200:1:0/g:ce/aHR0cHM6Ly9taXNz/aW9ubG9jYWwub3Jn/L3dwLWNvbnRlbnQv/dXBsb2Fkcy8yMDI2/LzA5L1VudGl0bGVk/LWRlc2lnbi0xMi5q/cGc"
+    },
+    {
+      "headline": "Four arrested in investigation following teen’s fatal overdose",
+      "summary": "Police arrested four people and seized 20,000 pills in a San Francisco investigation following a teenager’s fatal overdose, according to KMPH.",
+      "topic": "news",
+      "salience": "",
+      "url": "https://kmph.com/news/local/four-arrested-20000-pills-seized-in-san-francisco-probe-after-teens-fatal-overdose",
+      "date": "2026-09-15",
+      "image_url": "https://imgs.search.brave.com/-_abLfNICbqI-A8Yo0xn2seW34nCKo8oNFlHbijja4Y/rs:fit:200:200:1:0/g:ce/aHR0cHM6Ly9rbXBo/LmNvbS9yZXNvdXJj/ZXMvbWVkaWEyLzE2/eDkvMjM1My8xMzIw/Lzg1eDEwNTcvOTAv/YWFmMWJhNWQtNGVi/ZS00YmFlLWEyNTMt/NWJhMTBkNjUzOWJl/LTgxMDM1MTYzOV8x/Njk2MDcyMzUxNDkx/NjgyXzY2NDk0OTgy/NTEyMDk1Njc5Ml9u/LmpmaWY"
+    },
+    {
+      "headline": "Lowriding celebration takes over Mission Street",
+      "summary": "An Associated Press report describes drivers cruising along Mission Street to celebrate San Francisco’s lowriding culture.",
+      "topic": "news",
+      "salience": "",
+      "url": "https://ktar.com/national-news/lowriding-culture-celebrated-in-san-francisco-as-it-receives-broader-recognition",
+      "date": "2026-09-19",
+      "image_url": "https://imgs.search.brave.com/ey5ZHvqZA_vSibVLohnV-o8lIUT0wV3VQvqE7AXGmis/rs:fit:200:200:1:0/g:ce/aHR0cHM6Ly9rdGFy/LmNvbS93cC1jb250/ZW50L3VwbG9hZHMv/MjAyNi8wOS9DYWxp/Zm9ybmlhX0xvd3Jp/ZGVyX1BhcmFkZV8x/NTUxNi5qcGc"
+    },
+    {
+      "headline": "Developers propose basketball complex at SF Centre mall",
+      "summary": "The Standard reports that Urban Land Development and TMG Partners submitted a bid for San Francisco Centre with a basketball-focused proposal.",
+      "topic": "news",
+      "salience": "",
+      "url": "https://sfstandard.com/2026/09/13/san-francisco-centre-mall-basketball",
+      "date": "2026-09-13",
+      "image_url": "https://imgs.search.brave.com/IadmVVJ5b0SGKwTuJdZRtIa6rghwtBucXNb2BfE-sTY/rs:fit:200:200:1:0/g:ce/aHR0cHM6Ly9hc3Nl/dHMuc2ZzdGFuZGFy/ZC5jb20vaW1hZ2Uv/OTk0OTExMTc3NDg5/L2ltYWdlXzlqYWxn/OTZzY2gzMjdmMG5l/OXY5cDF2NjBiLy1T/MTIwMHg2MzAtRlBO/Rw"
     }
   ]
 }

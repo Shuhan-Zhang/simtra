@@ -4,15 +4,16 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 const source=readFileSync(new URL('./evolution.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace(/^export /gm,'');
 const flush=()=>new Promise(setImmediate);
-function element(){return {hidden:false,value:'2400',dataset:{},children:new Map(),listeners:{},setAttribute(){},focus(){},append(){},querySelector(s){if(!this.children.has(s))this.children.set(s,element());return this.children.get(s);},querySelectorAll(){return[];},addEventListener(n,f){this.listeners[n]=f;},fire(n='click',e={}){return this.listeners[n]?.(e);}};}
+function classList(){const values=new Set();return {add(...names){names.forEach(n=>values.add(n));},remove(...names){names.forEach(n=>values.delete(n));},contains(name){return values.has(name);},toggle(name,force){const selected=force??!values.has(name);if(selected)values.add(name);else values.delete(name);return selected;}};}
+function element(){return {classList:classList(),replaceChildren(...nodes){this.nodes=nodes;},hidden:false,value:'2400',dataset:{},children:new Map(),listeners:{},setAttribute(){},focus(){},append(){},querySelector(s){if(!this.children.has(s))this.children.set(s,element());return this.children.get(s);},querySelectorAll(){return[];},addEventListener(n,f){this.listeners[n]=f;},fire(n='click',e={}){return this.listeners[n]?.(e);}};}
 function fixture(){
  return {id:'run',branch:'main',scenario:'Restaurant prices rise 20%',population:10000,max_ticks:14,groups:[{id:0,members:[1],weight:1}],outcomes:[{id:'same',label:'Keep routine',changed:false},{id:'switch',label:'Switch restaurants',changed:true}],frames:[frame(0)]};
 }
 const frame=tick=>({tick,day:tick,changed_count:tick?4000:0,changed_share:tick?.4:0,behaviors:[{group:0,outcome:tick?'switch':'same'}],totals:[{id:'same',share:tick?.6:1,count:tick?6000:10000},{id:'switch',share:tick?.4:0,count:tick?4000:0}]});
 function harness(){
  const els=[],pending=[],saved=new Map(),map={setEvolution(v){this.evolution=v;}};
- const document={body:{append(e){els.push(e)},classList:{add(){},remove(){}}},createElement:element,addEventListener(){}};
- const ctx=vm.createContext({document,console,AbortController,BASE:'',workspaceHeaders:()=>({'X-Simtra-Workspace':'test'}),sessionStorage:{getItem:k=>saved.get(k),setItem:(k,v)=>saved.set(k,v),removeItem:k=>saved.delete(k)},setTimeout:()=>1,clearTimeout(){},setInterval(){},fetch:(url,options)=>new Promise(resolve=>pending.push({url,body:JSON.parse(options.body||'null'),resolve:data=>resolve({ok:!data.error,json:async()=>data})}))});
+ const document={body:{append(...nodes){for(const node of nodes)if(!els.includes(node))els.push(node);},classList:classList()},createElement:element,addEventListener(){}};
+ const ctx=vm.createContext({document,console,AbortController,DOMException,structuredClone,BASE:'',workspaceHeaders:()=>({'X-Simtra-Workspace':'test'}),sessionStorage:{getItem:k=>saved.get(k),setItem:(k,v)=>saved.set(k,v),removeItem:k=>saved.delete(k)},setTimeout:()=>1,clearTimeout(){},setInterval(){},fetch:(url,options)=>new Promise(resolve=>pending.push({url,body:JSON.parse(options.body||'null'),resolve:data=>resolve({ok:!data.error,json:async()=>data})}))});
  vm.runInContext(source+'\nglobalThis.init=initEvolution;',ctx);
  const controller=ctx.init({map,getBranch:()=> 'main',getCity:()=> 'sf',isReady:()=>true});
  const [root,transport]=els,q=s=>root.querySelector(s),t=s=>transport.querySelector(s);

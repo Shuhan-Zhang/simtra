@@ -498,7 +498,14 @@ export class SFMap {
       if (e.type !== "pointercancel" && wasSingle && moved < 8) {            // a tap (not a drag)
         const r = rect();
         const tx = e.clientX - r.left, ty = e.clientY - r.top;
-        if (this.evolution) return;
+        if (this.evolution) {
+          const hit = this._hitSprite(tx, ty, true);
+          if (hit) {
+            try { this.onSpriteTap?.(hit); }
+            finally { this.onResidentSelect?.({ id: hit.seed, segments: { ...hit.segments } }); }
+          }
+          return;
+        }
         if (this.zoomedIn) {
           const hit = this._hitSprite(tx, ty);
           if (hit) {
@@ -616,12 +623,28 @@ export class SFMap {
   }
 
   clearVerdicts() {
+    if (this.hasResearchResponses) {
+      SFMap.prototype.clearResearchResponses.call(this);
+      return;
+    }
     this.hasResearchResponses = false;
     this.mapColorLegend = []; this.mapColorMode = "response";
     for (const a of this.agents) { a.rationale = null; a.response = null; a.markerColor = null; }
     if (this.reducedMotion) { for (const a of this.agents) a.verdict = null; this.mode = "idle"; this.clearFade = 1; return; }
     if (this.mode === "idle") return;
     this.clearT0 = performance.now(); this.mode = "clearing";
+  }
+
+  // Result overlays belong to the Results view. Remove them synchronously when
+  // leaving it, even if rendering is paused; simulation owns its own colors.
+  clearResearchResponses() {
+    this.hasResearchResponses = false;
+    this.mapColorLegend = []; this.mapColorMode = "response";
+    for (const a of this.agents) {
+      a.rationale = null; a.response = null; a.markerColor = null; a.verdict = null;
+    }
+    this.bubbleIdx = []; this.bubbleT = 0;
+    this.mode = "idle"; this.clearFade = 1; this.revealCount = 0;
   }
 
   // Sample rationale strings have no resident membership: never distribute them
@@ -683,7 +706,7 @@ export class SFMap {
       if (f >= 1) { for (const a of this.agents) a.verdict = null; this.clearFade = 1; this.mode = "idle"; this.revealCount = 0; }
     }
 
-    if (!this.evolution) this._drawSprites(now, dt);
+    this._drawSprites(now, dt);
     if (!this.reducedMotion && !this.evolution) this._updateBubbles(now);
     if (!this.evolution) this._drawBubbles();
     if (this.evolution) this._drawEvolution();
@@ -725,18 +748,19 @@ export class SFMap {
     for (const agent of this.agents) {
       const action = this._evolutionActions.get(agent.seed);
       if (!action) continue;
-      const p = this.worldToScreen(agent.hx, agent.hy);
+      const p = this.worldToScreen(agent.wx, agent.wy);
+      p.y -= Math.max(3, SPRITE_WORLD * this.cam.zoom) + 3;
       if (p.x < 0 || p.y < 0 || p.x > this.cssW || p.y > this.cssH) continue;
       if (!buckets.has(action)) buckets.set(action, []);
       buckets.get(action).push(p);
     }
     ctx.save();
-    // Draw unchanged dots first and changed behaviors above them. Positions and
-    // cohort assignments are stable during replay; map dots are not weighted counts.
+    // Behavior badges follow the same resident sprites used throughout the app.
+    // Cohort assignments are stable during replay; dots are not weighted counts.
     const order = [...buckets.keys()].sort((a,b) => Number(a !== 'same' && a !== 'unaffected') - Number(b !== 'same' && b !== 'unaffected'));
     for (const action of order) {
       const changed = action !== 'same' && action !== 'unaffected';
-      ctx.globalAlpha = evo.activeAction ? (evo.activeAction === action ? .95 : .09) : changed ? .9 : .22;
+      ctx.globalAlpha = evo.activeAction ? (evo.activeAction === action ? .95 : .2) : changed ? .9 : .5;
       ctx.fillStyle = evo.colors[action] || '#007aff';
       const radius = changed ? 2.6 : 1.7;
       ctx.beginPath();
@@ -750,7 +774,7 @@ export class SFMap {
     const ctx = this.ctx;
     const z = this.cam.zoom;
     const drawPx = Math.max(3, SPRITE_WORLD * z);          // on-screen sprite height
-    const showVerdict = this.mode === "reveal" || this.mode === "results" || this.mode === "clearing";
+    const showVerdict = !this.evolution && (this.mode === "reveal" || this.mode === "results" || this.mode === "clearing");
     const breathing = this.mode === "waiting" && !this.reducedMotion;
     const margin = drawPx * 2;
     const spriteOk = this.spriteReady;
@@ -785,7 +809,8 @@ export class SFMap {
       const w = drawPx, h = drawPx;
       const footX = s.x, footY = s.y;     // feet anchored to the cell
       const matched = selecting && selection.matchMask[a.segmentIndex] === 1;
-      const selectionAlpha = this.evolution ? 0.12 : selecting && !matched ? 0.25 : 1;
+      const behaviorMismatch = this.evolution?.activeAction && this._evolutionActions.get(a.seed) !== this.evolution.activeAction;
+      const selectionAlpha = behaviorMismatch || (selecting && !matched) ? 0.25 : 1;
 
       if (drawPx < 9 || !spriteOk) {
         // overview LOD: a cheap colored square per agent (keeps 10k sprites at 60fps;

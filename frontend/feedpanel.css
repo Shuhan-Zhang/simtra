@@ -356,3 +356,6 @@
 .fp-experiment-meta { display:block; color:var(--ink-2); font-size:14px; margin-top:10px; }
 .fp-experiment-link { display:block; color:var(--accent); font-size:14px; margin-top:12px; }
 .fp-experiment-open:hover .fp-title { color:var(--accent); }
+
+.fp-news-image { display:block; width:100%; aspect-ratio:16 / 9; object-fit:cover; border-radius:12px; margin:12px 0; background:#eef1f5; }
+.fp-news-source { display:inline-block; margin-top:10px; font-size:13px; color:var(--blue, #0780ff); text-decoration:none; }

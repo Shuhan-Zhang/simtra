@@ -98,7 +98,7 @@ export function sampleResidents(rows, cap = SCATTER_CAP) {
 
 // residents of a segment; cross-tab keys are `left|right`
 export function residentsIn(residents, dimension, key) {
-  return residents.filter((r) => r?.segments && r.segments[dimension] === key);
+  return dimension === "all" ? residents : residents.filter((r) => r?.segments && r.segments[dimension] === key);
 }
 
 // ── main ───────────────────────────────────────────────────────────────────
@@ -323,6 +323,7 @@ export function createPersonaChart(host, opts) {
       t.addEventListener("mouseenter", showHeads);
       t.addEventListener("focus", showHeads);
       t.addEventListener("click", () => {
+        if(st.selected?.dimension===g.dimension && st.selected?.key===g.key){clearSelection();render();return;}
         const share = groupShare(g);
         openPeople({
           title: groupTitle(g),
@@ -467,7 +468,7 @@ export function createPersonaChart(host, opts) {
       const { g, rows } = stats[Number(t.dataset.group)];
       const show = () => { hover.innerHTML = `<span class="pc-hover-label">${esc(groupTitle(g))} · ${fmtInt(rows.length)} residents</span>${headsHtml(byStrength(rows))}`; paintHeads(hover); };
       t.addEventListener("mouseenter", show); t.addEventListener("focus", show);
-      const open = () => { st.selected = { dimension: g.dimension, key: g.key }; openPeople({ title: groupTitle(g), subtitle: `${fmtInt(rows.length)} residents · median ${rows.length ? pct(weightedQuantiles(rows.map((r) => r.support), rows.map((r) => weightOf(r.resident)), [0.5])[0]) : "—"}`, rows, segments: [{ dimension: g.dimension, key: g.key }] }); render(); };
+      const open = () => { if(st.selected?.dimension===g.dimension && st.selected?.key===g.key){clearSelection();render();return;} st.selected = { dimension: g.dimension, key: g.key }; openPeople({ title: groupTitle(g), subtitle: `${fmtInt(rows.length)} residents · median ${rows.length ? pct(weightedQuantiles(rows.map((r) => r.support), rows.map((r) => weightOf(r.resident)), [0.5])[0]) : "—"}`, rows, segments: [{ dimension: g.dimension, key: g.key }] }); render(); };
       t.addEventListener("click", open);
       t.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
     }

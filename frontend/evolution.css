@@ -211,3 +211,18 @@
 .evo-updates small { color: var(--ink-2); font-size: var(--fs-caption2); }
 .evo-updates p { margin: 4px 0; }
 .evo-updates b { font-weight: var(--fw-med); color: var(--accent); }
+/* Experiment simulation stays inside the shared results panel. */
+#experiment-simulation #evolution.evo-inline,
+#experiment-simulation #evo-transport.evo-inline {
+  position: static; width: auto; inset: auto; margin: 0; padding: 12px 0;
+  border: 0; border-radius: 0; box-shadow: none; background: transparent;
+}
+#experiment-simulation .evo-heading,
+#experiment-simulation .evo-setup,
+#experiment-simulation [data-new],
+#experiment-simulation .evo-track-note { display: none; }
+#experiment-simulation .evo-results { overflow: visible; }
+#experiment-simulation .evo-scenario-text { display: none; }
+#experiment-simulation .evo-headline strong { font-size: 30px; }
+#experiment-simulation .evo-controls { margin-top: 8px; }
+.ex-simulation-residents { display: flex; gap: 8px; margin-top: 12px; }

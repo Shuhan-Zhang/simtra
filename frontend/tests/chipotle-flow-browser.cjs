@@ -25,6 +25,7 @@ const ask=async page=>{await page.locator('#ask-input').fill(question);await pag
   assert.match(await offline.locator('.ask-mode[data-mode=research]').innerText(),/Automatic/);
   assert.equal(await offline.locator('.ask-mode[data-mode=predict]').isVisible(),true);
   assert.equal(await offline.locator('[data-action=approve]').count(),0,'one prompt automatically runs comparison');
+  await offline.getByText('Factor effects',{exact:true}).click();
   assert.match(await offline.locator('.ex-impact').innerText(),/Other tested factors held fixed/);
   assert.deepEqual(external,[]);await offline.close();
   const page=await browser.newPage({viewport:{width:1440,height:1000},reducedMotion:'reduce'}),errors=[],calls=[];
@@ -54,8 +55,8 @@ const ask=async page=>{await page.locator('#ask-input').fill(question);await pag
     const data={fixture_mode:true,scenarios:body.scenarios.map((scenario,i)=>{const probabilities=[.7-i%6*.05,.3+i%6*.05];return {scenario,result:{...row.binary,p_distribution:body.options.map((o,i)=>[o,probabilities[i]]),option_breakdowns:row.binary.option_breakdowns.map(b=>({...b,groups:b.groups.map(g=>({...g,shares:probabilities}))}))},response_groups:[{agent_ids:row.agents.map(a=>a.id),probabilities,archetype:'mock-cohort',factor:'Mocked price sensitivity'}]};})};
     return route.fulfill({contentType:'application/x-ndjson',body:JSON.stringify({type:'result',data})+'\n'});
    }
-   const frame=tick=>({tick,day:tick,changed_share:tick*.02,changed_count:tick*200,totals:[{id:'same',share:1-tick*.02,count:10000-tick*200},{id:'switch',share:tick*.02,count:tick*200}],behaviors:[]});
-   if(p.endsWith('/evolution')){evolutionBody=body;return json({id:'mock-evolution',branch:'mock-main',scenario:body.scenario,population:10000,max_ticks:14,groups:[],outcomes:[{id:'same',label:'Same routine'},{id:'switch',label:'Switch restaurants'}],frames:[frame(0)],events:[],questions:[]});}
+   const frame=tick=>({tick,day:tick,changed_share:tick*.02,changed_count:tick*200,totals:[{id:'same',share:1-tick*.02,count:10000-tick*200},{id:'switch',share:tick*.02,count:tick*200}],behaviors:[{group:'cohort-1',probabilities:{same:1-tick*.02,switch:tick*.02}}]});
+   if(p.endsWith('/evolution')){evolutionBody=body;return json({id:'mock-evolution',branch:'mock-main',scenario:body.scenario,population:10000,max_ticks:14,groups:[{id:'cohort-1',members:row.agents.map(a=>a.id)}],outcomes:[{id:'same',label:'Same routine'},{id:'switch',label:'Switch restaurants'}],frames:[frame(0)],events:[],questions:[]});}
    if(p.endsWith('/step'))return json({frame:frame(body.expected_tick+1)});
    if(p.endsWith('/event')){eventBody=body;return json({text:body.text,effective_day:body.expected_tick+1});}
    if(p.endsWith('/question')){questionBody=body;return json({question:body.question,tick:body.tick,shares:{yes:.6,no:.3,unsure:.1}});}
@@ -76,22 +77,30 @@ const ask=async page=>{await page.locator('#ask-input').fill(question);await pag
   assert.equal(compareBody.scenarios.length,84);assert.ok(compareBody.scenarios.some(s=>s.change===0));assert.ok(compareBody.scenarios.some(s=>s.change===20));
   await page.screenshot({path:'/tmp/simtra-chipotle-plan.png'});comparisonRelease();
   await page.locator('.ex-matrix-cell').first().waitFor({state:'attached'});
-  assert.equal(await page.locator('.ex-curve [data-scenario]').count(),21);
-  await page.locator('[data-section=comparisons]').click();
+  assert.equal(await page.locator('.ex-curve [data-scenario]').count(),84);
+  await page.locator('[data-section=overview]').click();
+  await page.getByText('Factor effects',{exact:true}).click();
   assert.match(await page.locator('.ex-impact').innerText(),/Price|Location/);
   assert.match(await page.locator('#research-workspace').innerText(),/20%/);
   await page.locator('[data-section=overview]').click();
   await page.locator('#experiment-people').waitFor();
   assert.equal(await page.locator('details.ex-people').count(),0);
-  assert.equal(await page.locator('#experiment-people .pc-type').count(),0);
-  assert.equal(await page.locator('[data-action=timeline]').count(),1);
+  assert.equal(await page.locator('#experiment-chart-type option').count(),5);
+  assert.equal(await page.locator('[data-action=timeline]').count(),0);
   await page.screenshot({path:'/tmp/simtra-chipotle-result.png'});
   await page.setViewportSize({width:390,height:844});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth),390,'no horizontal overflow on mobile');
   await page.screenshot({path:'/tmp/simtra-chipotle-result-mobile.png'});
   await page.setViewportSize({width:1440,height:1000});
   await page.locator('[data-section=simulate]').click();
- await page.locator('[data-action=timeline]').click();await page.locator('[data-clock]').filter({hasText:'Day 1'}).waitFor();
+ await page.locator('[data-clock]').filter({hasText:'Day 1'}).waitFor();
+  const mapState=()=>page.evaluate(async()=>{
+    const {map}=await import(document.querySelector('script[type=module]').src);
+    return {research:map.hasResearchResponses,markers:map.agents.filter(a=>a.verdict||a.markerColor||a.response).length,simulation:!!map.evolution,behaviors:map._evolutionActions.size};
+  });
+  const simulated=await mapState();
+  assert.equal(simulated.research,false);assert.equal(simulated.markers,0,'Simulate removes experiment response dots');
+  assert.equal(simulated.simulation,true);assert.ok(simulated.behaviors>0,'Simulate retains its own behavior badges');
   await page.locator('#evo-message').focus();
   assert.match(evolutionBody.scenario,/20%/);assert.equal(evolutionBody.research_panel.id,panel.id);
   await page.locator('#evo-message').fill('A competitor cuts bowl prices by 10%');await page.locator('[data-composer] button').click();
@@ -99,7 +108,16 @@ const ask=async page=>{await page.locator('#ask-input').fill(question);await pag
   assert.equal(eventBody.expected_tick,1);
   await page.locator('#evo-message').fill('Would you still buy a Chipotle bowl?');await page.locator('[data-composer] button').click();
   await page.waitForFunction(()=>document.querySelector('[data-updates]')?.textContent.includes('60.0%'));assert.equal(questionBody.tick,2);
+  await page.locator('.ex-simulation-residents button').first().click();
+  assert.match(await page.locator('#experiment-person').innerText(),/Day 2 · modeled response/);
+  assert.match(await page.locator('#experiment-person').innerText(),/Switch restaurants/);
+  assert.equal(await page.locator('#experiment-person .pr-price-line').count(),0);
+  await page.locator('[data-action=close-person]').click();
   await page.screenshot({path:'/tmp/simtra-chipotle-timeline.png'});
+  await page.locator('[data-section=overview]').click();
+  const resultMap=await mapState();assert.equal(resultMap.simulation,false);assert.equal(resultMap.research,true);assert.ok(resultMap.markers>0);
+  await page.locator('[data-action=close]').click();
+  const closedMap=await mapState();assert.equal(closedMap.simulation,false);assert.equal(closedMap.research,false);assert.equal(closedMap.markers,0);
   assert.deepEqual(errors,[]);
   console.log('PASS exact Chipotle prompt: image-free entry, offline relative curve, research-before-plan, pinned evidence handoff, 84 combinations, line curve, factor impacts, demographics, timeline with pinned context, news affecting the next day, question on viewed day, mobile. HTTP responses mocked; no live provider verification.');
  }finally{await browser.close();}

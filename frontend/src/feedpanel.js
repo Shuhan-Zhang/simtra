@@ -579,7 +579,7 @@ function renderThread() {
   const entries = [
     ...state.items,
     ...state.experiments.filter(run=>run.city===state.getCity()).map(run=>({type:"experiment",id:`experiment:${run.id}`,created_at:run.createdAt,run})),
-    ...(state.getNews() || []).slice(0,6).map((article,index)=>({type:"headline",id:`headline:${index}`,date:article.date,article})),
+    ...(state.getNews() || []).map((article,index)=>({type:"headline",id:`headline:${index}`,date:article.date,article})),
   ].sort((a,b)=>timestamp(b)-timestamp(a));
   for (const item of entries) {
     if(item.type==="headline") {frag.appendChild(newsPost(item.article));continue;}
@@ -1026,6 +1026,14 @@ function newsPost(a) {
     <div class="fp-sum"></div>`;
   post.querySelector(".fp-title").textContent = a.headline || "";
   post.querySelector(".fp-sum").textContent = a.summary || "";
+  const safeUrl=value=>{try{const u=new URL(value);return ['https:','http:'].includes(u.protocol)?u.href:null;}catch{return null;}};
+  const source=safeUrl(a.url), image=safeUrl(a.image_url);
+  if(image){
+    const img=document.createElement('img');img.className='fp-news-image';img.src=image;img.alt='';img.loading='lazy';img.decoding='async';
+    img.addEventListener('error',()=>img.remove(),{once:true});post.querySelector('.fp-title').before(img);
+  }
+  if(source){const link=document.createElement('a');link.className='fp-news-source';link.href=source;link.target='_blank';link.rel='noopener noreferrer';link.textContent=`${new URL(source).hostname.replace(/^www\./,'')} ↗`;post.append(link);}
+
   return post;
 }
 

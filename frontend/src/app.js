@@ -545,7 +545,7 @@ function setBoot(p) { els.bootFill.style.width = `${Math.round(Math.max(0, Math.
 async function boot() {
   map.onZoomChange = (zoomedIn) => { positionContext(); zoomedIn ? show(els.returnBtn) : hide(els.returnBtn); };
   map.start();
-  evolution = initEvolution({map, getBranch:()=>state.mainBranch, getCity:citySlug, isReady:()=>!!state.mainBranch && !state.switching && !api.isDemo && !isBusy() && state.phase!=="booting"});
+  evolution = initEvolution({map, onFrame:()=>research?.refreshInspection?.(), withCurrentSimulation, getBranch:()=>state.mainBranch, getCity:citySlug, isReady:()=>!!state.mainBranch && !state.switching && !api.isDemo && !isBusy() && state.phase!=="booting"});
   initFeedPanel({
     onScenario: text => evolution.start(text),
     getCity: citySlug,
@@ -2403,22 +2403,25 @@ async function showAbDemo() {
 
 research = createResearchWorkspace({
   map,
-  showScenarioLocation: location => {
+  getSimulationLog: run => {const log=evolution?.getLog();return log?.scenario.startsWith(run.experiment.decision)?log:null;},
+  showScenarioLocation: locations => {
+    const location=Array.isArray(locations)?locations.join(" + "):locations;
     let badge=document.getElementById("scenario-map-location");
     if(!badge){badge=document.createElement("div");badge.id="scenario-map-location";els.titleSelect.append(badge);}
     badge.hidden=!location;badge.textContent=location ? `Scenario · ${location}` : '';
-    const previous=badge.dataset.location;badge.dataset.location=location || '';
-    if(location && previous!==location){
-      const residents=map.agents.filter(a=>a.hood===location);
-      const placed=residents.filter(a=>Number.isFinite(a.wx)&&Number.isFinite(a.wy));
-      if(placed.length)map.zoomTo(placed.reduce((n,a)=>n+a.wx,0)/placed.length,placed.reduce((n,a)=>n+a.wy,0)/placed.length);
-    }
+    badge.dataset.location=location || '';
+    if(location){
+      const residents=map.agents.filter(a=>Array.isArray(locations)?locations.includes(a.hood):a.hood===location);
+      const keys=[...new Set(residents.map(a=>a.segments?.geography).filter(Boolean))];
+      map.setSegmentSelection(keys.length?{operator:'or',clauses:keys.map(key=>({dimension:'geography',key}))}:null);
+    } else map.clearSegmentSelection();
     positionContext();
   },
-  startTimeline: async (run, selected) => {
+  suspendTimeline: () => evolution?.suspend(),
+  startTimeline: async (run, selected, host) => {
     if(api.isDemo) throw new Error("Timeline simulation requires the live backend. Offline results are illustrative.");
     const offer=run.experiment.scenarios[selected];
-    evolution.start(`${run.experiment.decision}\nSelected experiment scenario: ${offer.description}`, run.researchPanel, { newsContext:run.newsContext, asOf:run.asOf });
+    evolution.start(`${run.experiment.decision}\nSelected experiment scenario: ${offer.description}`, run.researchPanel, { newsContext:run.newsContext, asOf:run.asOf }, {host,key:`${run.id}:${selected}`});
   },
   compareScenarios: (_branch, payload, signal, onProgress) => withCurrentSimulation(
     () => api.compareScenarios(state.mainBranch, payload, signal, onProgress), signal),

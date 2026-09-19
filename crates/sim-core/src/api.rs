@@ -1995,7 +1995,7 @@ async fn parse_question_handler(
 /// Recent news for a city (the frontend news bubble) + the served knowledge date.
 async fn city_news(State(_st): State<AppState>, Path(city): Path<String>) -> impl IntoResponse {
     let news = crate::news::load(&city);
-    let articles = crate::news::articles_at(&news, &crate::news::today(), 12);
+    let articles = crate::news::articles_at(&news, &crate::news::today(), 50);
     Json(json!({ "city": city, "date": news.date, "articles": articles }))
 }
 

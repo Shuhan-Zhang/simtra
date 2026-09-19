@@ -57,3 +57,12 @@
 .ex-design-full-levels { margin:14px 0; }
 .ex-design-full-levels>div { display:flex;flex-wrap:wrap;gap:6px;margin-top:8px; }
 .ex-design-scroll:focus-visible { outline:3px solid #007aff;outline-offset:2px; }
+
+/* Read the experiment from top to bottom in the detail panel. */
+.ex-design-flow { flex-direction:column; min-width:0 !important; gap:8px; }
+.ex-design-node, .ex-design-total { flex:auto; width:100%; min-width:0; padding:16px; }
+.ex-design-node>div { gap:8px; }
+.ex-design-join { align-self:center; transform:rotate(90deg); }
+.ex-design-count { white-space:normal; }
+.ex-design-total { display:flex; flex-direction:row; align-items:center; justify-content:center; gap:14px; }
+.ex-design-total span { overflow-wrap:normal; }
