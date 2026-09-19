@@ -1327,3 +1327,5 @@ body.offline-demo .result-card { max-height: min(60dvh, 720px); }
 .manual-title { margin: 0 0 var(--s-3); font-size: var(--fs-title3); font-weight: var(--fw-bold); letter-spacing: var(--tr-tight); line-height: var(--lh-tight); color: var(--ink); }
 .manual-step .about-list { margin-bottom: 0; }
 .manual-step + .about-h { margin-top: var(--s-5); }
+
+.title-sample{font-size:12px;font-weight:400;letter-spacing:0;line-height:1.4;color:var(--ink-2);margin-top:3px;overflow-wrap:anywhere}

@@ -28,7 +28,7 @@ const PREVIEW_POSTS = 5;   // event posts near the top fetch their comment previ
 const PREVIEW_N = 3;
 const COLLAPSE_KEY = "simtra.feed.collapsed";
 const VIEW_KEY = "simtra.feed.view";
-const VIEWS = [["all", "All"], ["news", "News"], ["asks", "Surveys"], ["data", "Data"]];
+const VIEWS = [["all", "All"], ["news", "News"]];
 const VIEW_TITLES = { all: "Show everything", news: "Only posted news and events", asks: "Only surveys you ran", data: "Only verified Census data queries" };
 const TEST_KINDS = {
   poll: "survey",
@@ -501,7 +501,8 @@ function placeBelowStatus() {
   if (!status || !state.root) return;
   const r = status.getBoundingClientRect();
   const hidden = status.classList.contains("hidden") || r.height === 0;
-  const top = hidden ? 92 : Math.round(r.bottom + 12);
+  const title = document.getElementById("title-select").getBoundingClientRect();
+  const top = window.innerWidth > 700 ? Math.round(title.top) : hidden ? 92 : Math.round(title.bottom + 12);
   state.root.style.top = `${top}px`;
 }
 function watchStatus() {
