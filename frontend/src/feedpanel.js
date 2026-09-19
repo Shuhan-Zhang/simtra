@@ -54,6 +54,7 @@ async function req(path, { method = "GET", body, timeout = 30000 } = {}) {
     if (!res.ok) {
       const error = new Error(data?.error || data?.message || res.statusText);
       error.status = res.status;
+      error.code = data?.code;
       throw error;
     }
     return data;
@@ -81,7 +82,7 @@ const api = {
       { timeout: 20000 }),
   react: (branchId, eventId, n = REACT_N) =>
     req(`/branches/${encodeURIComponent(branchId)}/events/${encodeURIComponent(eventId)}/react`,
-      { method: "POST", body: { n }, timeout: 120000 }),
+      { method: "POST", body: { n }, timeout: 20000 }),
   poll: (branchId, body) =>
     req(`/branches/${encodeURIComponent(branchId)}/poll`, { method: "POST", body, timeout: 180000 }),
 };
@@ -90,9 +91,11 @@ const api = {
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const sentimentOf = (s) => (SENTIMENTS.includes(s) ? s : "indifferent");
 function friendly(error) {
+  if (error?.code) return error.message;
   const s = error?.status;
   if (s === 503) return "Persona memory is not configured on this backend.";
-  if (s === 429 || s === 502) return "Residents are rate-limited right now. Try again in a minute.";
+  if (s === 429) return "Residents are rate-limited right now. Try again in a minute.";
+  if (s === 502) return "The backend could not complete this request. Check its database or model connection and retry.";
   if (s === 504) return "The backend took too long to answer. Try again.";
   if (s === 404) return "That no longer exists on the backend.";
   return error?.message || "Something went wrong.";
@@ -149,6 +152,8 @@ const state = {
   posts: new Map(),     // item id -> post element
   memoryOff: false,
   lineageOff: false,
+  feedCity: null,
+  posting: false,
   busy: 0,              // in-flight reacts (pauses refresh)
   autoCollapsed: false, // folded away while a result card is up; not persisted
   collapsed: false,
@@ -317,6 +322,8 @@ export function initFeedPanel({
 export async function refreshFeedPanel({ quiet = false } = {}) {
   if (!state.root) return;
   const city = state.getCity();
+  if (state.busy > 0 && city === state.feedCity) return;
+  state.feedCity = city;
   const seq = ++state.loadSeq;
   syncHeader();
   if (!quiet) { state.el.thread.setAttribute("aria-busy", "true"); }
@@ -390,7 +397,7 @@ function syncHeader() {
   const canWrite = !!branch && !state.memoryOff;
   for (const f of [el.formPost]) {
     const btn = f.querySelector(".fp-primary");
-    btn.disabled = !canWrite;
+    btn.disabled = !canWrite || state.posting;
     btn.title = canWrite ? "" : (state.memoryOff ? "persona memory is off" : "wait for the residents to wake");
   }
 }
@@ -544,7 +551,7 @@ function fillEvent(post, item, { pending = 0 } = {}) {
   const kind = item.kind || "news";
   post.querySelector(".fp-avatar").textContent = kind[0];
   post.querySelector(".fp-source").textContent = `${state.getCity()} · ${kind}`;
-  post.querySelector(".fp-date").textContent = fmtDate(item.as_of_date);
+  post.querySelector(".fp-date").textContent = item.saving ? "Saving news…" : fmtDate(item.as_of_date);
   post.querySelector(".fp-title").textContent = item.text || "";
   const counts = item.sentiment && Object.keys(item.sentiment).length ? item.sentiment : tally(item.reactions);
   const total = item.reaction_count || Object.values(counts).reduce((a, b) => a + b, 0);
@@ -573,7 +580,7 @@ function fillEvent(post, item, { pending = 0 } = {}) {
   comments.innerHTML = shown.map(commentNode).join("");
   if (pending) comments.insertAdjacentHTML("beforeend", `<div class="fp-skel"><i></i></div>`.repeat(2));
 
-  renderEventActions(post, item, { busy: pending > 0 });
+  renderEventActions(post, item, { busy: pending > 0 || item.saving });
 }
 
 function commentNode(r) {
@@ -607,7 +614,7 @@ function renderEventActions(post, item, { busy = false, note = "", error = false
   };
   if (total > shown) box.appendChild(link(`View all ${total} comments`, () => showAll(item.id)));
   if (branch && !state.memoryOff) {
-    box.appendChild(link(total ? `Ask ${REACT_N} more residents` : "Ask residents", () => reactTo(item.id), !total));
+    box.appendChild(link(total ? "Refresh resident reactions" : "Ask residents", () => reactTo(item.id), !total));
   }
   if (note) {
     const n = document.createElement("span");
@@ -635,29 +642,31 @@ async function showAll(eventId) {
   }
 }
 
+// One typed batch; retries replace the same residents instead of double-counting.
 async function reactTo(eventId, { pending = REACT_N } = {}) {
   const item = state.items.find((e) => e.id === eventId);
   const post = state.posts.get(eventId);
   const branch = state.getBranch();
-  if (!item || !post || !branch) return;
+  const city = state.getCity();
+  if (!item || !post || !branch || post.dataset.busy === "true") return;
   post.dataset.busy = "true";
   state.busy++;
+  ++state.loadSeq; // invalidate an older history request before it replaces this item
   fillEvent(post, item, { pending });
   try {
     const res = await api.react(branch, eventId, pending);
-    const fresh = res.reactions || [];
-    const counts = { ...(item.sentiment || {}) };
-    for (const r of fresh) { const s = sentimentOf(r.sentiment); counts[s] = (counts[s] || 0) + 1; }
-    item.sentiment = counts;
-    item.reaction_count = (item.reaction_count || 0) + fresh.length;
-    item.reactions = [...fresh, ...(item.reactions || [])];
-    post.dataset.busy = "false";
+    if (city !== state.getCity() || branch !== state.getBranch()) return;
+    // Endpoint refreshes a fixed diverse sample; these are the authoritative results.
+    item.reactions = [...new Map((res.reactions || []).map((r) => [r.agent_id, r])).values()];
+    item.sentiment = tally(item.reactions);
+    item.reaction_count = item.reactions.length;
     fillEvent(post, item);
   } catch (e) {
-    post.dataset.busy = "false";
+    if (city !== state.getCity() || branch !== state.getBranch()) return;
     fillEvent(post, item);
     renderEventActions(post, item, { note: friendly(e), error: true });
   } finally {
+    post.dataset.busy = "false";
     state.busy--;
   }
 }
@@ -886,6 +895,7 @@ function newsPost(a) {
 // ── composer actions ───────────────────────────────────────────────────────
 async function postEvent(ev) {
   ev.preventDefault();
+  if (state.posting) return;
   const f = state.el.formPost;
   const err = f.querySelector(".fp-error");
   err.textContent = "";
@@ -894,23 +904,41 @@ async function postEvent(ev) {
   const kind = state.el.kind.dataset.kind || detectKind(text);
   if (!text) { err.textContent = "Write what happened first."; f.elements.text.focus(); return; }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(as_of_date)) { err.textContent = "Pick a valid date."; return; }
+  const city = state.getCity();
+  const branch = state.getBranch();
   const btn = f.querySelector(".fp-primary");
-  btn.disabled = true; btn.textContent = "Posting…";
+  const optimisticId = `pending-${crypto.randomUUID()}`;
+  state.posting = true;
+  state.busy++;
+  ++state.loadSeq;
+  btn.disabled = true; btn.textContent = "Saving…";
+  if (state.view !== "all" && state.view !== "news") setView("all");
+  // Show the news on this frame, clearly marked unsaved until persistence succeeds.
+  state.items.unshift({ type: "event", id: optimisticId, text, as_of_date, kind,
+    saving: true, reaction_count: 0, sentiment: {}, reactions: [] });
+  renderThread();
+  state.el.body.scrollTo({ top: state.el.thread.offsetTop - 8, behavior: "smooth" });
   try {
-    const { event } = await api.postEvent(state.getCity(), { text, as_of_date, kind });
-    f.elements.text.value = "";
+    const { event } = await api.postEvent(city, { text, as_of_date, kind });
+    if (city !== state.getCity() || branch !== state.getBranch()) return;
+    if (f.elements.text.value.trim() === text) f.elements.text.value = "";
     state.kindManual = false; setKind("news");
-    if (state.view !== "all" && state.view !== "news") setView("all");
     const item = { type: "event", ...event, reaction_count: 0, sentiment: {}, reactions: [] };
-    state.items = [item, ...state.items.filter((e) => e.id !== item.id)];
+    state.items = [item, ...state.items.filter((e) => e.id !== optimisticId && e.id !== item.id)];
     renderThread();
-    state.el.body.scrollTo({ top: state.el.thread.offsetTop - 8, behavior: "smooth" });
-    reactTo(item.id);
+    // The saved event is already part of city memory. Model work does not lock the composer.
+    void reactTo(item.id);
   } catch (e) {
-    err.textContent = friendly(e);
+    if (city === state.getCity() && branch === state.getBranch()) {
+      err.textContent = friendly(e);
+      state.items = state.items.filter((i) => i.id !== optimisticId);
+      renderThread();
+    }
   } finally {
+    state.items = state.items.filter((i) => i.id !== optimisticId);
+    state.posting = false;
+    state.busy--;
     btn.textContent = "Post";
     syncHeader();
   }
 }
-

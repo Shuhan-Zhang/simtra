@@ -352,6 +352,8 @@ pub struct RecalledEvent {
     pub kind: String,
     pub text: String,
     pub as_of_date: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sentiment: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -857,7 +859,8 @@ impl MemoryClient {
             WITH a, e ORDER BY e.as_of_date DESC, e.created_at DESC, e.id ASC \
             WITH a, collect(e)[0..$n_events] AS evs \
             UNWIND evs AS e \
-            RETURN a.agent_id, e.id, e.kind, e.text, e.as_of_date \
+            OPTIONAL MATCH (a)-[reaction:REACTED_TO]->(e) \
+            RETURN a.agent_id, e.id, e.kind, e.text, e.as_of_date, reaction.sentiment \
             ORDER BY a.agent_id, e.as_of_date, e.id";
         let tests_q = "UNWIND $keys AS k \
             MATCH (a:Persona {key: k})-[x:ANSWERED]->(t:Test) \
@@ -878,6 +881,7 @@ impl MemoryClient {
                 let s = |i: usize| r.get(i).and_then(|v| v.as_str()).unwrap_or("").to_string();
                 out.entry(id).or_default().events.push(RecalledEvent {
                     id: s(1), kind: s(2), text: s(3), as_of_date: s(4),
+                    sentiment: r.get(5).and_then(|v| v.as_str()).filter(|s| SENTIMENTS.contains(s)).map(str::to_string),
                 });
             }
         }
@@ -1232,29 +1236,35 @@ impl MemoryClient {
 
     /// Store residents' reactions to an event. Re-reacting overwrites the old reaction.
     pub async fn record_reactions(
-        &self,
-        population_key: &str,
-        event_id: &str,
-        reactions: &[Reaction],
+        &self, pop: &Population, event_id: &str, reactions: &[Reaction],
     ) -> Result<()> {
-        let rows: Vec<Value> = reactions
-            .iter()
-            .map(|r| {
-                json!({"key": persona_key(population_key, r.agent_id), "text": r.text,
-                       "sentiment": r.sentiment, "at": r.at})
-            })
-            .collect();
-        for chunk in rows.chunks(BATCH) {
-            self.run(&[(
-                "MATCH (e:Event {id: $event}) \
-                 UNWIND $rows AS r \
-                 MATCH (a:Persona {key: r.key}) \
-                 MERGE (a)-[x:REACTED_TO]->(e) \
-                 SET x.text = r.text, x.sentiment = r.sentiment, x.at = r.at",
-                json!({"event": event_id, "rows": chunk}),
-            )])
-            .await?;
-        }
+        let population_key = population_key_of(pop);
+        let rows: Vec<Value> = reactions.iter().map(|r| {
+            json!({"key": persona_key(&population_key, r.agent_id), "id": r.agent_id,
+                "name": r.name, "occupation": r.occupation, "neighborhood": r.neighborhood,
+                "age": r.age, "archetype": r.archetype, "text": r.text,
+                "weight": pop.agents[r.agent_id as usize].weight(),
+                "sentiment": r.sentiment, "at": r.at})
+        }).collect();
+        // Register only these sampled residents atomically with their reactions.
+        // Never wait for all 10,000 personas to be registered on the news hot path.
+        self.run(&[(
+            "MATCH (e:Event {id: $event}) \
+             MERGE (c:City {slug: $city}) \
+             MERGE (p:Population {key: $pop}) \
+             ON CREATE SET p.city = $city, p.seed = $seed, p.n = $n, p.created_at = $now \
+             MERGE (p)-[:IN_CITY]->(c) \
+             WITH e, p UNWIND $rows AS r \
+             MERGE (a:Persona {key: r.key}) \
+             ON CREATE SET a.agent_id = r.id, a.name = r.name, a.occupation = r.occupation, \
+               a.neighborhood = r.neighborhood, a.age = r.age, a.archetype = r.archetype, \
+               a.weight = r.weight, a.population_key = $pop \
+             MERGE (a)-[:MEMBER_OF]->(p) \
+             MERGE (a)-[x:REACTED_TO]->(e) \
+             SET x.text = r.text, x.sentiment = r.sentiment, x.at = r.at",
+            json!({"event": event_id, "rows": rows, "pop": population_key,
+                "city": pop.profile.slug, "seed": pop.seed as i64, "n": pop.n as i64, "now": now_iso()}),
+        )]).await?;
         Ok(())
     }
 
@@ -1354,7 +1364,9 @@ pub fn prompt_fragment(mem: &PersonaMemory) -> String {
     let mut parts: Vec<String> = Vec::new();
     for e in &mem.events {
         let label = if e.kind == "stimulus" { "was shown (hypothetical)" } else { "news" };
-        parts.push(format!("[{} {label}] {}", e.as_of_date, truncate_chars(&e.text, 100)));
+        let reaction = e.sentiment.as_deref().filter(|s| SENTIMENTS.contains(s))
+            .map(|s| format!(" (your simulated reaction: {s})")).unwrap_or_default();
+        parts.push(format!("[{} {label}] {}{reaction}", e.as_of_date, truncate_chars(&e.text, 100)));
     }
     for t in &mem.tests {
         let ans = if !t.options.is_empty() && t.dist.len() == t.options.len() {
@@ -1511,8 +1523,8 @@ mod tests {
     fn fragment_labels_news_stimulus_and_tests() {
         let mem = PersonaMemory {
             events: vec![
-                RecalledEvent { id: "e1".into(), kind: "news".into(), text: "A senator was shot at a rally.".into(), as_of_date: "2026-09-10".into() },
-                RecalledEvent { id: "s1".into(), kind: "stimulus".into(), text: "Imagine rent control passed.".into(), as_of_date: "2026-09-11".into() },
+                RecalledEvent { id: "e1".into(), kind: "news".into(), text: "A senator was shot at a rally.".into(), as_of_date: "2026-09-10".into(), sentiment: Some("worried".into()) },
+                RecalledEvent { id: "s1".into(), kind: "stimulus".into(), text: "Imagine rent control passed.".into(), as_of_date: "2026-09-11".into(), sentiment: None },
             ],
             tests: vec![
                 RecalledTest { id: "t1".into(), kind: "poll".into(), question: "Support Prop X?".into(), as_of_date: "2026-09-11".into(), p_yes: 0.72, options: vec![], dist: vec![], why: "cost of living".into() },
@@ -1523,6 +1535,7 @@ mod tests {
         assert!(s.starts_with(" Memory: "));
         assert!(s.contains("[2026-09-10 news] A senator was shot"));
         assert!(s.contains("was shown (hypothetical)] Imagine rent control"));
+        assert!(s.contains("your simulated reaction: worried"));
         assert!(s.contains("\"Support Prop X?\" → 72% yes — cost of living"));
         assert!(s.contains("\"Which slogan?\" → leaned \"B\" (70%)"));
         assert!(s.chars().count() <= RECALL_MAX_CHARS);
@@ -1532,7 +1545,7 @@ mod tests {
     fn fragment_is_bounded() {
         let mem = PersonaMemory {
             events: (0..RECALL_EVENTS)
-                .map(|i| RecalledEvent { id: format!("e{i}"), kind: "news".into(), text: "x".repeat(400), as_of_date: "2026-01-01".into() })
+                .map(|i| RecalledEvent { id: format!("e{i}"), kind: "news".into(), text: "x".repeat(400), as_of_date: "2026-01-01".into(), sentiment: None })
                 .collect(),
             tests: vec![],
         };

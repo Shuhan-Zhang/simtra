@@ -9,6 +9,7 @@
 //        the "whole city" button returns to the overview.
 // ─────────────────────────────────────────────────────────────────────────
 
+import { initEvolution } from "./evolution.js?v=3";
 import { SIM, PREDICT, TIMING, MAP, BASE, BACKEND_SETUP_MESSAGE } from "./config.js";
 import { rationaleLabel, estimateLabel } from "./model-display.js";
 import { SFMap } from "./map.js";
@@ -22,7 +23,7 @@ import { buildEvidenceChartModel } from "./evidence-chart.js";
 import { createPersonaChart, answerLabel } from "./persona-chart.js?v=4";
 import { buildVerifiedDataModel, renderVerifiedData, bindVerifiedData, reduceVerifiedSelection, verifiedMapSelection } from "./verified-data.js";
 import { snapshotAudience, describeAudience, audienceHeader, audienceScope } from "./audience.js";
-import { initFeedPanel, refreshFeedPanel, lineageItems } from "./feedpanel.js?v=9";
+import { initFeedPanel, refreshFeedPanel, lineageItems } from "./feedpanel.js?v=19";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -486,6 +487,7 @@ function setBoot(p) { els.bootFill.style.width = `${Math.round(Math.max(0, Math.
 async function boot() {
   map.onZoomChange = (zoomedIn) => { zoomedIn ? show(els.returnBtn) : hide(els.returnBtn); };
   map.start();
+  initEvolution({map, getBranch:()=>state.mainBranch, getCity:citySlug, isReady:()=>!!state.mainBranch && !state.switching && !api.isDemo && !isBusy() && state.phase!=="booting"});
   initFeedPanel({
     getCity: citySlug,
     getBranch: () => state.mainBranch,
