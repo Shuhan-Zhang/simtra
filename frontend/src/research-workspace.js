@@ -1,3 +1,6 @@
+import { factorText } from "./model-display.js";
+import { workspaceHeaders } from "./workspace.js?v=2";
+import { prepareAutomaticAudience, researchReference } from "./automatic-audience.js";
 import { scenarioShare, responseFor, createRunStore, metricShare } from "./research.js";
 import { autoPlan, compilePlan, rankScenarios, PRICE_RANGES, signed, priceLabel, priceSeries } from "./experiment-plan.js";
 import { createPersonaChart } from "./persona-chart.js";
@@ -13,11 +16,12 @@ const pp = n => n == null ? "—" : `${n > 0 ? "+" : ""}${(n * 100).toFixed(1)} 
 const money = n => `$${n.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
 const dimLabels = { income: "Income", age: "Age", education: "Education", gender: "Sex recorded in Census", race: "Race / ethnicity", geography: "Area", tenure: "Housing tenure" };
 
-export function createResearchWorkspace({ map, getContext, openFilters, labelGroup, prepare, setBusy, getPersona, restoreAudience, compareScenarios = api.compareScenarios }) {
+export function createResearchWorkspace({ map, getContext, openFilters, labelGroup, prepare, setBusy, getPersona, restoreAudience, startTimeline, compareScenarios = api.compareScenarios }) {
   const root = document.getElementById("research-workspace"), launcher = document.getElementById("research-launch");
-  const store = createRunStore(api.isDemo ? "simtra-research-demo-v1" : "simtra-research-v1");
+  const store = createRunStore(`${api.isDemo ? "simtra-research-demo-v1" : "simtra-research-v1"}:${workspaceHeaders()["X-Simtra-Workspace"] || "public"}`);
   let runs = [], plan = null, active = null, parentId = null, view = "proposal", busy = false, visible = false;
   let error = "", saveNote = "", selected = 0, person = null, chart = null, peopleOpen = false, abort = null, generation = 0, personGeneration = 0, planCity = null, areasOpen = false, allRanks = false;
+  let researchPanel = null, researchProgress = "Checking saved research…";
   let executionLog = [], planningLog = [], control = null;
   const controlWriter = createControlWriter(api.isDemo);
   const controlLink = document.getElementById("control-panel-link");
@@ -41,10 +45,10 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
     const attr = focused?.getAttributeNames().find(a => a.startsWith("data-"));
     const focus = attr ? `[${attr}="${CSS.escape(focused.getAttribute(attr))}"]` : null;
     disposeChart();
-    root.innerHTML = `<header class="ex-header"><span class="ex-kicker">${view === "results" ? "Experiment results" : view === "planning" ? "Planning experiment" : "Proposed experiment"}</span><div class="ex-header-tools">${localRuns().length ? `<select aria-label="Previous experiments"><option value="">History (${localRuns().length})</option>${localRuns().slice().reverse().map(r=>`<option value="${esc(r.id)}">${esc(r.experiment.decision)}</option>`).join("")}</select>` : ""}<button class="ex-close" data-action="close" aria-label="Close experiment" ${busy ? "disabled" : ""}>×</button></div></header>
+    root.innerHTML = `<header class="ex-header"><span class="ex-kicker">${view === "results" ? "Experiment results" : busy ? "Experiment in progress" : "Proposed experiment"}</span><div class="ex-header-tools">${localRuns().length ? `<select aria-label="Previous experiments"><option value="">History (${localRuns().length})</option>${localRuns().slice().reverse().map(r=>`<option value="${esc(r.id)}">${esc(r.experiment.decision)}</option>`).join("")}</select>` : ""}<button class="ex-close" data-action="close" aria-label="Close experiment" ${busy ? "disabled" : ""}>×</button></div></header>
       ${saveNote ? `<p class="ex-note" role="status">${esc(saveNote)}</p>` : ""}
       ${api.isDemo ? '<p class="ex-demo">Demo mode · no model calls. <a href="?pipeline=2">Open live backend →</a></p>' : ""}
-      ${view === "planning" ? `<h2>Finding a useful experiment…</h2><p class="ex-muted">Turning your question into options to test.</p><div class="ex-loading" role="status">Preparing a proposal. No residents have been polled.</div><button class="ex-link" data-action="cancel">Cancel</button>` : view === "proposal" ? proposalHtml() : resultHtml()}`;
+      ${view === "planning" ? progressHtml() : view === "proposal" ? proposalHtml() : resultHtml()}`;
     if (busy) root.querySelectorAll("button, select").forEach(el => { el.disabled = el.dataset.action !== "cancel"; });
     if (view === "results") mountPeople();
     root.scrollTop = scroll;
@@ -60,10 +64,29 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
     const progress=root.querySelector(".ex-progress");
     if(progress&&event.kind==="scenario.completed")progress.textContent=`${event.details.scenario} of ${compilePlan(plan).scenarios.length} combinations complete`;
   }
+  function evidenceHtml(panel) {
+    if (!panel) return api.isDemo ? '<p class="ex-note">Offline fixture · internet research is not performed.</p>' : '';
+    return `<details class="ex-details"><summary>${panel.sources.length} sources · ${panel.personas.length} researched profiles</summary>
+      <p>Qualitative customer context; Census demographics and weights remain unchanged.</p>
+      ${panel.personas.map(p=>`<p><b>${esc(p.label)}</b> ${p.attributes.filter(a=>a.value).map(a=>`${esc(a.key.replaceAll('_',' '))}: ${esc(a.value)} (${esc(a.provenance)})`).join(' · ')}</p>`).join('')}
+      ${panel.sources.map(source=>{let url;try{url=new URL(source.url);if(!['https:','http:'].includes(url.protocol))url=null;}catch{}return `<p>${url?`<a href="${esc(url.href)}" target="_blank" rel="noopener noreferrer">${esc(source.title)}</a>`:esc(source.title)}</p>`;}).join('')}
+      ${(panel.gaps||[]).map(g=>`<p>${esc(g)}</p>`).join('')}</details>`;
+  }
+  function newsHtml(run) {
+    if(!run.newsContext)return '';
+    let articles;try{articles=JSON.parse(run.newsContext.slice(run.newsContext.indexOf('\n')+1));}catch{return '';}
+    return `<details class="ex-details"><summary>News context · past week</summary><p>The same dated headlines inform each scenario and its timeline. Individual awareness is modeled.</p>${articles.map(a=>{let url;try{url=new URL(a.url);if(!['https:','http:'].includes(url.protocol))url=null;}catch{}return `<p><small>${esc(a.published)}</small><br>${url?`<a href="${esc(url.href)}" target="_blank" rel="noopener noreferrer">${esc(a.headline)}</a>`:esc(a.headline)}<br>${esc(a.summary)}</p>`;}).join('')}</details>`;
+  }
+  function progressHtml(exp = null) {
+    return `<div class="ex-pipeline"><span class="ex-kicker">ONE QUESTION → A CITY OF POSSIBILITIES</span><h2>${exp?'Testing the price trade-offs.':'Building your research audience.'}</h2><p class="ex-question">${esc(lastQuestion)}</p>
+      <ol class="ex-stages"><li class="${exp?'done':'current'}"><b>01</b><span>Research & personas<small>${esc(exp ? (researchPanel?`${researchPanel.sources.length} sources · ${researchPanel.personas.length} profiles pinned`:'Offline fixture') : researchProgress)}</small></span></li><li class="${exp?'current':''}"><b>02</b><span>Controlled experiment<small class="ex-progress">${exp?`Testing ${exp.scenarios.length} combinations…`:'Region × price × format'}</small></span></li><li><b>03</b><span>Impact & time<small>Compare results, then follow daily adaptation</small></span></li></ol>
+      ${exp?`<div class="ex-factor-grid">${exp.factors.map(f=>`<div><span>${esc(f.label)}</span><strong>${f.levels.length}</strong><small>${f.levels.map(esc).join(' · ')}</small></div>`).join('')}</div><p class="ex-note">Income, age and geography breakdowns · same Census-weighted audience throughout.</p>${plan.priceSuggested&&plan.priceMode==='relative'?'<p class="ex-note">No amount specified: testing current price through +20% as an editable hypothesis.</p>':''}`:''}
+      ${evidenceHtml(researchPanel)}<button class="ex-link" data-action="cancel">Cancel</button></div>`;
+  }
   function proposalHtml() {
   if (!plan) return `<p class="ex-error" role="alert">${esc(error)}</p><button class="ex-link" data-action="retry-plan">Try again</button>`;
   const exp=compilePlan(plan), commercial=plan.kind!=="compare";
-  if (busy) return `<h2>Comparing your options.</h2><p class="ex-question">${esc(plan.decision)}</p><div class="ex-loading" role="status"><span class="ex-progress">Testing ${exp.scenarios.length} combinations…</span><small>Same audience. Prices and formats are explicit experiment assumptions.</small></div><details class="ex-details"><summary>What’s being tested</summary><p>${esc(exp.question)}</p><p>${esc(exp.assumptions)}</p></details><button class="ex-link" data-action="cancel">Cancel</button>`;
+  if (busy) return progressHtml(exp);
   return `<h2>${plan.kind==="launch"?"Find the right launch.":plan.kind==="price"?"Find the price trade-off.":"Find the stronger option."}</h2>
     <p class="ex-question">${esc(plan.decision)}</p>
     <div class="ex-context"><span>${esc(audienceText(ctx().audience))}</span><button class="ex-link" data-action="audience">Change</button></div>
@@ -91,6 +114,10 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
     ${run.fixture?'<p class="ex-demo">Illustrative demo results · not model answers to your question.</p>':'<p class="ex-note">Model estimates, not observed customer behavior.</p>'}
     <div class="ex-metrics">${hasCurve?metric(esc(exp.metric),pct(share))+metric(esc(exp.priceAxis||"Price"),esc(priceLabel(selectedPrice,mode)))+metric("Combinations tested",String(ranked.length)):metric("Highest intent",pct(best.share))+metric("Lead over next",pp(best.delta))+metric("Options tested",String(ranked.length))}</div>
     ${hasCurve?curveHtml(run):""}
+    ${hasCurve?factorImpactHtml(run):''}
+    <button class="ex-primary" data-action="timeline">Follow this scenario over 14 days<span>→</span></button>
+    <p class="ex-foot">Daily routine estimates for this offer and audience. A separate model of adaptation, not an extrapolation of purchase intent.</p>
+
     <div class="ex-chart-label">${hasCurve?"Ranked combinations":esc(exp.metric)}</div>
     <div class="ex-ranks" aria-label="Ranked experiment results">${(allRanks?ranked:ranked.slice(0,3)).map(row=>`<button class="ex-rank" data-scenario="${row.index}" aria-pressed="${row.index===selected}"><span class="ex-rank-number">${row.rank}</span><span class="ex-rank-main"><strong>${esc(row.scenario.location||row.scenario.label)}</strong>${row.scenario.format?`<small>${esc(priceLabel(row.scenario.change??row.scenario.price,mode))} · ${esc(row.scenario.format)}</small>`:row.scenario.offer?`<small>${esc(row.scenario.offer.replace("$5 first order","$5 off the first order").replace("$3 next order","$3 credit on a second order"))}</small>`:""}<span class="ex-bar"><i style="width:${100*(row.share??0)}%"></i></span></span><span class="ex-rank-value">${pct(row.share)}</span></button>`).join("")}</div>
     ${ranked.length>3?`<button class="ex-link ex-more" data-action="all-ranks">${allRanks?"Show top three":`See all ${ranked.length} combinations`}</button>`:""}
@@ -100,9 +127,23 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
     <div id="experiment-person" ${person==null?"hidden":""}></div>
     <details class="ex-details"><summary>What was tested</summary>${(exp.factors||[]).map(f=>`<p><b>${esc(f.label)}</b> ${f.levels.map(esc).join(" · ")}</p>`).join("")}<p>${esc(exp.question)}</p><p>${esc(exp.assumptions)}</p><p>${esc(run.model)} · ${esc(run.asOf)}. Highest modeled interest is not a profit estimate or a statistically established winner.</p>${!modern?'<p>Historical experiment. Replan to use the current three-factor design.</p>':""}</details>
     <details class="ex-details"><summary>Who this represents</summary><p>${run.residents.length.toLocaleString()} synthetic residents; ${run.audience.sourceRecords?.toLocaleString()??"unknown"} matching Census records. Weighted group responses, not independent interviews. City-wide audience, not a separate local demand sample for each area.</p></details>
+    ${evidenceHtml(run.researchPanel)}
+    ${newsHtml(run)}
     <div class="ex-next"><button class="ex-link" data-action="refine">Refine this experiment ↗</button><button class="ex-link" data-action="new-audience">Try another audience ↗</button></div>
     ${run.parentId?`<button class="ex-link ex-parent" data-run="${esc(run.parentId)}">← Previous experiment</button>`:""}<p class="ex-foot">${run.saved?"Saved in this browser":"Saved for this session only"} · ${esc(new Date(run.createdAt).toLocaleDateString())}</p>`;
 }
+  function factorImpactHtml(run) {
+    const exp=run.experiment, chosen=exp.scenarios[selected], share=scenarioShare(run.scenarios[selected],exp.indices);
+    const rows=exp.factors.map(f=>{
+      const key=f.id==='price'?(exp.priceMode==='relative'?'change':'price'):f.id;
+      const others=['location','format',exp.priceMode==='relative'?'change':'price'].filter(k=>k!==key);
+      const matches=exp.scenarios.map((scenario,index)=>({scenario,index})).filter(r=>others.every(k=>r.scenario[k]===chosen[k]));
+      const baseline=f.id==='price'?matches[0]:(matches.find(r=>r.scenario[key]!==chosen[key]) || matches[0]);if(!baseline)return '';
+      const delta=share-scenarioShare(run.scenarios[baseline.index],exp.indices);
+      return `<div><span>${esc(f.label)}<small>vs. ${esc(f.id==='price'?priceLabel(baseline.scenario[key],exp.priceMode):baseline.scenario[key])}</small></span><strong>${pp(delta)}</strong></div>`;
+    });
+    return `<section class="ex-impact"><h3>What changes modeled interest?</h3>${rows.join('')}<p class="ex-foot">Other tested factors held fixed for each comparison. Demographic differences below are associations, not causal effects. Operating costs and profit are not estimated.</p></section>`;
+  }
   function metric(label,value) { return `<div><strong>${value}</strong><span>${label}</span></div>`; }
   function curveHtml(run) {
   const exp=run.experiment, series=priceSeries(run,selected), ref=exp.scenarios[selected];
@@ -121,10 +162,11 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
 }
   function mountPeople() {
     const run = active, scenario = run.scenarios[selected], exp = run.experiment;
+    map.setResearchResponses?.(scenario.response_groups, exp.options);
     const answers = new Map();
     for (const group of scenario.response_groups) for (const id of group.agent_ids) {
       const p = metricShare(group.probabilities,exp.indices);
-      answers.set(id,{p_yes:p,dist:[p,1-p],why:group.factor,archetype:group.archetype});
+      answers.set(id,{p_yes:p,dist:[p,1-p],why:factorText(group.factor),archetype:group.archetype});
     }
     // Re-express the chosen metric as a binary share, keeping the SAME groups,
     // members and weights. The chart must not silently switch to the winning option.
@@ -151,7 +193,7 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
     if (!resident) return false;
     person=resident.id; const seq=++personGeneration, run=active;
     const host=root.querySelector("#experiment-person"); host.hidden=false;
-    host.innerHTML=`<div class="ex-person-head"><canvas width="40" height="40"></canvas><div><strong>${esc(resident.name)}</strong><small>${esc([resident.age,resident.occupation,resident.neighborhood].filter(v=>v!=null).join(" · "))}</small></div><button class="ex-close" data-action="close-person" aria-label="Close persona">×</button></div><p class="ex-person-story">Synthetic persona · ${esc((resident.educ||"education not recorded").replaceAll("_"," "))}</p><p class="ex-note">Inherited group response, not an individual interview.</p>${run.scenarios.map((s,i)=>{const g=responseFor(s,id);return `<div class="ex-person-result ${i===selected?"selected":""}"><span>${esc(run.experiment.scenarios[i].label)}</span><strong>${pct(metricShare(g?.probabilities,run.experiment.indices))}</strong></div>`;}).join("")}<p class="ex-note">${esc(responseFor(run.scenarios[selected],id)?.factor || "No recorded factor.")} <span>Model-selected factor, not a quote.</span></p>`;
+    host.innerHTML=`<div class="ex-person-head"><canvas width="40" height="40"></canvas><div><strong>${esc(resident.name)}</strong><small>${esc([resident.age,resident.occupation,resident.neighborhood].filter(v=>v!=null).join(" · "))}</small></div><button class="ex-close" data-action="close-person" aria-label="Close persona">×</button></div><p class="ex-person-story">Synthetic persona · ${esc((resident.educ||"education not recorded").replaceAll("_"," "))}</p><p class="ex-note">Inherited group response, not an individual interview.</p>${run.scenarios.map((s,i)=>{const g=responseFor(s,id);return `<div class="ex-person-result ${i===selected?"selected":""}"><span>${esc(run.experiment.scenarios[i].label)}</span><strong>${pct(metricShare(g?.probabilities,run.experiment.indices))}</strong></div>`;}).join("")}<p class="ex-note">${esc(factorText(responseFor(run.scenarios[selected],id)?.factor) || "No recorded factor.")} <span>Model-selected factor, not a quote.</span></p>`;
     map.drawHeadTo(host.querySelector("canvas"),id);
     if(scroll) host.scrollIntoView({block:"nearest",behavior:"smooth"});
     try { const detail=await getPersona?.(run,id); if(seq===personGeneration && detail?.persona) host.querySelector(".ex-person-story").textContent=detail.persona; } catch { /* Stored demographics remain available. */ }
@@ -159,17 +201,25 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
   }
   let lastQuestion = "";
   async function openDecision(question) {
-    if(busy) return;
-    lastQuestion=question; parentId=null; plan=null; error=""; areasOpen=false; allRanks=false; resetSelection(); prepare(); liveMap();
+    if(busy || !ctx().ready) return;
+    lastQuestion=question; researchPanel=null; researchProgress="Checking saved research…"; parentId=null; plan=null; error=""; areasOpen=false; allRanks=false; resetSelection(); prepare(); liveMap();
     planningLog=[]; executionLog=[{kind:"client.plan_requested",phase:"Plan",message:api.isDemo?"Demo recipe selected locally. No model will be called.":"Requesting a proposal from the backend; waiting for execution evidence."}];
     control={id:crypto.randomUUID(),createdAt:new Date().toISOString(),question,city:ctx().city,model:PREDICT.model,population:ctx().residents.length,fixture:api.isDemo};syncControl("planning");
     view="planning"; visibility(true); root.scrollTop=0; busy=true; setBusy(true); render();
-    const seq=++generation, city=ctx().city; abort=new AbortController();
+    const seq=++generation, city=ctx().city; const controller=new AbortController(); abort=controller;
     try {
-      const route=await api.proposeExperiment(city,question,abort.signal);
+      if (!api.isDemo) {
+        const preparedPanel = await prepareAutomaticAudience(question, {
+        location: city, signal: controller.signal,
+        onProgress: p => { if(seq!==generation)return; researchProgress=p.message || ({checking:'Checking saved research…',researching:'Searching public sources and building evidence-backed profiles…',ready:'Research complete. Planning the experiment…'})[p.stage] || 'Reviewing source evidence…'; render(); },
+      });
+        if(seq!==generation) return;
+        researchPanel=preparedPanel;
+      }
+      const route=await api.proposeExperiment(city,question,controller.signal);
       if(seq!==generation) return;
       planningLog=(route.trace?.events || [{kind:api.isDemo?"demo.plan":"plan.untraced",message:api.isDemo?"Demo recipe only; no provider request.":"This backend returned a proposal without an execution trace. Model usage cannot be verified."}]).map(e=>({...e,phase:"Plan"})); executionLog=planningLog.slice();
-      plan=autoPlan(question,route); planCity=city; const experiment=compilePlan(plan); view="proposal";syncControl("awaiting_approval",{experiment});
+      plan=autoPlan(question,route); planCity=city; const experiment=compilePlan(plan); view="proposal";syncControl("prepared",{experiment});
     } catch(e) { if(seq===generation) { if(e.trace?.events) executionLog.push(...e.trace.events.map(e=>({...e,phase:"Plan"}))); addLog({kind:"client.failed",message:e.message});syncControl("failed",{error:e.message});error=e.message;view="proposal"; } }
     finally { if(seq===generation) {busy=false;abort=null;setBusy(false);render();} }
     if(seq===generation && plan && !error) await submit();
@@ -184,15 +234,15 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
     syncControl("running",{experiment,population:residents.length});
     const seq=++generation; abort=new AbortController(); busy=true;setBusy(true);render();
     try {
-      const response=await compareScenarios(context.branch,{question:experiment.question,assumptions:experiment.assumptions,options:experiment.options,scenarios:experiment.scenarios,as_of_date:PREDICT.as_of_date},abort.signal,event=>{if(seq===generation)addLog(event);});
+      const response=await compareScenarios(context.branch,{question:experiment.question,assumptions:experiment.assumptions,research_panel:researchReference(researchPanel),options:experiment.options,scenarios:experiment.scenarios,as_of_date:PREDICT.as_of_date},abort.signal,event=>{if(seq===generation)addLog(event);});
       if(seq!==generation) return;
       if(response.scenarios?.length!==experiment.scenarios.length || response.scenarios.some(s=>s.result?.p_distribution?.length!==experiment.options.length || scenarioShare(s,experiment.indices)==null || !s.response_groups?.length)) throw new Error("The comparison was incomplete. No results were saved. Please retry.");
-      const run={id:crypto.randomUUID(),controlId:control.id,createdAt:new Date().toISOString(),city:context.city,simId:ctx().simId,audience,residents,draft,experiment,scenarios:response.scenarios,parentId:parent,model:PREDICT.model,asOf:PREDICT.as_of_date,fixture:api.isDemo||response.fixture_mode===true,executionLog:structuredClone(executionLog),trace:response.trace,saved:true};
+      const run={id:crypto.randomUUID(),controlId:control.id,createdAt:new Date().toISOString(),city:context.city,simId:ctx().simId,audience,residents,researchPanel,draft,experiment,scenarios:response.scenarios,parentId:parent,model:PREDICT.model,asOf:PREDICT.as_of_date,fixture:api.isDemo||response.fixture_mode===true,newsContext:response.news_context || "",executionLog:structuredClone(executionLog),trace:response.trace,saved:true};
       try {await store.save(run);} catch {run.saved=false;saveNote="Browser storage is unavailable. Keep this tab open to retain the experiment.";}
       if(seq!==generation) return;
       controlWriter.write(controlRecordFromRun(run));controlWriter.flush().catch(()=>{});control.status="completed";
-      runs.push(run);active=run;parentId=null;selected=rankScenarios(run)[0].index;
-      resetSelection();view="results";peopleOpen=false;map.setAgents(residents);map.clearVerdicts();root.scrollTop=0;
+      runs.push(run);active=run;parentId=null;selected=run.experiment.priceMode==="relative" ? Math.max(0,run.experiment.scenarios.findIndex(s=>s.change===Number(Number(run.draft?.percent).toFixed(2)))) : rankScenarios(run)[0].index;
+      resetSelection();view="results";peopleOpen=true;map.setAgents(residents);map.clearVerdicts();root.scrollTop=0;
     } catch(e) {if(seq===generation) { addLog({kind:"client.failed",message:e.message});syncControl("failed",{error:e.message});error=e.status===404?"The backend needs the updated experiment endpoint. Your proposal is preserved.":e.message; }}
     finally {if(seq===generation) {busy=false;abort=null;setBusy(false);render();}}
   }
@@ -206,7 +256,7 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
   function openRun(id) {
     if(busy) return;
     const run=localRuns().find(r=>r.id===id); if(!run) return;
-    prepare();resetSelection();active=run;selected=rankScenarios(run)[0].index;view="results";peopleOpen=false;
+    prepare();resetSelection();active=run;selected=run.experiment.priceMode==="relative" ? Math.max(0,run.experiment.scenarios.findIndex(s=>s.change===Number(Number(run.draft?.percent).toFixed(2)))) : rankScenarios(run)[0].index;view="results";peopleOpen=false;
     map.setAgents(run.residents);map.clearVerdicts();visibility(true);root.scrollTop=0;render();
   }
   async function refine(audience=false) {
@@ -216,7 +266,7 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
       if(JSON.stringify(run.audience.filters)!==JSON.stringify(ctx().audience.filters)) await restoreAudience(run);
       if(run.draft.version!==3) {await openDecision(run.experiment.decision);parentId=run.id;render();return;}
       planningLog=[{kind:"plan.refined",message:"Refined the saved proposal locally. No new planning model call."}]; executionLog=planningLog.slice();
-      plan=structuredClone(run.draft);planCity=run.city;parentId=run.id;
+      researchPanel=run.researchPanel || null;plan=structuredClone(run.draft);planCity=run.city;parentId=run.id;
       control=null;
       if(plan.kind==="price" && plan.priceMode==="relative" && !audience) plan.percent/=2;
       resetSelection();liveMap();view="proposal";error="";root.scrollTop=0;render();
@@ -235,6 +285,7 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
     if(d.action==="close") {resetSelection();visibility(false);liveMap();return;}
     if(d.action==="retry-plan") return openDecision(lastQuestion);
     if(d.action==="approve") return submit();
+    if(d.action==="timeline") { void (async()=>{try{if(JSON.stringify(active.audience.filters)!==JSON.stringify(ctx().audience.filters)) await restoreAudience(active);await startTimeline(active,selected);visibility(false);}catch(e){saveNote=e.message;render();}})();return; }
     if(d.action==="audience") return openFilters();
     if(d.action==="refine") return refine();
     if(d.action==="new-audience") return refine(true);

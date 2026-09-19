@@ -96,6 +96,8 @@ pub fn router(state: AppState) -> Router {
         .route("/branches/:bid/evolution", post(start_evolution))
         .route("/evolution/:id", get(get_evolution))
         .route("/evolution/:id/step", post(step_evolution))
+        .route("/evolution/:id/event", post(event_evolution))
+        .route("/evolution/:id/question", post(question_evolution))
         .route("/workspace", get(workspace_info))
         .route("/workspace/seed", post(workspace_seed))
         .route("/", get(root))
@@ -309,6 +311,7 @@ async fn health(State(st): State<AppState>) -> impl IntoResponse {
         "status": "ok",
         "model_reachable": cached,
         "has_key": st.client.has_key(),
+        "resident_voice_provider": if st.client.has_voice_provider() { Some("gemini") } else { None },
         "hydra_configured": st.hydra.is_some(),
         "insforge_configured": st.insforge.is_some(),
         "rocketride_configured": st.rocketride.is_some(),
@@ -930,15 +933,22 @@ async fn branch_chatter(
 }
 
 async fn branch_research(
-    State(st): State<AppState>, Path(bid): Path<String>,
-    Json(req): Json<crate::research::ResearchRequest>,
+    State(st): State<AppState>, headers: HeaderMap, Path(bid): Path<String>,
+    Json(mut req): Json<crate::research::ResearchRequest>,
 ) -> axum::response::Response {
+    if let Some(reference) = &req.research_panel {
+        match st.audience_research.context_for(&headers, reference) {
+            Ok(context) => req.research_context = Some(context),
+            Err(error) => return (StatusCode::BAD_REQUEST, Json(json!({"error":error.to_string()}))).into_response(),
+        }
+    }
     if let Err(message) = req.validate() {
         return (StatusCode::BAD_REQUEST, Json(json!({"error":message}))).into_response();
     }
     let Some((ctx, _)) = find_branch(&st, &bid) else {
         return (StatusCode::NOT_FOUND, Json(json!({"error":"branch not found"}))).into_response();
     };
+    req.news_context = crate::news::prompt_block_at(&ctx.population.profile.slug, &req.as_of_date);
     let trace = crate::execution::Trace::new(None);
     match research_execution(&st, &ctx, &req, &trace).await {
         Ok(result) => Json(result).into_response(),
@@ -953,7 +963,7 @@ async fn research_execution(st: &AppState, ctx: &SimContext, req: &crate::resear
         match crate::research::compare(&st.engine, &ctx.population, req).await {
             Ok(scenarios) => {
                 trace.record("research.completed", "All scenarios completed with full coverage. Ready to compare.", json!({"scenarios":scenarios.len()}));
-                Ok(json!({"scenarios":scenarios,"context_policy":"explicit_assumptions_only","n_agents":ctx.population.agents.len(),"fixture_mode":fixture,"trace":trace.snapshot()}))
+                Ok(json!({"scenarios":scenarios,"context_policy":if req.research_context.is_some() { "explicit_assumptions_and_pinned_research" } else { "explicit_assumptions_only" },"news_context":req.news_context,"pinned_news":!req.news_context.is_empty(),"n_agents":ctx.population.agents.len(),"fixture_mode":fixture,"trace":trace.snapshot()}))
             }
             Err(error) => {
                 let message = crate::execution::failure_message(&error);
@@ -967,11 +977,18 @@ async fn research_execution(st: &AppState, ctx: &SimContext, req: &crate::resear
 /// NDJSON allows POST approval + real progress without storing public job logs.
 /// Dropping the response cancels the task; in-flight provider work may still finish.
 async fn branch_research_stream(
-    State(st): State<AppState>, Path(bid): Path<String>, Json(req): Json<crate::research::ResearchRequest>,
+    State(st): State<AppState>, headers: HeaderMap, Path(bid): Path<String>, Json(mut req): Json<crate::research::ResearchRequest>,
 ) -> axum::response::Response {
     use futures::StreamExt;
+    if let Some(reference) = &req.research_panel {
+        match st.audience_research.context_for(&headers, reference) {
+            Ok(context) => req.research_context = Some(context),
+            Err(error) => return (StatusCode::BAD_REQUEST, Json(json!({"error":error.to_string()}))).into_response(),
+        }
+    }
     if let Err(message) = req.validate() { return (StatusCode::BAD_REQUEST, Json(json!({"error":message}))).into_response(); }
     let Some((ctx, _)) = find_branch(&st, &bid) else { return (StatusCode::NOT_FOUND, Json(json!({"error":"branch not found"}))).into_response(); };
+    req.news_context = crate::news::prompt_block_at(&ctx.population.profile.slug, &req.as_of_date);
     let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<Value>();
     let trace = crate::execution::Trace::new(Some(sender.clone()));
     tokio::spawn(async move {
@@ -1978,7 +1995,8 @@ async fn parse_question_handler(
 /// Recent news for a city (the frontend news bubble) + the served knowledge date.
 async fn city_news(State(_st): State<AppState>, Path(city): Path<String>) -> impl IntoResponse {
     let news = crate::news::load(&city);
-    Json(json!({ "city": city, "date": news.date, "articles": news.articles }))
+    let articles = crate::news::articles_at(&news, &crate::news::today(), 12);
+    Json(json!({ "city": city, "date": news.date, "articles": articles }))
 }
 
 const EVENT_TEXT_MAX_CHARS: usize = 2000;
@@ -2846,8 +2864,12 @@ fn _touch(_: AgentState, _: SimState) {}
 
 
 #[derive(Deserialize)]
-struct EvolutionStart { scenario: String }
+struct EvolutionStart { scenario: String, #[serde(default)] research_panel: Option<crate::research::PanelReference>, #[serde(default)] pinned_news: Option<String>, #[serde(default)] as_of_date: Option<String> }
 async fn start_evolution(State(st): State<AppState>, headers: HeaderMap, Path(bid): Path<String>, Json(req): Json<EvolutionStart>) -> axum::response::Response {
+    let research_context = match req.research_panel.as_ref().map(|r| st.audience_research.context_for(&headers, r)).transpose() {
+        Ok(context) => context,
+        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({"error":e.to_string()}))).into_response(),
+    };
     let scenario=req.scenario.trim().to_string();
     if scenario.is_empty() || scenario.chars().count()>2000 {
         return (StatusCode::BAD_REQUEST,Json(json!({"error":"Describe a scenario in 1–2,000 characters."}))).into_response();
@@ -2858,12 +2880,21 @@ async fn start_evolution(State(st): State<AppState>, headers: HeaderMap, Path(bi
     if !st.client.has_typesafe_key() {
         return (StatusCode::SERVICE_UNAVAILABLE,Json(json!({"error":"Configure TYPESAFE_API_KEY to run a city scenario."}))).into_response();
     }
+    let as_of_date=req.as_of_date.unwrap_or_else(crate::news::today);
+    if chrono::NaiveDate::parse_from_str(&as_of_date,"%Y-%m-%d").is_err() {
+        return (StatusCode::BAD_REQUEST,Json(json!({"error":"Use a valid evaluation date."}))).into_response();
+    }
+    let news=crate::news::prompt_block_at(&ctx.population.profile.slug,&as_of_date);
+    if req.pinned_news.as_ref().is_some_and(|p|p!=&news) {
+        return (StatusCode::CONFLICT,Json(json!({"error":"News context changed since this experiment. Run the experiment again to keep its timeline comparable."}))).into_response();
+    }
     static SERIAL: std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(0);
     let id=format!("evo-{}-{}",chrono::Utc::now().timestamp_millis(),SERIAL.fetch_add(1,std::sync::atomic::Ordering::Relaxed));
-    let run=match crate::evolution::Run::new(id.clone(),workspace_of(&headers),bid,&ctx.population,scenario,&st.client).await {
+    let mut run=match crate::evolution::Run::new(id.clone(),workspace_of(&headers),bid,&ctx.population,scenario,&st.client).await {
         Ok(run)=>run,
         Err(e)=>{tracing::warn!("scenario setup failed: {e:#}");return (StatusCode::BAD_GATEWAY,Json(json!({"error":"Could not prepare this scenario. Please retry."}))).into_response();}
     };
+    run.research_context=Some(json!({"audience_research":research_context,"verified_news_background":news}).to_string());
     let view=run.view();
     let mut runs=st.evolution.lock().unwrap();
     runs.retain(|_,r|r.try_lock().map(|r|r.created.elapsed()<Duration::from_secs(3600)).unwrap_or(true));
@@ -2890,5 +2921,32 @@ async fn step_evolution(State(st): State<AppState>, headers: HeaderMap, Path(id)
     match run.step(&st.client,req.expected_tick).await {
         Ok(frame)=>Json(json!({"frame":frame})).into_response(),
         Err(e)=>{tracing::warn!("evolution step failed: {e:#}");(StatusCode::BAD_GATEWAY,Json(json!({"error":"This step could not complete. Your timeline is unchanged; retry Step or Play."}))).into_response()}
+    }
+}
+
+#[derive(Deserialize)]
+struct EvolutionEvent { text: String, expected_tick: usize }
+async fn event_evolution(State(st): State<AppState>, headers: HeaderMap, Path(id): Path<String>, Json(req): Json<EvolutionEvent>) -> axum::response::Response {
+    let Some(run)=st.evolution.lock().unwrap().get(&id).cloned() else {
+        return (StatusCode::NOT_FOUND,Json(json!({"error":"Simulation expired. Start a new run."}))).into_response();
+    };
+    let mut run=match run.try_lock(){Ok(r)=>r,Err(_)=>return (StatusCode::CONFLICT,Json(json!({"error":"A day is still updating. Please retry."}))).into_response()};
+    if run.workspace!=workspace_of(&headers){return (StatusCode::NOT_FOUND,Json(json!({"error":"Simulation not found"}))).into_response();}
+    match run.add_event(req.text,req.expected_tick) {
+        Ok(event)=>(StatusCode::CREATED,Json(json!(event))).into_response(),
+        Err(e)=>(StatusCode::BAD_REQUEST,Json(json!({"error":e.to_string()}))).into_response(),
+    }
+}
+#[derive(Deserialize)]
+struct EvolutionQuestion { question: String, tick: usize }
+async fn question_evolution(State(st): State<AppState>, headers: HeaderMap, Path(id): Path<String>, Json(req): Json<EvolutionQuestion>) -> axum::response::Response {
+    let Some(run)=st.evolution.lock().unwrap().get(&id).cloned() else {
+        return (StatusCode::NOT_FOUND,Json(json!({"error":"Simulation expired. Start a new run."}))).into_response();
+    };
+    let mut run=match run.try_lock(){Ok(r)=>r,Err(_)=>return (StatusCode::CONFLICT,Json(json!({"error":"A day is still updating. Please retry."}))).into_response()};
+    if run.workspace!=workspace_of(&headers){return (StatusCode::NOT_FOUND,Json(json!({"error":"Simulation not found"}))).into_response();}
+    match run.ask_question(&st.client,req.question,req.tick).await {
+        Ok(answer)=>Json(json!(answer)).into_response(),
+        Err(e)=>{tracing::warn!("timeline question failed: {e:#}");(StatusCode::BAD_REQUEST,Json(json!({"error":"Could not answer this question. Ask a yes/no question about residents at the selected day."}))).into_response()},
     }
 }

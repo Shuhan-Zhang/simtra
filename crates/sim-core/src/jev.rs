@@ -281,7 +281,7 @@ pub async fn voices(
                 .1;
             Ok((
                 *id,
-                format!("{text} [Jev-selected template]"),
+                text.to_string(),
                 selected.to_string(),
             ))
         })

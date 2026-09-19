@@ -13,6 +13,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { COLORS, TIMING, MAP } from "./config.js";
+import { residentResponseLabels } from "./resident-responses.js";
 import { createSegmentIndex, normalizeSegmentSelection, selectSegments } from "./segment-selection.js";
 
 const POP_MS = 340; // per-sprite verdict pop duration
@@ -32,89 +33,11 @@ const OVERVIEW_SPRITE_PX = 10;
 // overview-LOD colors (one per character) so the zoomed-out crowd still reads as varied
 const CHAR_COLORS = ["#c64f3f", "#3f72c6", "#46a35a", "#8a5fbf", "#caa23c", "#cf6aa0", "#3fb5b0", "#b5713f", "#5a6470", "#d0823f"];
 
-// Pokémon-style thought bubbles (shown when zoomed in)
+// Generated resident voices or membership-linked experiment responses at detail zoom
+const CHATTER_LIMIT = 28; // bounded ambient voices per simulation; never per resident
 const BUBBLE = { maxAtOnce: 7, sep: 165, cycleMs: 2600, font: '600 11px "neue-haas-grotesk-display", -apple-system, sans-serif', maxW: 156 };
 const easeOutBack = (x) => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); };
 
-// ── diverse persona thoughts ────────────────────────────────────────────────
-// Each agent's bubble is drawn from its FULL backend persona (value vector +
-// demographics + neighborhood), mixing five modes so 1,200 residents read as
-// 1,200 distinct people rather than one repeated complaint.
-const ISSUE = {
-  s_housing:     ["rent is brutal here", "we need more housing", "another rent hike…", "priced out again", "saving for a place feels hopeless", "three roommates and counting", "my landlord won't fix anything", "just build more homes"],
-  s_crime:       ["is it safe to walk home?", "another car break-in", "tired of the break-ins", "where are the cops?", "they took my catalytic converter", "feels less safe lately", "lock your doors out here", "we need real public safety"],
-  s_homeless:    ["the city has to help folks outside", "so many tents lately", "this isn't working", "we need more shelters", "compassion, not sweeps", "it breaks my heart", "where's the housing-first plan?", "everyone deserves a roof"],
-  s_cost:        ["everything's so expensive", "groceries cost a fortune", "two jobs and still broke", "$18 for a sandwich?!", "this city eats your paycheck", "can I even afford to stay?", "wages haven't kept up", "another surprise fee"],
-  s_environment: ["gotta bike more", "more bike lanes please", "ditching the car today", "recycle, reuse, repeat", "cleaner air would help", "protect the parks", "climate can't wait", "less plastic, please"],
-  s_immigration: ["thinking of family back home", "finally getting my papers", "still new to the city", "sending money home", "learning the ropes here", "proud to be here", "my kids will have it better", "two cultures, one home"],
-};
-// city-neutral fallback chatter (shown only until the per-resident Jev template
-// arrives, or if that call fails) — nothing here should name a specific city.
-const DAILY = ["need more coffee", "is it Friday yet?", "another meeting today", "what's for dinner?", "parking is impossible", "walking the dog", "running late again", "weekend can't come soon", "long day ahead", "running errands", "traffic's bad today", "gotta call mom back", "love this city honestly", "should've worn a jacket", "off to the gym", "grabbing lunch soon", "so much on my plate", "almost the weekend", "could use a vacation", "where'd the day go?", "another bill due", "time for a break", "kids to pick up", "my feet are killing me"];
-const POL = {
-  prog:  ["the city should do more", "housing is a human right", "tax the rich already", "fund the schools", "we can do better than this"],
-  mod:   ["city hall wastes our money", "enough with the spending", "just want it to work", "common sense, please", "fix the basics first"],
-  notrust:["politicians never listen", "nothing changes around here", "same old at city hall", "who's actually in charge?"],
-  change:["time for something new", "we need real change", "shake things up", "out with the old"],
-};
-const HOOD = [
-  [/Bayview|Hunters/i, ["the city forgets us out here", "Third Street's home", "we deserve investment too"]],
-  [/Richmond|Presidio/i, ["dim sum on Clement after this", "foggy and green out here", "the avenues are peaceful"]],
-  [/Chinatown|North Beach|Russian/i, ["best dumplings are right here", "espresso in North Beach", "the alleys tell stories"]],
-  [/SoMa/i, ["so many empty offices now", "the commute's brutal", "construction everywhere"]],
-  [/Mission/i, ["best tacos in the city", "another mural going up", "the Mission's changing fast"]],
-  [/Bernal|central/i, ["the view from the hill", "village vibes up here", "quiet little corner"]],
-  [/Sunset/i, ["the fog never lifts out here", "the ocean's right there", "quiet in the avenues"]],
-  [/Ingleside|Oceanview/i, ["quiet side of town", "City College's right here", "underrated neighborhood"]],
-  [/Marina|Western Addition/i, ["perfect day by the bay", "brunch by the water", "jog along the marina"]],
-];
-const YOUNG = ["rent eats my whole check", "trying to make it here", "first apartment grind", "building a life here"];
-const OLD = ["this city's changed so much", "miss how it used to be", "watching it all change", "lived here for decades", "so many new faces now", "the old days were simpler"];
-
-function mulberry32(a) { return function () { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
-const pickFrom = (rng, arr) => arr[(rng() * arr.length) | 0];
-
-// active city slug — the SF-specific neighbourhood flavour only applies to SF;
-// every other city's residents get the LLM thought (or the neutral fallback).
-let CITY = "sf";
-
-function makeThought(a, id) {
-  const rng = mulberry32((id >>> 0) * 2654435761 + 12345);
-  const v = a.values || {};
-  const age = a.age || 40;
-  const hood = a.neighborhood || a.hood || "";
-  // weighted mode choice: issues dominate but daily life + flavor keep it varied
-  const r = rng();
-  if (r < 0.40) {
-    // weighted-random issue (not argmax) so the same person isn't always on rent
-    const keys = ["s_housing", "s_crime", "s_homeless", "s_cost", "s_environment", "s_immigration"];
-    const weights = keys.map((k) => Math.max(0.05, (v[k] ?? 0.4)) ** 2);
-    let tot = weights.reduce((s, w) => s + w, 0), x = rng() * tot, pick = keys[0];
-    for (let i = 0; i < keys.length; i++) { x -= weights[i]; if (x <= 0) { pick = keys[i]; break; } }
-    return pickFrom(rng, ISSUE[pick]);
-  }
-  if (r < 0.68) return pickFrom(rng, DAILY);
-  if (r < 0.82) {
-    if (age < 28 && rng() < 0.6) return pickFrom(rng, YOUNG);
-    if (age > 64 && rng() < 0.6) return pickFrom(rng, OLD);
-  }
-  if (r < 0.90) {
-    if (CITY === "sf") { for (const [re, arr] of HOOD) if (re.test(hood)) return pickFrom(rng, arr); }
-    return pickFrom(rng, DAILY);
-  }
-  // political mood from the value vector
-  const soc = v.social ?? 0, trust = v.trust ?? 0, change = v.change ?? 0;
-  if (trust < -0.25 && rng() < 0.5) return pickFrom(rng, POL.notrust);
-  if (change > 0.3 && rng() < 0.5) return pickFrom(rng, POL.change);
-  return pickFrom(rng, soc < -0.2 ? POL.prog : POL.mod);
-}
-
-const REACT_YES = ["I'm a yes on this", "voting yes for sure", "yeah, count me in", "this gets my vote", "yes — about time", "leaning yes", "makes sense to me", "finally, yes"];
-const REACT_NO = ["hard no for me", "I'm voting no", "no way", "not convinced", "this is a no", "leaning no", "not buying it", "nope, not this"];
-function verdictReaction(verdict, id) {
-  const rng = mulberry32((id >>> 0) * 40503 + 7);
-  return pickFrom(rng, verdict === "yes" ? REACT_YES : REACT_NO);
-}
 const clamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
 const lerp = (a, b, t) => a + (b - a) * t;
 
@@ -155,9 +78,11 @@ export class SFMap {
     this.revealT0 = 0; this.revealDur = TIMING.revealMs;
     this.clearT0 = 0; this.clearFade = 1; this.revealCount = 0;
     this.onProgress = null; this.onRevealComplete = null;
-    this.bubbleIdx = []; this.bubbleT = 0;   // which sprites currently show a thought bubble
-    this.branchId = null;                          // current branch (for sparse LLM chatter)
-    this.chatterAsked = new Set();                 // resident ids already requested
+    this.bubbleIdx = []; this.bubbleT = 0;   // sprites currently showing a response summary
+    this.branchId = null;                          // current simulation branch
+    this.chatterAsked = new Set();
+    this.thoughts = new Map();
+    this.hasResearchResponses = false;
     this.onNeedChatter = null;                     // (ids:number[]) => void  — app fetches + setThought
     this._raf = null;
 
@@ -176,30 +101,37 @@ export class SFMap {
     this.satelliteTiles.clear();
   }
 
-  // Point the chatter system at the active city + branch (clears the request log).
+  // Voice cache is scoped to the same seeded population and simulation branch.
   setSim(slug, branchId) {
-    CITY = slug || "sf";
+    const key = `${slug || "sf"}:${branchId || ""}`;
+    if (this.chatterContext !== key) {
+      this.chatterContext = key;
+      this.chatterAsked = new Set();
+      this.thoughts = new Map();
+      for (const agent of this.agents) agent.thought = null;
+    }
     this.branchId = branchId || null;
-    this.chatterAsked = new Set();
   }
 
-  // Replace a resident's thought with its Jev-selected template one (matched by backend id).
+  // Only model-returned voice text, matched to its exact resident. No local
+  // fallback quotes; late ambient responses never overwrite experiment results.
   setThought(id, text) {
-    if (!text) return;
-    for (const a of this.agents) if (a.seed === id) { a.thought = text; return; }
+    if (typeof text !== "string" || !text.trim()) return;
+    const thought = text.trim();
+    this.thoughts.set(Number(id), thought);
+    for (const a of this.agents) if (Number(a.seed) === Number(id)) a.thought = thought;
   }
 
-  // Ask the app to fetch LLM chatter for the on-screen residents we haven't yet
-  // requested (sparse + batched; results come back through setThought).
   _requestChatter() {
-    if (!this.branchId || !this.onNeedChatter || !this.bubbleIdx.length) return;
+    if (!this.branchId || !this.onNeedChatter || this.hasResearchResponses || this.mode !== "idle") return;
     const ids = [];
     for (const i of this.bubbleIdx) {
       const a = this.agents[i];
-      if (a && a.seed != null && !this.chatterAsked.has(a.seed)) {
-        this.chatterAsked.add(a.seed);
-        ids.push(a.seed);
-      }
+      if (!a || a.seed == null || this.chatterAsked.has(a.seed) || this.chatterAsked.size >= CHATTER_LIMIT) continue;
+      // Record attempts even if the optional voice provider is unavailable.
+      this.chatterAsked.add(a.seed);
+      ids.push(a.seed);
+      if (ids.length >= BUBBLE.maxAtOnce) break;
     }
     if (ids.length) this.onNeedChatter(ids);
   }
@@ -371,8 +303,9 @@ export class SFMap {
           seed: a.id ?? i,
           segmentIndex: rawIndex,
           segments: this._segmentIndex.segments[rawIndex],
-          thought: makeThought(a, a.id ?? i),   // diverse persona thought (backend value vector + demographics)
-          rationale: null,                       // set from a poll's sample_rationales
+          thought: this.thoughts?.get(Number(a.id ?? i)) || null,
+          response: null, // exact response-group probability summary, when available
+          rationale: null,
           // seeded persona, surfaced when you tap a character
           name: a.name, age: a.age, race: a.race_eth, educ: a.educ,
           job: a.occupation, hood: a.neighborhood, values: a.values, action: a.action,
@@ -682,17 +615,22 @@ export class SFMap {
   }
 
   clearVerdicts() {
-    for (const a of this.agents) a.rationale = null;
+    this.hasResearchResponses = false;
+    for (const a of this.agents) { a.rationale = null; a.response = null; }
     if (this.reducedMotion) { for (const a of this.agents) a.verdict = null; this.mode = "idle"; this.clearFade = 1; return; }
     if (this.mode === "idle") return;
     this.clearT0 = performance.now(); this.mode = "clearing";
   }
 
-  // distribute a poll's labeled sample_rationales across agents as thought bubbles
-  setRationales(rationales) {
-    const arr = (rationales || []).filter(Boolean);
-    if (!arr.length) return;
-    for (let i = 0; i < this.agents.length; i++) this.agents[i].rationale = arr[i % arr.length];
+  // Sample rationale strings have no resident membership: never distribute them
+  // over arbitrary people. Keep this compatibility hook for quick-poll callers.
+  setRationales() {}
+
+  setResearchResponses(groups, options) {
+    const labels = residentResponseLabels(groups, options);
+    this.hasResearchResponses = labels.size > 0;
+    for (const a of this.agents) a.response = labels.get(Number(a.seed)) || null;
+    this.bubbleT = 0;
   }
 
   start() { if (!this._raf) { this.lastT = performance.now(); this._raf = requestAnimationFrame(this._loop); } }
@@ -878,7 +816,7 @@ export class SFMap {
     }
   }
 
-  // Pick a rotating, spread-apart set of on-screen sprites to show thought bubbles
+  // Pick spread-apart residents for generated voices or active experiment responses
   // (only when zoomed in, so the overview stays clean and fast).
   _updateBubbles(now) {
     if (!this.zoomedIn) { this.bubbleIdx = []; return; }
@@ -887,6 +825,8 @@ export class SFMap {
     const cand = [];
     for (let i = 0; i < this.agents.length; i++) {
       const a = this.agents[i];
+      if (this.hasResearchResponses && !a.response) continue;
+      if (!this.hasResearchResponses && (this.mode !== "idle" || (!a.thought && (this.chatterAsked.has(a.seed) || this.chatterAsked.size >= CHATTER_LIMIT)))) continue;
       const s = this.worldToScreen(a.wx, a.wy);
       if (s.x < 60 || s.x > this.cssW - 60 || s.y < 140 || s.y > this.cssH - 80) continue;
       cand.push({ i, x: s.x, y: s.y });
@@ -899,25 +839,17 @@ export class SFMap {
       if (picked.every((p) => Math.hypot(p.x - c.x, p.y - c.y) > BUBBLE.sep)) picked.push(c);
     }
     this.bubbleIdx = picked.map((p) => p.i);
-    this._requestChatter();   // sparse LLM chatter for the residents now on screen
+    this._requestChatter();
   }
 
   _drawBubbles() {
     if (!this.bubbleIdx.length) return;
     const ctx = this.ctx;
-    const showVerdict = this.mode === "reveal" || this.mode === "results";
     const drawPx = Math.max(3, SPRITE_WORLD * this.cam.zoom);
     for (const i of this.bubbleIdx) {
       const a = this.agents[i];
       if (!a) continue;
-      let text;
-      if (showVerdict && a.verdict) {
-        // ~40% surface a real backend rationale; the rest show a varied stance line
-        const useReal = a.rationale && ((a.seed >>> 0) % 5) < 2;
-        text = useReal ? a.rationale : verdictReaction(a.verdict, a.seed);
-      } else {
-        text = a.thought;
-      }
+      const text = a.response || (!this.hasResearchResponses && this.mode === "idle" ? a.thought : null);
       if (!text) continue;
       const s = this.worldToScreen(a.wx, a.wy);
       if (this._segmentResult.summary.active && !this._segmentResult.matchMask[a.segmentIndex]) ctx.globalAlpha = 0.25;

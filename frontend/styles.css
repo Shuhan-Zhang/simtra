@@ -92,6 +92,7 @@
 }
 
 .location-context { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 10px; width: 100%; align-items: center; font-size: 12px; }
+.location-context[hidden] { display: none; }
 .location-context label { font-weight: 600; }
 .location-context select { min-width: 0; padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 8px; background: white; color: #182333; font: inherit; }
 .location-context p { grid-column: 1 / -1; margin: 0; line-height: 1.4; color: #526174; }
@@ -417,7 +418,7 @@ body {
 .ask-send:active { transform: scale(.96); }
 .ask-send:disabled { background: var(--fill-hi); color: var(--ink-3); cursor: default; transform: none; }
 .ask-send svg [stroke] { stroke-width: 2; }
-/* question type + extra fields, only while composing */
+/* The two question modes remain visible in the idle and active composer. */
 .ask-extra { display: none; flex-direction: column; gap: var(--s-2); padding: 0 var(--s-2) var(--s-1); }
 .ask-modes { display: flex; gap: var(--s-1); }
 .ask-mode {
@@ -463,7 +464,7 @@ body {
 }
 /* idle: the full composer is visible before the first click — audience chip, a
    large placeholder field, and the send button — so the controls are discoverable.
-   A tap anywhere in the box opens it for typing (the mode row appears then). */
+   A tap anywhere in the box opens it for typing; both modes are always available. */
 .ask[data-state="idle"] { width: min(620px, 90vw); border-radius: var(--r-xl); }
 .ask[data-state="idle"] .ask-enter, .ask[data-state="idle"] .ask-search, .ask[data-state="idle"] .ask-label { display: none; }
 .ask[data-state="idle"] .ask-input { display: block; opacity: 1; pointer-events: auto; margin-top: 4px; }

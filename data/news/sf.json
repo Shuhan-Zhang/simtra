@@ -1,38 +1,54 @@
 {
   "city": "sf",
-  "date": "2026-06-15",
+  "date": "2026-09-19",
   "articles": [
     {
-      "headline": "World Cup matches kick off at the Bay Area stadium in Santa Clara",
-      "summary": "The 2026 FIFA World Cup is underway, with the Bay Area hosting six matches and free fan zones at Chase Center and PIER 39 drawing global crowds.",
-      "topic": "sports",
-      "salience": "none",
-      "url": "https://www.kqed.org/news/12086949",
-      "date": "2026-06-15"
-    },
-    {
-      "headline": "June primary decides the race to succeed Nancy Pelosi",
-      "summary": "Bay Area voters advanced two candidates in the 11th Congressional District primary to succeed the former House Speaker; turnout and cost-of-living dominated the campaign.",
-      "topic": "politics",
+      "headline": "Downtown security officers begin strike",
+      "summary": "Security guards began striking at Salesforce Tower, the Transbay transit center and other downtown properties on September 18. The Chronicle reported an impasse in contract negotiations.",
+      "topic": "labor",
       "salience": "cost",
-      "url": "https://www.nbcbayarea.com/news/local/san-francisco-june-2026-election-results/4089580/",
-      "date": "2026-06-15"
+      "url": "https://www.sfchronicle.com/realestate/article/sf-security-guard-strike-office-buildings-22437964.php",
+      "date": "2026-09-18"
     },
     {
-      "headline": "SF Board of Supervisors races sharpen fights over housing and public safety",
-      "summary": "The 2026 Board of Supervisors election is centering on housing affordability, homelessness, and downtown recovery.",
-      "topic": "politics",
-      "salience": "housing",
-      "url": "https://en.wikipedia.org/wiki/2026_San_Francisco_Board_of_Supervisors_election",
-      "date": "2026-06-15"
-    },
-    {
-      "headline": "Trump marks 80th birthday touting an agreement to end the war in Iran",
-      "summary": "The president hailed an initial deal to wind down the Iran conflict that had rattled the global economy.",
-      "topic": "national",
+      "headline": "Front Street hosts Oktoberfest",
+      "summary": "A free downtown Oktoberfest celebration ran September 18 with music, food and games.",
+      "topic": "events",
       "salience": "none",
-      "url": "https://www.npr.org/sections/national/",
-      "date": "2026-06-15"
+      "url": "https://www.axios.com/local/san-francisco/2026/09/18/san-francisco-oktoberfest-front-street",
+      "date": "2026-09-18"
+    },
+    {
+      "headline": "Mountain lion captured in Outer Sunset",
+      "summary": "City officials captured a mountain lion on September 18 after sightings near 44th Avenue and Ulloa Street, according to The San Francisco Standard.",
+      "topic": "public safety",
+      "salience": "none",
+      "url": "https://sfstandard.com/2026/09/18/mountain-lion-spotted-outer-sunset/",
+      "date": "2026-09-18"
+    },
+    {
+      "headline": "California gasoline reaches $6 a gallon",
+      "summary": "The Chronicle reported a statewide average of $6 per gallon on September 14 and a San Francisco average of $6.16, citing AAA. Statewide prices had risen 42 cents over the preceding month.",
+      "topic": "cost of living",
+      "salience": "cost",
+      "url": "https://www.sfchronicle.com/california/article/gas-prices-6-gallon-22431085.php",
+      "date": "2026-09-14"
+    },
+    {
+      "headline": "Raising Cane’s announces first San Francisco opening",
+      "summary": "Raising Cane’s announced plans to open at 211 Jefferson Street at Fisherman’s Wharf on September 21. The September 14 report describes a planned opening, not an already operating restaurant.",
+      "topic": "restaurants",
+      "salience": "cost",
+      "url": "https://www.sfchronicle.com/sf/article/raising-cane-restaurant-fishermans-wharf-opening-22431099.php",
+      "date": "2026-09-14"
+    },
+    {
+      "headline": "Dreamforce brings conference activity to downtown",
+      "summary": "A September 14 Chronicle report previewed Dreamforce at Moscone Center for September 15–17 and described a 50,000-person conference. That figure is the reported conference size, not verified foot traffic or restaurant demand.",
+      "topic": "business",
+      "salience": "none",
+      "url": "https://www.sfchronicle.com/sf/article/dreamforce-tech-ai-22428059.php",
+      "date": "2026-09-14"
     }
   ]
 }

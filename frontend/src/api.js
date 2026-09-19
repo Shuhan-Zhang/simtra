@@ -73,7 +73,7 @@ export const getCities = () => req("/cities", { timeout: 12000 });
 export const getNews = (city) =>
   req(`/cities/${encodeURIComponent(city)}/news`, { timeout: 10000 });
 
-// Ambient Jev-selected template chatter for the residents currently on screen (sparse + batched).
+// Gemini-generated thoughts for visible synthetic residents (sparse, batched and cached).
 // Returns { chatter: { "<agentId>": "<thought>", ... } }.
 export const getChatter = (branchId, ids) =>
   req(`/branches/${encodeURIComponent(branchId)}/chatter`, {

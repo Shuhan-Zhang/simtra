@@ -23,6 +23,19 @@ impl ResearchState {
         let workspace = crate::memory::normalize_workspace(headers.get("x-simtra-workspace").and_then(|v| v.to_str().ok()));
         Self { client: self.client.clone(), panels: Arc::new(self.panels.in_workspace(&workspace)), gate: self.gate.clone() }
     }
+    pub fn context_for(&self, headers: &HeaderMap, reference: &crate::research::PanelReference) -> anyhow::Result<String> {
+        let panel = self.in_workspace(headers).panels.get(&reference.id, Some(reference.version))?
+            .ok_or_else(|| anyhow::anyhow!("Audience research version not found in this workspace"))?;
+        anyhow::ensure!(panel.content_hash == reference.content_hash, "Audience research changed; research again");
+        anyhow::ensure!(panel.status == "draft" && !panel.sources.is_empty() && !panel.personas.is_empty(), "Audience research needs more evidence");
+        // Pin bounded excerpts and inferred attributes. Never replace Census weights
+        // with research-profile counts, and never send entire fetched pages.
+        Ok(json!({"panel":reference, "question":panel.question,
+            "sources":panel.sources.iter().take(8).map(|s|json!({"id":s.id,"title":s.title,"url":s.url,"retrieved_at":s.retrieved_at,"excerpt":s.text.chars().take(800).collect::<String>()})).collect::<Vec<_>>(),
+            "profiles":panel.personas.iter().take(6).collect::<Vec<_>>(),
+            "limitations":"Qualitative research profiles, not measured demographic prevalence. Attributes are inferences; sources may cover other markets. Census personas and weights remain fixed.",
+            "gaps":panel.gaps,"conflicts":panel.conflicts}).to_string())
+    }
     pub fn new(client: ModelClient, path: &str) -> anyhow::Result<Self> {
         Ok(Self {
             client,

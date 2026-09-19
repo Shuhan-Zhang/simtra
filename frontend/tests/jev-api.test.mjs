@@ -36,7 +36,7 @@ test('missing live A/B endpoint reports failure and never loads saved prediction
   } finally { globalThis.fetch = original; }
 });
 test('Jev factors and offline results are labeled without mislabeling old results', () => {
-  assert.equal(rationaleLabel(['Jev-selected factor (template): affordability.']),'Jev-selected factors · not resident quotes');
+  assert.equal(rationaleLabel(['Jev-selected factor (template): affordability.']),'Modeled factors · not resident quotes');
   assert.equal(rationaleLabel(['Older model response']),'simulated responses from this audience');
   assert.equal(estimateLabel({model:'jev-1.13.0'}),'Jev model estimate');
   assert.match(estimateLabel({model:'jev-1.13.0',fixture_mode:true}),/not a live prediction/);

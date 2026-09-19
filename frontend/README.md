@@ -6,7 +6,7 @@ Static JavaScript frontend for the synthetic-city map, resident filters, predict
 
 From the repository root:
 
-1. Put `TYPESAFE_API_KEY` in the ignored server `.env` file.
+1. Put `TYPESAFE_API_KEY` and `BRAVE_SEARCH_API_KEY` in the ignored server `.env` file.
 2. Run `cargo run --bin server` (port 8080).
 3. In another terminal, run `python3 -m http.server 5173 --directory frontend`.
 4. Open `http://localhost:5173`.
@@ -22,7 +22,7 @@ Keep API keys on the Rust server. The browser sends no provider credentials.
 - Predictions, question routing, A/B tests and counterfactuals use `jev-1.13.0`. `?model=jev-latest` or `?model=jev-preview` selects a moving alias. Legacy model names in old links resolve to pinned Jev.
 - Poll dates default to today. `?as_of=YYYY-MM-DD` overrides the evaluation date; this does not guarantee a historical model knowledge cutoff.
 - For categorical questions, enumerate choices: `Which commute do residents prefer: bus, train, or bicycle?` The router can request clarification instead of inventing categories.
-- Jev factors are labeled as selected factors, not resident quotes. Chatter and reactions use labeled illustrative templates because Jev returns typed decisions rather than free-form prose.
+- Jev supplies structured prediction probabilities and factors. Resident thoughts and reactions use Gemini with `GEMINI_API_KEY` and optional `GEMINI_MODEL` (default `gemini-3.5-flash-lite`), restoring the previous narrative behavior. Missing Gemini leaves voices unavailable; there is no template substitution.
 - A router outage or missing live A/B endpoint produces an error, never a guessed framing or a saved result masquerading as a prediction.
 - `?demo=1` remains an explicitly labeled, offline fixture demo.
 - Resident memory and event reactions still require the optional Neo4j backend configuration. Verified-data queries remain deterministic and do not call Jev.
@@ -32,9 +32,10 @@ The map's colored residents visualize aggregate probabilities. Census weights an
 ## Automatic experiments
 
 The original blue town and ask box are the default surface. Enter a decision;
-Simtra plans and runs a bounded comparison automatically. General opinion questions
-use a quick prediction; images retain their image-aware prediction or A/B flow.
-Optional mode and location controls are collapsed under Options. Refine a completed
+Simtra researches public sources, builds evidence-backed qualitative customer profiles,
+then plans and runs a bounded comparison automatically. The entry point is text-only.
+General opinion questions use a quick prediction.
+Automatic and Quick prediction modes are visible directly below the text prompt. Refine a completed
 experiment when you want to change its assumptions.
 
 `POST /cities/:city/experiment-plan` makes one typed Jev evaluation to select a
@@ -48,7 +49,8 @@ into explicit experimental assumptions, available while running and with the res
   steerable hypotheses, not verified menu prices. No invented budget, discount or
   redemption caps. A stated budget remains a constraint, not an allocation.
 - Price changes: six points from current to the requested percentage, crossed
-  with area and format. A 20% increase tests 0%, +4%, +8%, +12%, +16%, +20%;
+  with area and format. When no amount is specified, 0–20% is an explicit editable
+  hypothesis. A 20% increase tests 0%, +4%, +8%, +12%, +16%, +20%;
   no absolute menu price is invented unless the user selects assumed dollar prices.
 - Other resident-preference decisions: explicitly listed alternatives after a
   colon, or current approach vs proposed change, crossed with availability and
@@ -59,11 +61,15 @@ The results card ranks the requested weighted metric, with tied ranks where
 appropriate, top-three-first disclosure and all combinations available. Price
 experiments show six selectable price points with area and format held fixed;
 switch either to inspect another curve. Lines are visual guides, not
-fitted elasticity or supply estimates. Quick prediction, A/B and post tests remain
-available as secondary composer modes.
+fitted elasticity or supply estimates. Quick prediction remains available next to Automatic. Historical A/B and post
+results stay readable; their launch controls are absent from the entry point.
 
 `POST /branches/:bid/research` evaluates every scenario against the branch's same
 immutable sampled population, model, evaluation date and supplied assumptions. It
+accepts an optional `research_panel` reference (ID, exact version and content hash),
+resolved only from the caller’s workspace on the server. A bounded evidence snapshot
+is identical in every scenario; profile counts never replace Census population weights.
+Missing, changed or insufficient evidence fails before inference. The endpoint
 uses the existing weighted polling engine but excludes mutable news, retrieval and
 persona-memory reads/writes. Every archetype must answer every scenario; partial
 comparisons are errors. The response includes normal weighted poll results plus
@@ -141,7 +147,40 @@ provider bodies or hidden model reasoning. Old saved runs have no retroactive tr
 10,000 synthetic residents are grouped into up to 160 representative archetypes,
 evaluated in batches of 12 for each scenario. Members inherit their group's answer;
 these are not independent interviews or observed customers. This controlled pipeline
-uses explicit assumptions, not web research, mutable news or previous-run memories.
+uses explicit assumptions, optional pinned web-research context and one frozen
+snapshot of dated news, never per-scenario mutable news or previous-run memories.
 `MODEL_FIXTURE=1` is reserved for local mock-provider tests and labels their results.
 Disconnecting cancels further streamed work; an already dispatched provider request
 may still be processed. EOF, partial coverage and provider errors never save a result.
+
+## Chipotle walkthrough
+
+Enter “I want to raise chipotle bowl prices in sf”. The live path requires search
+and Jev; unavailable research produces a clear error instead of invented sources.
+The progress card shows research, the area × price × format plan, and real completed
+scenario counts. Results show the price curve, matched factor differences and Census
+breakdowns. Operating costs, actual sales and profit are not inferred from stated intent.
+
+Choose “Follow this scenario over 14 days” to start the selected offer on the same
+audience with the same pinned research. This estimates daily routine adaptation; it
+is not a continuation of the purchase-intent metric. The timeline’s single composer
+accepts hypothetical news updates or yes/no questions. Updates take effect on the next
+uncomputed day; questions use the viewed recorded day. Previous frames never change.
+No Neo4j configuration is required for these timeline-local updates. Up to 20 updates
+and 20 questions per run; playback is bounded to 14 days and can be paused or replayed.
+
+Browser regression: `node frontend/tests/chipotle-flow-browser.cjs` (Playwright +
+Chrome; set `SIMTRA_PLAYWRIGHT` to a local package path if needed). This test uses
+explicit mocked responses; it does not verify provider credentials or live accuracy.
+
+Resident map labels are matched through the selected scenario’s exact response-group
+member IDs. Generic fallback quotes and cycling anonymous rationales across unrelated
+residents are removed. Sparse, cached Gemini-generated thoughts remain in the idle map. Tapping a resident opens its actual Census-based synthetic
+profile. Quick-prediction map colors illustrate the aggregate split and do not
+claim individual answers.
+
+SF news is refreshed with verified September 14–18, 2026 sources for the September19
+demo. Publication dates and links remain attached. Only the preceding seven days
+through the evaluation date enter prompts. Experiments freeze the news snapshot once;
+the timeline checks that snapshot when continuing. A failed fetch never relabels an
+old cache as current.

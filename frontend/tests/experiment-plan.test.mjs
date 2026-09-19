@@ -74,3 +74,15 @@ test('control records retain exact experiments and evidence without duplicating 
   assert.equal(record.scenarios[0].coveredResidents,1);assert.equal(record.events.length,1);
   assert.doesNotMatch(JSON.stringify(record),/privatePersona/);assert.deepEqual(record.experiment,run.experiment);
 });
+test('Chipotle demo without a stated price uses a bounded relative bowl sweep',()=>{
+  const plan=autoPlan('I want to raise chipotle bowl prices in sf',{...route,kind:'price'}), exp=compilePlan(plan);
+  assert.equal(plan.business,'restaurant');
+  assert.equal(plan.priceMode,'relative');
+  assert.equal(plan.priceSuggested,true);
+  assert.deepEqual(exp.scenarios.slice(0,6).map(s=>s.change),[0,4,8,12,16,20]);
+  assert.equal(exp.scenarios.length,24);
+  assert.match(exp.question,/buy a bowl/);
+  assert.match(exp.assumptions,/No absolute menu price is assumed/);
+  assert.match(exp.assumptions,/same city-wide audience/);
+  assert.ok(exp.scenarios.every(s=>s.price===undefined && !s.description.includes('$')));
+});

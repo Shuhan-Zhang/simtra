@@ -116,3 +116,15 @@
 .ex-log-lines small, .ex-log-lines span, .ex-log-lines code { display: block; }
 .ex-log-lines small { color: #557b9d; font-size: 10px; }
 .ex-log-lines code { color: #68849b; font-size: 10px; overflow-wrap: anywhere; }
+
+/* The plan reads as a compact research pipeline rather than a control panel. */
+.ex-stages{list-style:none;padding:0;margin:28px 0;display:grid;gap:0}
+.ex-stages li{display:flex;gap:16px;padding:18px 0;color:var(--muted,#888);border-top:1px solid #8882}
+.ex-stages li>b{font:500 13px monospace;border:1px solid #8884;border-radius:50%;width:34px;height:34px;display:grid;place-items:center;flex:none}
+.ex-stages li>span{font-size:15px}.ex-stages small{display:block;font-size:12px;line-height:1.5;margin-top:5px}
+.ex-stages .current{color:var(--accent,#007aff)}.ex-stages .done{color:#339779}
+.ex-factor-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:20px 0}
+.ex-factor-grid>div{background:#8881;border:1px solid #8882;border-radius:14px;padding:14px}
+.ex-factor-grid span,.ex-factor-grid small{display:block;font-size:11px;line-height:1.5;overflow-wrap:anywhere}
+.ex-factor-grid strong{display:block;font-size:36px;font-weight:500;margin:8px 0}
+.ex-impact{margin:24px 0}.ex-impact h3{font-size:14px}.ex-impact>div{display:flex;justify-content:space-between;border-bottom:1px solid #8882;padding:10px 0;font-size:13px}.ex-impact small{display:block;font-size:11px;color:#888;margin-top:3px}
