@@ -47,12 +47,14 @@ async fn base() -> (
     std::env::set_var("MODEL_API_KEY", "local-contract-fixture");
     std::env::set_var("OPENAI_API_URL", &model_url);
     std::env::set_var("ANTHROPIC_API_URL", &model_url);
-    std::env::set_var("GEMINI_API_URL", &model_url);
+    std::env::set_var("TYPESAFE_BASE_URL", &model_url);
     // The local contract always runs with the Neo4j memory layer disabled, even when
     // the developer's shell carries real Aura credentials.
     for key in [
         "ANTHROPIC_API_KEY",
-        "GEMINI_API_KEY",
+        "TYPESAFE_API_KEY",
+        "JEV_API_KEY",
+        "JEV_MODEL",
         "HYDRA_DB_KEY",
         "HYDRA_DB_API_KEY",
         "SF_PUMS_PATH",

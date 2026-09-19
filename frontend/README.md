@@ -1,69 +1,38 @@
-# SimFrancisco — simpler map frontend
+# Simtra frontend · Jev
 
-A clean, zero-build web app that visualizes SF-wide poll predictions on a map of
-San Francisco. Type a question, and the synthetic electorate's verdict
-accumulates across the city as green (yes) / red (no) dots.
+Static JavaScript frontend for the synthetic-city map, resident filters, predictions, A/B tests, marketing counterfactuals, and verified Census-data views. No frontend build or package install is required.
 
-This is the **simpler** of the two frontends: a real SF outline (no pixel art,
-no zoom), with stochastic per-dot poll results. It talks directly to the
-deployed backend (`https://sf-digital-twin-tp.fly.dev`) — see `../INTEGRATION.md`.
+## Run locally
 
-Glassmorphic chrome over a painted map. The palette is sampled from the project's
-pixel-art palette image (warm sand land, pale-blue bay, violet accent, green/red
-verdicts). Title in **Pixelify Sans**; body in **futura-pt** (Typekit).
+From the repository root:
 
-## Run
+1. Put `TYPESAFE_API_KEY` in the ignored server `.env` file.
+2. Run `cargo run --bin server` (port 8080).
+3. In another terminal, run `python3 -m http.server 5173 --directory frontend`.
+4. Open `http://localhost:5173`.
 
-No build, no install. Serve the folder over HTTP (ES modules need `http://`, not
-`file://`):
+Local pages use the local backend by default. `?port=18473` selects another local backend port. An explicit `?backend=local` remains supported. Hosted pages never contact a visitor's localhost.
 
-```bash
-cd frontend
-python3 -m http.server 5173
-# then open http://localhost:5173
+For a hosted frontend, configure your deployed Jev backend's HTTPS origin in `backend-config.js` as `window.SIMTRA_BACKEND`. A `?backend=https://your-api.example` URL can override it. The older public API is no longer a fallback. This change does not deploy either service.
+
+Keep API keys on the Rust server. The browser sends no provider credentials.
+
+## Jev behavior
+
+- Predictions, question routing, A/B tests and counterfactuals use `jev-1.13.0`. `?model=jev-latest` or `?model=jev-preview` selects a moving alias. Legacy model names in old links resolve to pinned Jev.
+- Poll dates default to today. `?as_of=YYYY-MM-DD` overrides the evaluation date; this does not guarantee a historical model knowledge cutoff.
+- For categorical questions, enumerate choices: `Which commute do residents prefer: bus, train, or bicycle?` The router can request clarification instead of inventing categories.
+- Jev factors are labeled as selected factors, not resident quotes. Chatter and reactions use labeled illustrative templates because Jev returns typed decisions rather than free-form prose.
+- A router outage or missing live A/B endpoint produces an error, never a guessed framing or a saved result masquerading as a prediction.
+- `?demo=1` remains an explicitly labeled, offline fixture demo.
+- Resident memory and event reactions still require the optional Neo4j backend configuration. Verified-data queries remain deterministic and do not call Jev.
+
+The map's colored residents visualize aggregate probabilities. Census weights and source-record counts remain distinct from simulated-resident counts.
+
+## Checks
+
+```sh
+node --test frontend/tests/*.test.mjs frontend/src/*.test.mjs
 ```
 
-or `npx serve -l 5173` / any static server.
-
-## Use
-
-- The map fills the page and shows ~1,200 real synthetic residents as dots.
-- Click the **⌕ ask** bar (bottom-center), or press **⌘K** / **/**. It expands
-  horizontally into a **"predict anything"** textbox. Type a question (e.g. *"Do
-  you support more public transit funding?"*) and hit **↵**.
-- The query summary + a live response progress bar appear top-right; green/red
-  verdicts accumulate across the map into a poll-map distribution.
-- When complete, a **result card expands above the bar** with the distribution.
-  **Dismiss** to clear, or **Ask another** to run a new prediction. **Esc**
-  cancels an in-flight poll or dismisses; clicking the busy bar also cancels.
-
-## How it maps to the backend
-
-| UI step | Backend call |
-|---|---|
-| boot | `POST /simulations` → `GET /branches/{main}/agents` (real lon/lat for dots) |
-| submit a prediction | `POST /simulations/{id}/branches` ("triggers the branching") |
-| accumulating results | `POST /branches/{id}/poll` → `p_yes` + CI + breakdowns |
-| dismiss | `DELETE /branches/{id}` (cleanup) |
-
-**Note on the per-dot colors:** `/poll` returns an *aggregate* (`p_yes`), not a
-verdict per agent. Per the simpler-frontend spec, the per-dot green/red is a
-**stochastic visualization** — `src/verdict.js` assigns colors so the on-screen
-yes-share matches `p_yes` exactly while forming organic regions (a real poll-map
-look). The top-right "summary" currently shows the question verbatim; if the
-backend adds a summarize endpoint, it slots into `runPrediction()` in
-`src/app.js`.
-
-## Files
-
-```
-index.html          page shell + UI overlay (Pixelify title, bottom "ask" dock)
-styles.css          palette + glassmorphic chrome (snappy motion)
-src/config.js       backend URL, sim params, palette, timings
-src/api.js          backend client (fetch + timeouts)
-src/projection.js   lon/lat → screen + point-in-polygon
-src/map.js          canvas renderer (landmass, dots, reveal animation)
-src/verdict.js      stochastic per-dot yes/no (marginal == p_yes)
-src/sf-outline.js   embedded SF land outline (GeoJSON)
-src/app.js          state machine + UI orchestration
-```
+The tests cover provider selection, safe backend configuration, request bodies, failure behavior, evidence charts, resident selection and verified-data contracts. See `../JEV_BACKEND.md` for backend interfaces and tests.

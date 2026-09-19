@@ -9,7 +9,8 @@
 //        the "whole city" button returns to the overview.
 // ─────────────────────────────────────────────────────────────────────────
 
-import { SIM, PREDICT, TIMING, MAP } from "./config.js";
+import { SIM, PREDICT, TIMING, MAP, BASE, BACKEND_SETUP_MESSAGE } from "./config.js";
+import { rationaleLabel, estimateLabel } from "./model-display.js";
 import { SFMap } from "./map.js";
 import { assignVerdicts } from "./verdict.js";
 import {
@@ -209,7 +210,7 @@ const inputOpen = () => els.ask.dataset.state === "input";
 
 const ASK_MODE_LABEL = { predict: "ask", ab: "A/B test", marketing: "post test" };
 const ASK_MODE_PLACEHOLDER = {
-  predict: "predict anything — e.g. will a Democrat win the 2026 California governor race?",
+  predict: "Ask a question — for choices, list options: bus, train, or bicycle",
   ab: "Which message makes you more likely to support this proposal?",
   marketing: "Do you support the proposed transit measure?",
 };
@@ -288,7 +289,7 @@ function chartOptionsOf(result, ab = false) {
   if (result.framing === "options" && Array.isArray(result.p_distribution)) return result.p_distribution.map((d) => String(Array.isArray(d) ? d[0] : d));
   return [];
 }
-// Ask specific residents the question in their own words (one batched model call).
+// Request individual Jev decisions and labeled factor templates (one batch).
 async function fetchPersonal(testId, agentIds) {
   if (!state.mainBranch || !testId || !agentIds?.length) return null;
   const data = await api.postPersonalAnswers(testId, { branch_id: state.mainBranch, agent_ids: agentIds, limit: 20 });
@@ -609,8 +610,8 @@ async function loadCity(city, { filters = state.filters, preserveOnError = false
     hide(els.newsBubble);
     state.simId = null; state.mainBranch = null;
     map.setAgents(fallbackAgents(SIM.n));        // never leave an empty city
-    els.status.textContent = "backend unreachable · retrying…";
-    toast("Couldn't reach the backend — retrying every few seconds.");
+    els.status.textContent = !BASE ? "offline preview · Jev backend not configured" : "offline preview · Jev backend unreachable";
+    toast(!BASE ? BACKEND_SETUP_MESSAGE : "Couldn't reach the Jev backend — showing an offline preview.");
     state.phase = "error";
     syncFilterButton();
     scheduleBackendRetry(city, filters);
@@ -1090,12 +1091,6 @@ function cancelPrediction() {
   state.phase = "idle";
 }
 
-// heuristic framing, used only as a fallback when /parse is unavailable
-function guessFraming(question) {
-  return /\b(will|won't|by \d{4}|going to)\b/i.test(question) ||
-    /^(will|is|are|does|do|can|could|would|should)\b/i.test(question) ? "belief" : "vote";
-}
-
 // Verified questions are independent of simulation creation, branches and opinions.
 async function runVerifiedQuery(question) {
   question = (question || "").trim();
@@ -1207,27 +1202,15 @@ async function runPrediction(question) {
   map.setWaiting();
 
   try {
-    // classify first; fall back to a heuristic binary framing if /parse is missing
-    let parsed = null;
-    try {
-      parsed = await api.parseQuestion(citySlug(), question, signal);
-    } catch (perr) {
-      console.warn("parse unavailable, falling back to binary framing:", perr);
-    }
+    // Typed routing must succeed before polling; never invent binary framing
+    // when the Jev router is unavailable or asks for explicit option labels.
+    const parsed = await api.parseQuestion(citySlug(), question, signal);
     if (myReq !== state.reqId) return;
-
-    if (parsed && parsed.supported === false) {
-      const routerUnavailable = /could not reach the model|router.*unavailable/i.test(parsed.reason || "");
-      if (routerUnavailable) {
-        console.warn("question router unavailable, using local framing fallback");
-        parsed = null;
-      } else {
-        showRephrase(parsed, question);
-        return;
-      }
+    if (parsed?.supported === false) { showRephrase(parsed, question); return; }
+    if (!parsed?.supported || !["vote", "belief", "options"].includes(parsed.framing)) {
+      throw new Error("Jev could not classify this question. Please try again.");
     }
-
-    const framing = parsed?.framing || guessFraming(question);
+    const framing = parsed.framing;
     const description = parsed?.description || "";
     const options = parsed?.options && parsed.options.length ? parsed.options : undefined;
     // Keep the user's own wording. The router still supplies framing, a neutral
@@ -1255,7 +1238,7 @@ async function runPrediction(question) {
     // p_yes drives the on-map green/red reveal for both paths; for options it is the
     // winning option's share, so the crowd still visualizes the result's strength.
     const verdicts = assignVerdicts(map.agents, result.p_yes, pollQuestion, map.proj.planarSize);
-    map.setRationales(result.sample_rationales);   // real per-agent reasoning → thought bubbles
+    map.setRationales(result.sample_rationales);   // labeled factor templates → thought bubbles
     els.progress.classList.remove("indeterminate");
     els.progressLabel.textContent = `0 / ${map.agents.length.toLocaleString()} responses`;
     map.onProgress = onRevealProgress;
@@ -1573,7 +1556,7 @@ function showMarketingResults(result) {
     <div class="res-scope">${audienceScope(result.audience)} · same audience in both arms</div>
     ${hydraMeta(exposed)}
     <div class="res-cf-note">Model-based comparison under simulated exposure of every sampled resident to the planned copy—not an estimate of organic reach. Each arm has its own 95% CI; no separate CI was estimated for the delta, so treat small shifts cautiously.</div>
-    ${rationales.length ? `<div class="res-why"><div class="res-why-label">simulated responses after exposure</div><ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul></div>` : ""}
+    ${rationales.length ? `<div class="res-why"><div class="res-why-label">${rationaleLabel(rationales, true)}</div><ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul></div>` : ""}
     <div class="res-actions"><button id="res-edit-marketing" class="btn btn-primary">Edit test</button><button id="res-dismiss" class="btn">Dismiss</button></div>`;
   showResultCard();
   attachEvidence(exposed);
@@ -1624,22 +1607,22 @@ function showResults(result) {
       <div class="res-q">${escapeHtml(result.question || "")}</div>
       <div class="res-headline">
         <span class="res-pct">${pct}<span class="res-pct-sym">%</span></span>
-        <span class="res-verb">${belief ? "answer yes" : "vote yes"}</span>
+        <span class="res-verb">${belief ? "estimated likelihood" : "support"}</span>
       </div>
       <div class="res-bar">
         <div class="res-bar-yes" style="width:${pct}%"></div>
         <div class="res-bar-no" style="width:${noPct}%"></div>
       </div>
       <div class="res-legend">
-        <span><i class="dot yes"></i>${belief ? "yes" : "support"} ${pct}%</span>
-        <span><i class="dot no"></i>${belief ? "no" : "oppose"} ${noPct}%</span>
+        <span><i class="dot yes"></i>${belief ? "occurs" : "support"} ${pct}%</span>
+        <span><i class="dot no"></i>${belief ? "does not occur" : "oppose"} ${noPct}%</span>
       </div>
       <div class="res-scope">${audienceScope(result.audience)}</div>
-      ${result.past ? pastMeta(result) : `<div class="res-meta">Model estimate · 95% interval ${ciLow}–${ciHigh}%</div>`}
+      ${result.past ? pastMeta(result) : `<div class="res-meta">${estimateLabel(result)} · 95% interval ${ciLow}–${ciHigh}%</div>`}
       ${hydraMeta(result)}
       ${breakdowns.length ? abAdvancedSection({ a_share: yesShare }, segments, breakdowns) : ""}
       ${rationales.length ? `<div class="res-why">
-        <div class="res-why-label">simulated responses from this audience</div>
+        <div class="res-why-label">${rationaleLabel(rationales)}</div>
         <ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>
       </div>` : ""}
       <div class="res-actions">
@@ -1700,10 +1683,10 @@ function showOptionResults(result) {
     <div class="res-q">${escapeHtml(result.question || "")}</div>
     <div class="res-options">${rows}</div>
     <div class="res-scope">${audienceScope(result.audience)}</div>
-    ${result.past ? pastMeta(result) : ""}
+    ${result.past ? pastMeta(result) : `<div class="res-meta">${estimateLabel(result)}</div>`}
     ${hydraMeta(result)}
     ${rationales.length ? `<div class="res-why">
-      <div class="res-why-label">simulated responses from this audience</div>
+      <div class="res-why-label">${rationaleLabel(rationales)}</div>
       <ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>
     </div>` : ""}
     ${RESULT_ACTIONS}
@@ -1985,7 +1968,7 @@ function showAbResults(result) {
       <div class="res-meta">A · 95% model interval ${pct(aCi[0])}–${pct(aCi[1])}%</div>
       ${hydraMeta(result)}
       ${breakdowns.length ? abAdvancedSection(result, segments, breakdowns) : ""}
-      ${rationales.length ? `<div class="res-why"><div class="res-why-label">simulated responses from this audience</div><ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul></div>` : ""}
+      ${rationales.length ? `<div class="res-why"><div class="res-why-label">${rationaleLabel(rationales)}</div><ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul></div>` : ""}
       <p class="ab-note">Simulated, PUMS-weighted preference under full exposure. Segment and cross-tab figures are model estimates with no per-group significance test — read them as direction, not proof. Not causal proof or organic reach.</p>
       <div class="res-actions"><button id="res-edit-ab" class="btn btn-primary">Edit test</button><button id="res-dismiss" class="btn">Dismiss</button></div>`;
     attachEvidence(result, true);

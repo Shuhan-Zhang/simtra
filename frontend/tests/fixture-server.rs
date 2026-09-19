@@ -1,18 +1,40 @@
 // Local-only integration fixture helper. See INTEGRATION-EVIDENCE.md.
 #[tokio::main]
 async fn main() {
-    let fixture = axum::Router::new().route("/openai/v1/responses", axum::routing::post(|axum::Json(body): axum::Json<serde_json::Value>| async move {
-        let dist = if body.to_string().contains("Parks") { vec![0.5, 0.3, 0.2] } else { vec![0.6, 0.4] };
-        let rows = vec![serde_json::json!({"p_yes": 0.6, "dist": dist, "why": "Deterministic local fixture response; not a model prediction or observed opinion."}); 12];
-        axum::Json(serde_json::json!({"output_text": serde_json::to_string(&rows).unwrap()}))
+    let fixture = axum::Router::new().route("/v1/systemone", axum::routing::post(|axum::Json(body): axum::Json<serde_json::Value>| async move {
+        use serde_json::{json, Map, Value};
+        let mut answers = Map::new();
+        for (id, question) in body["questions"].as_object().unwrap() {
+            let answer = match question["type"].as_str().unwrap() {
+                "noul" => json!({"type":"noul","noul":0.6}),
+                "score" => {
+                    let levels = question["criteria"].as_array().unwrap();
+                    let probabilities: Map<String, Value> = levels.iter().enumerate().map(|(i,_)| (i.to_string(), json!(if i == 2 { 1.0 } else { 0.0 }))).collect();
+                    let legend: Map<String, Value> = levels.iter().enumerate().map(|(i,v)| (i.to_string(),v.clone())).collect();
+                    json!({"type":"score","score":2.0,"probabilities":probabilities,"legend":legend,"confidence":1.0})
+                },
+                "choice" => {
+                    let criteria = question["criteria"].as_object().unwrap();
+                    let selected = if id == "route" {
+                        if body["state"]["candidate_options"].as_array().map_or(0, Vec::len) >= 2 { "explicit_options" } else { "vote" }
+                    } else { criteria.keys().next().unwrap().as_str() };
+                    let probabilities: Map<String, Value> = criteria.keys().map(|k| (k.clone(),json!(if k == selected { 1.0 } else { 0.0 }))).collect();
+                    json!({"type":"choice","choice":selected,"probabilities":probabilities,"confidence":1.0})
+                },
+                _ => panic!("unsupported fixture question"),
+            };
+            answers.insert(id.clone(), answer);
+        }
+        axum::Json(json!({"model":"jev-1.13.0","answers":answers,"usage":{"input_tokens":0,"output_tokens":0}}))
     }));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let model_url = format!("http://{}/openai/v1", listener.local_addr().unwrap());
+    let model_url = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, fixture).await.unwrap(); });
     std::env::set_var("MODEL_OFFLINE", "0");
-    std::env::set_var("MODEL_API_KEY", "local-fixture");
-    std::env::set_var("OPENAI_API_URL", &model_url);
-    for key in ["ANTHROPIC_API_KEY", "GEMINI_API_KEY", "HYDRA_DB_KEY", "HYDRA_DB_API_KEY", "SF_PUMS_PATH", "INSFORGE_API_KEY", "INSFORGE_ADMIN_KEY", "ROCKETRIDE_WEBHOOK_URL", "ROCKETRIDE_URL", "NEWS_API_KEY", "NEWS_REFRESH_HOURS"] { std::env::remove_var(key); }
+    std::env::set_var("TYPESAFE_API_KEY", "local-fixture");
+    std::env::set_var("TYPESAFE_BASE_URL", &model_url);
+    std::env::set_var("JEV_MODEL", "jev-1.13.0");
+    for key in ["ANTHROPIC_API_KEY", "MODEL_API_KEY", "JEV_API_KEY", "NEO4J_URI", "HYDRA_DB_KEY", "HYDRA_DB_API_KEY", "SF_PUMS_PATH", "INSFORGE_API_KEY", "INSFORGE_ADMIN_KEY", "ROCKETRIDE_WEBHOOK_URL", "ROCKETRIDE_URL", "NEWS_API_KEY", "NEWS_REFRESH_HOURS"] { std::env::remove_var(key); }
     let dir = std::env::var("SIMTRA_FIXTURE_DIR").expect("temporary fixture directory");
     let cache = format!("{dir}/cache.db");
     let store = format!("{dir}/state.db");

@@ -9,14 +9,14 @@ async (page) => {
   const check=(value,message)=>{if(!value)throw Error(message);};
   try {
     await mobile.goto('http://localhost:5173/?demo=1');
-    await mobile.waitForFunction(async()=> (await import('/src/app.js')).state.phase==='idle');
+    await mobile.waitForFunction(async()=> (await import(document.querySelector('script[type="module"]').src)).state.phase==='idle');
     await mobile.getByRole('group',{name:'Ask a prediction question'}).tap();
     await mobile.getByRole('textbox',{name:'Predict anything'}).fill('Should the city expand public transit?');
     await mobile.keyboard.press('Enter');
     await mobile.locator('#result-card').waitFor({state:'visible'});
     await mobile.getByText('Explore demographic evidence',{exact:true}).tap();
     await mobile.locator('button[data-key="women"]').tap();
-    const get=()=>mobile.evaluate(async()=> (await import('/src/app.js')).map.getSegmentSelectionSummary());
+    const get=()=>mobile.evaluate(async()=> (await import(document.querySelector('script[type="module"]').src)).map.getSegmentSelectionSummary());
     let result=await get();check(result.rawMatchingAgents===117 && result.weightedPumsCount===10750,'Touch Women totals');
     cases.push({name:'actual touchscreen Women bar',status:'passed',...result});
     await mobile.locator('#evidence-combine').tap();
@@ -30,7 +30,7 @@ async (page) => {
     check((await get()).active,'accessible resident picker');cases.push({name:'accessible resident picker uses active age dimension',status:'passed'});
     await mobile.locator('#evidence-dimension').selectOption('gender');await mobile.locator('button[data-key="women"]').tap();
     await mobile.screenshot({path:'/tmp/simtra-integration-evidence/mobile.png'});
-    await mobile.evaluate(async()=>{const {state,map}=await import('/src/app.js');for(const resident of state.rawResidents){delete resident.pums_weight;delete resident.segments;}map.setAgents(state.rawResidents);});
+    await mobile.evaluate(async()=>{const {state,map}=await import(document.querySelector('script[type="module"]').src);for(const resident of state.rawResidents){delete resident.pums_weight;delete resident.segments;}map.setAgents(state.rawResidents);});
     await mobile.locator('#evidence-dimension').selectOption('gender_x_age');
     check((await mobile.locator('[data-evidence-summary]').innerText()).includes('Counts are unknown'),'missing legacy metadata must not become zero');
     check(await mobile.locator('button[data-dimension="gender_x_age"]').first().isDisabled(),'legacy matching must be disabled');

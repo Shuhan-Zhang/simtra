@@ -2,39 +2,31 @@
 // SimFrancisco · pixel-map frontend · configuration
 // ─────────────────────────────────────────────────────────────────────────
 
-// Static frontend keeps using the public API. `?backend=local` works only when
-// the page itself runs on localhost, so shared deployments never call a visitor's machine.
+// This frontend requires the Jev backend from this branch. Local pages use the
+// local server by default. Hosted pages require an explicit HTTPS backend origin;
+// they must never fall back to the older public service or a visitor's localhost.
 const LOCATION = globalThis.location;
 const QUERY = new URLSearchParams(LOCATION?.search ?? "");
-const LOCAL_HOST = ["localhost", "127.0.0.1", "::1"].includes(LOCATION?.hostname);
-// Keep the public backend as the default, including for the static local frontend.
-// `?backend=local` is an explicit opt-in and remains impossible on shared deployments.
-const LOCAL_BACKEND = LOCAL_HOST && QUERY.get("backend") === "local";
-// `?port=` lets a second local stack run alongside the default one without
-// editing this file. Ignored unless the local backend is in use.
+const LOCAL_HOST = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(LOCATION?.hostname);
 const LOCAL_PORT = (() => {
   const raw = Number(QUERY.get("port"));
   return Number.isInteger(raw) && raw > 0 && raw < 65536 ? raw : 8080;
 })();
-// A deployed frontend can point at its own backend: `frontend/backend-config.js`
-// sets `window.SIMTRA_BACKEND` (edit it per deployment), or `?backend=https://…`
-// picks one for a single visit. Only https origins are accepted for the override.
-const CONFIGURED_BACKEND = (() => {
-  const fromFile = typeof globalThis.SIMTRA_BACKEND === "string" ? globalThis.SIMTRA_BACKEND.trim() : "";
-  const fromQuery = (QUERY.get("backend") || "").trim();
-  const pick = /^https:\/\/[^\s/]+/.test(fromQuery) ? fromQuery : fromFile;
-  return /^https:\/\/[^\s/]+/.test(pick) ? pick.replace(/\/+$/, "") : "";
-})();
-export const BASE = LOCAL_BACKEND
-  ? `http://localhost:${LOCAL_PORT}`
-  : CONFIGURED_BACKEND || "https://sf-digital-twin-tp.fly.dev";
-// Treat a configured backend like local mode for defaults (today's date, Gemini),
-// since it is our own server with the memory layer, not the original public one.
-const OWN_BACKEND = LOCAL_BACKEND || !!CONFIGURED_BACKEND;
+function httpsOrigin(value) {
+  try {
+    const url = new URL(typeof value === "string" ? value.trim() : "");
+    return url.protocol === "https:" && !url.username && !url.password
+      && url.pathname === "/" && !url.search && !url.hash ? url.origin : "";
+  } catch { return ""; }
+}
+const CONFIGURED_BACKEND = httpsOrigin(QUERY.get("backend")) || httpsOrigin(globalThis.SIMTRA_BACKEND);
+const LOCAL_BACKEND = LOCAL_HOST && (QUERY.get("backend") === "local" || !CONFIGURED_BACKEND);
+export const BASE = LOCAL_BACKEND ? `http://localhost:${LOCAL_PORT}` : CONFIGURED_BACKEND;
+export const BACKEND_SETUP_MESSAGE = "Set SIMTRA_BACKEND in backend-config.js to your Jev server's HTTPS origin.";
 
-// Synthetic population to spin up on load. 5,000 agents → a denser, more diverse
+// Synthetic population to spin up on load. 10,000 agents → a denser, more diverse
 // crowd; poll latency stays bounded because agents are clustered into ≤160 archetypes
-// before the LLM is called, so the call count (not N) sets the wait.
+// before Jev is called, so the call count (not N) sets the wait.
 export const SIM = {
   n: 10000,
   seed: 42,
@@ -47,17 +39,15 @@ export function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
-// Local demo defaults to Gemini; callers can select another configured backend
-// model with `?model=...`. Production keeps its existing model.
-// The local as-of date is today (override with `?as_of=YYYY-MM-DD`): persona
-// memory recalls only events dated on or before the poll date, so a live local
-// poll must be dated today to see what was just posted. Production keeps its
-// pinned date.
+// Jev is the live provider. Old links carrying another provider's model name
+// use the pinned Jev default; no browser credential or legacy provider fallback.
+const JEV_MODELS = new Set(["jev-1.13.0", "jev-latest", "jev-preview"]);
+const REQUESTED_MODEL = QUERY.get("model");
 const AS_OF_OVERRIDE = /^\d{4}-\d{2}-\d{2}$/.test(QUERY.get("as_of") || "") ? QUERY.get("as_of") : null;
 export const PREDICT = {
   branch_ticks: 2,
-  as_of_date: AS_OF_OVERRIDE || (OWN_BACKEND ? today() : "2026-06-13"),
-  model: QUERY.get("model") || (OWN_BACKEND ? "gemini-3.5-flash-lite" : "claude-sonnet-4-6"),
+  as_of_date: AS_OF_OVERRIDE || today(),
+  model: JEV_MODELS.has(REQUESTED_MODEL) ? REQUESTED_MODEL : "jev-1.13.0",
 };
 
 // Animation timing (ms).

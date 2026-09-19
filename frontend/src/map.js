@@ -48,7 +48,7 @@ const ISSUE = {
   s_environment: ["gotta bike more", "more bike lanes please", "ditching the car today", "recycle, reuse, repeat", "cleaner air would help", "protect the parks", "climate can't wait", "less plastic, please"],
   s_immigration: ["thinking of family back home", "finally getting my papers", "still new to the city", "sending money home", "learning the ropes here", "proud to be here", "my kids will have it better", "two cultures, one home"],
 };
-// city-neutral fallback chatter (shown only until the per-resident LLM thought
+// city-neutral fallback chatter (shown only until the per-resident Jev template
 // arrives, or if that call fails) — nothing here should name a specific city.
 const DAILY = ["need more coffee", "is it Friday yet?", "another meeting today", "what's for dinner?", "parking is impossible", "walking the dog", "running late again", "weekend can't come soon", "long day ahead", "running errands", "traffic's bad today", "gotta call mom back", "love this city honestly", "should've worn a jacket", "off to the gym", "grabbing lunch soon", "so much on my plate", "almost the weekend", "could use a vacation", "where'd the day go?", "another bill due", "time for a break", "kids to pick up", "my feet are killing me"];
 const POL = {
@@ -183,7 +183,7 @@ export class SFMap {
     this.chatterAsked = new Set();
   }
 
-  // Replace a resident's thought with its LLM-generated one (matched by backend id).
+  // Replace a resident's thought with its Jev-selected template one (matched by backend id).
   setThought(id, text) {
     if (!text) return;
     for (const a of this.agents) if (a.seed === id) { a.thought = text; return; }
@@ -687,7 +687,7 @@ export class SFMap {
     this.clearT0 = performance.now(); this.mode = "clearing";
   }
 
-  // distribute a poll's real sample_rationales across agents as thought bubbles
+  // distribute a poll's labeled sample_rationales across agents as thought bubbles
   setRationales(rationales) {
     const arr = (rationales || []).filter(Boolean);
     if (!arr.length) return;

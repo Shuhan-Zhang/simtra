@@ -283,7 +283,7 @@ async fn health(State(st): State<AppState>) -> impl IntoResponse {
             let slot = st.model_ok.clone();
             tokio::spawn(async move {
                 let ok = client
-                    .complete(model, "", "Reply with: OK", 64)
+                    .check_health(model)
                     .await
                     .is_ok();
                 *slot.lock().unwrap() = Some(ok);
@@ -1146,12 +1146,7 @@ fn counterfactual_inputs(req: CounterfactualReq) -> Result<(Poll, Event), String
     }
     let model = req.model.map(|value| value.trim().to_string());
     if let Some(value) = model.as_deref() {
-        let normalized = value.to_ascii_lowercase();
-        let supported = matches!(
-            normalized.as_str(),
-            "gpt-4o" | "gpt-5.5" | "grok-4.3" | "sonnet"
-        ) || normalized.starts_with("claude")
-            || normalized.starts_with("gemini");
+        let supported = Model::supported(value);
         if !supported {
             return Err("unsupported model".to_string());
         }
@@ -1285,13 +1280,10 @@ fn validate_ab_request(req: &AbTestReq) -> Result<(Model, Population0), String> 
     if NaiveDate::parse_from_str(&req.as_of_date, "%Y-%m-%d").is_err() {
         return Err("as_of_date must use YYYY-MM-DD".into());
     }
-    let model_name = req.model.as_deref().unwrap_or("claude-sonnet-4-6");
-    let model = match model_name.trim().to_ascii_lowercase().as_str() {
-        "gpt-4o" | "gpt4o" | "4o" | "gpt-5.5" | "gpt55" | "gpt-55" | "5.5" | "grok-4.3"
-        | "grok" | "grok43" | "sonnet" => Model::parse(model_name),
-        name if name.starts_with("claude") => Model::Sonnet,
-        name if name.starts_with("gemini") => Model::parse(model_name),
-        _ => return Err("unsupported model".into()),
+    let model = match req.model.as_deref() {
+        Some(name) if Model::supported(name) => Model::parse(name),
+        Some(_) => return Err("unsupported model".into()),
+        None => Model::default_live(),
     };
     let population = match req.population.as_deref().unwrap_or("all") {
         "all" => Population0::All,
@@ -1453,6 +1445,9 @@ async fn predict_market(
         .and_then(|x| x.as_str())
         .unwrap_or("sf_opinion_informative")
         .to_string();
+    if let Some(name) = req.get("model").and_then(|v| v.as_str()) {
+        if !Model::supported(name) { return (StatusCode::BAD_REQUEST, Json(json!({"error":"unsupported model"}))).into_response(); }
+    }
     let poll = Poll {
         question: question.clone(),
         description: req
@@ -1573,6 +1568,10 @@ fn find_branch(st: &AppState, bid: &str) -> Option<(Arc<SimContext>, Arc<BranchS
 }
 
 fn poll_from_json(req: &Value) -> Result<Poll, String> {
+    if let Some(name) = req.get("model").and_then(|v| v.as_str()) {
+        if !Model::supported(name) { return Err("unsupported model".into()); }
+    }
+
     let question = req
         .get("question")
         .and_then(|x| x.as_str())
@@ -1606,6 +1605,12 @@ fn poll_from_json(req: &Value) -> Result<Poll, String> {
                 .collect()
         })
         .unwrap_or_default();
+    let options: Vec<String> = options;
+    if framing == Framing::Options && (!(2..=255).contains(&options.len())
+        || options.iter().any(|s| s.trim().is_empty())
+        || options.iter().enumerate().any(|(i,s)| options[..i].contains(s))) {
+        return Err("options framing requires 2–255 distinct nonempty choices".into());
+    }
     Ok(Poll {
         question,
         description,
@@ -1787,11 +1792,16 @@ async fn parse_question_handler(
         .get(&city)
         .map(|r| r.profile.prompt_name.clone())
         .unwrap_or_else(|| "this city".to_string());
+    if let Some(model) = req.get("model").and_then(|v| v.as_str()).filter(|s| !s.trim().is_empty()) {
+        if !Model::supported(model) { return (StatusCode::BAD_REQUEST, Json(json!({"error":"unsupported model"}))).into_response(); }
+    }
     let model = match req.get("model").and_then(|x| x.as_str()) {
         Some(m) if !m.trim().is_empty() => Model::parse(m),
         _ => crate::predict::default_live_model(),
     };
-    let parsed = if let Some(rocketride) = &st.rocketride {
+    let parsed = if model.is_jev() {
+        crate::parse::parse_question(&st.client, &name, &raw, model).await
+    } else if let Some(rocketride) = &st.rocketride {
         match rocketride.parse_question(&name, &raw, model).await {
             Ok(parsed) => parsed,
             Err(error) => {
@@ -2609,7 +2619,7 @@ mod tests {
             .contains("at most 4000 characters"));
 
         let mut req = valid_counterfactual();
-        req.model = Some("gemini-3.5-flash".to_string());
+        req.model = Some("jev-1.13.0".to_string());
         assert!(counterfactual_inputs(req).is_ok());
     }
 
@@ -2629,9 +2639,9 @@ mod tests {
         assert!(validate_ab_request(&ab_req()).is_ok());
 
         let mut req = ab_req();
-        req.model = Some("gemini-3.5-flash".into());
-        let (model, _) = validate_ab_request(&req).expect("Gemini should be valid for A/B tests");
-        assert_eq!(model, Model::Gemini35Flash);
+        req.model = Some("jev-1.13.0".into());
+        let (model, _) = validate_ab_request(&req).expect("Jev should be valid for A/B tests");
+        assert_eq!(model, Model::Jev);
 
         let mut req = ab_req();
         req.variant_b = req.variant_a.clone();
