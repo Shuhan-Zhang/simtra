@@ -14,11 +14,13 @@ pub mod data_query;
 pub mod data_source;
 pub mod evidence;
 pub mod execution;
+pub mod evolution;
 pub mod geo;
 pub mod hydra;
 pub mod insforge;
 pub mod lifestyle;
 pub mod jev;
+pub mod locations;
 pub mod memory;
 pub mod model;
 pub mod news;
@@ -33,6 +35,7 @@ pub mod rocketride;
 pub mod rubric;
 pub mod sim;
 pub mod state;
+pub mod stimulus;
 pub mod store;
 
 pub mod api;
@@ -62,3 +65,9 @@ pub fn load_dotenv(path: &str) {
         }
     }
 }
+
+pub mod audience_pipeline;
+pub mod audience_sources;
+pub mod audience_api;
+
+pub mod audience_context;

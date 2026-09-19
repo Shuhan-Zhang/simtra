@@ -564,6 +564,7 @@ export class SFMap {
       if (e.type !== "pointercancel" && wasSingle && moved < 8) {            // a tap (not a drag)
         const r = rect();
         const tx = e.clientX - r.left, ty = e.clientY - r.top;
+        if (this.evolution) return;
         if (this.zoomedIn) {
           const hit = this._hitSprite(tx, ty);
           if (hit) {
@@ -702,7 +703,8 @@ export class SFMap {
 
   _draw(now) {
     const ctx = this.ctx;
-    const dt = this.reducedMotion ? 0 : Math.min(0.05, (now - this.lastT) / 1000);
+    // City residents keep walking; reduced motion still simplifies camera and reveal effects.
+    const dt = Math.min(0.05, (now - this.lastT) / 1000);
     this.lastT = now;
 
     // animate camera toward target (snappy critically-damped-ish lerp)
@@ -729,9 +731,10 @@ export class SFMap {
       if (f >= 1) { for (const a of this.agents) a.verdict = null; this.clearFade = 1; this.mode = "idle"; this.revealCount = 0; }
     }
 
-    this._drawSprites(now, dt);
-    if (!this.reducedMotion) this._updateBubbles(now);
-    this._drawBubbles();
+    if (!this.evolution) this._drawSprites(now, dt);
+    if (!this.reducedMotion && !this.evolution) this._updateBubbles(now);
+    if (!this.evolution) this._drawBubbles();
+    if (this.evolution) this._drawEvolution();
 
     // reveal progress + completion (unchanged contract for app.js)
     if (this.mode === "reveal") {
@@ -745,6 +748,50 @@ export class SFMap {
         this.onRevealComplete && this.onRevealComplete();
       }
     }
+  }
+
+  setEvolution(data) {
+    this.evolution = data;
+    this._evolutionActions = new Map();
+    if (!data) return;
+    for (const group of data.groups) {
+      const behavior = data.frame.behaviors.find(b => b.group === group.id);
+      const distribution = Object.entries(behavior?.probabilities || {[behavior?.outcome || 'same']: 1}).sort(([a],[b]) => a.localeCompare(b));
+      for (const id of group.members) {
+        let hash = Math.imul(id + 1, 0x45d9f3b); hash = Math.imul(hash ^ (hash >>> 16), 0x45d9f3b); hash ^= hash >>> 16;
+        const rank = (hash >>> 0) / 4294967296;
+        let cumulative = 0, action = distribution.at(-1)?.[0] || 'same';
+        for (const [candidate, probability] of distribution) {cumulative += probability; if (rank < cumulative) {action = candidate; break;}}
+        this._evolutionActions.set(id, action);
+      }
+    }
+  }
+
+  _drawEvolution() {
+    const ctx = this.ctx, evo = this.evolution;
+    const buckets = new Map();
+    for (const agent of this.agents) {
+      const action = this._evolutionActions.get(agent.seed);
+      if (!action) continue;
+      const p = this.worldToScreen(agent.hx, agent.hy);
+      if (p.x < 0 || p.y < 0 || p.x > this.cssW || p.y > this.cssH) continue;
+      if (!buckets.has(action)) buckets.set(action, []);
+      buckets.get(action).push(p);
+    }
+    ctx.save();
+    // Draw unchanged dots first and changed behaviors above them. Positions and
+    // cohort assignments are stable during replay; map dots are not weighted counts.
+    const order = [...buckets.keys()].sort((a,b) => Number(a !== 'same' && a !== 'unaffected') - Number(b !== 'same' && b !== 'unaffected'));
+    for (const action of order) {
+      const changed = action !== 'same' && action !== 'unaffected';
+      ctx.globalAlpha = evo.activeAction ? (evo.activeAction === action ? .95 : .09) : changed ? .9 : .22;
+      ctx.fillStyle = evo.colors[action] || '#007aff';
+      const radius = changed ? 2.6 : 1.7;
+      ctx.beginPath();
+      for (const p of buckets.get(action)) {ctx.moveTo(p.x + radius,p.y);ctx.arc(p.x,p.y,radius,0,Math.PI*2);}
+      ctx.fill();
+    }
+    ctx.restore();
   }
 
   _drawSprites(now, dt) {
@@ -786,7 +833,7 @@ export class SFMap {
       const w = drawPx, h = drawPx;
       const footX = s.x, footY = s.y;     // feet anchored to the cell
       const matched = selecting && selection.matchMask[a.segmentIndex] === 1;
-      const selectionAlpha = selecting && !matched ? 0.25 : 1;
+      const selectionAlpha = this.evolution ? 0.12 : selecting && !matched ? 0.25 : 1;
 
       if (drawPx < 9 || !spriteOk) {
         // overview LOD: a cheap colored square per agent (keeps 10k sprites at 60fps;

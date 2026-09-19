@@ -14,9 +14,10 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { BASE, today } from "./config.js";
-import { detectKind, nextKind } from "./detect-kind.js";
+import { workspaceHeaders, shareUrl, startNewWorkspace } from "./workspace.js?v=2";
+import { detectKind } from "./detect-kind.js";
 import { buildEvidenceChartModel } from "./evidence-chart.js";
-import { createPersonaChart } from "./persona-chart.js?v=4";
+import { createPersonaChart } from "./persona-chart.js?v=5";
 import { buildVerifiedDataModel, renderVerifiedData, bindVerifiedData, verifiedMapSelection } from "./verified-data.js";
 
 const SENTIMENTS = ["support", "oppose", "worried", "angry", "sad", "hopeful", "indifferent"];
@@ -27,9 +28,10 @@ const PREVIEW_POSTS = 5;   // event posts near the top fetch their comment previ
 const PREVIEW_N = 3;
 const COLLAPSE_KEY = "simtra.feed.collapsed";
 const VIEW_KEY = "simtra.feed.view";
-const VIEWS = [["all", "All"], ["news", "News"], ["asks", "Asks"], ["data", "Data"]];
+const VIEWS = [["all", "All"], ["news", "News"], ["asks", "Surveys"], ["data", "Data"]];
+const VIEW_TITLES = { all: "Show everything", news: "Only posted news and events", asks: "Only surveys you ran", data: "Only verified Census data queries" };
 const TEST_KINDS = {
-  poll: "poll",
+  poll: "survey",
   ab_test: "A/B test",
   counterfactual_baseline: "baseline",
   counterfactual_exposed: "with hypothetical",
@@ -39,12 +41,17 @@ const TEST_KINDS = {
 
 // ── http ───────────────────────────────────────────────────────────────────
 async function req(path, { method = "GET", body, timeout = 30000 } = {}) {
+  if (new URLSearchParams(globalThis.location?.search || "").get("demo") === "1") {
+    const error = new Error("Live timeline is unavailable in the offline demo.");
+    error.status = 503;
+    throw error;
+  }
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeout);
   try {
     const res = await fetch(`${BASE}${path}`, {
       method,
-      headers: body ? { "content-type": "application/json" } : undefined,
+      headers: { ...workspaceHeaders(), ...(body ? { "content-type": "application/json" } : {}) },
       body: body ? JSON.stringify(body) : undefined,
       signal: ctrl.signal,
     });
@@ -54,6 +61,7 @@ async function req(path, { method = "GET", body, timeout = 30000 } = {}) {
     if (!res.ok) {
       const error = new Error(data?.error || data?.message || res.statusText);
       error.status = res.status;
+      error.code = data?.code;
       throw error;
     }
     return data;
@@ -81,7 +89,7 @@ const api = {
       { timeout: 20000 }),
   react: (branchId, eventId, n = REACT_N) =>
     req(`/branches/${encodeURIComponent(branchId)}/events/${encodeURIComponent(eventId)}/react`,
-      { method: "POST", body: { n }, timeout: 120000 }),
+      { method: "POST", body: { n }, timeout: 20000 }),
   poll: (branchId, body) =>
     req(`/branches/${encodeURIComponent(branchId)}/poll`, { method: "POST", body, timeout: 180000 }),
 };
@@ -90,9 +98,11 @@ const api = {
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const sentimentOf = (s) => (SENTIMENTS.includes(s) ? s : "indifferent");
 function friendly(error) {
+  if (error?.code) return error.message;
   const s = error?.status;
   if (s === 503) return "Persona memory is not configured on this backend.";
-  if (s === 429 || s === 502) return "Residents are rate-limited right now. Try again in a minute.";
+  if (s === 429) return "Residents are rate-limited right now. Try again in a minute.";
+  if (s === 502) return "The backend could not complete this request. Check its database or model connection and retry.";
   if (s === 504) return "The backend took too long to answer. Try again.";
   if (s === 404) return "That no longer exists on the backend.";
   return error?.message || "Something went wrong.";
@@ -124,6 +134,7 @@ const plural = (n, w, ws = `${w}s`) => `${n} ${n === 1 ? w : ws}`;
 
 // ── state ──────────────────────────────────────────────────────────────────
 const state = {
+  loaded: false,        // first lineage fetch finished (skeleton until then)
   getCity: () => "sf",
   getBranch: () => null,
   getCityDisplay: () => "San Francisco",
@@ -149,6 +160,8 @@ const state = {
   posts: new Map(),     // item id -> post element
   memoryOff: false,
   lineageOff: false,
+  feedCity: null,
+  posting: false,
   busy: 0,              // in-flight reacts (pauses refresh)
   autoCollapsed: false, // folded away while a result card is up; not persisted
   collapsed: false,
@@ -174,18 +187,34 @@ const initials = (name) => {
 function build(root) {
   root.innerHTML = `
     <div class="fp-head">
-      <button class="fp-collapse" type="button" aria-expanded="true" aria-controls="fp-body">
-        <span class="fp-lockup">
-          <span class="fp-kicker">timeline</span>
-          <span class="fp-city"></span>
-        </span>
-        <span class="fp-caret">${ICONS.caret}</span>
-      </button>
+      <div class="fp-head-row">
+        <button class="fp-collapse" type="button" aria-expanded="true" aria-controls="fp-body">
+          <span class="fp-lockup">
+            <span class="fp-kicker">timeline</span>
+            <span class="fp-city"></span>
+          </span>
+        </button>
+        <div class="fp-menu-wrap">
+          <button type="button" class="fp-more" aria-label="Timeline options" title="Share this timeline or start a new one" aria-haspopup="menu" aria-expanded="false">···</button>
+          <div class="fp-menu hidden" role="menu">
+            <button type="button" role="menuitem" data-ws="share">Share timeline link</button>
+            <button type="button" role="menuitem" data-ws="new">Start a new workspace</button>
+          </div>
+        </div>
+        <button class="fp-collapse fp-collapse-caret" type="button" aria-label="Collapse timeline" aria-expanded="true" aria-controls="fp-body">
+          <span class="fp-caret">${ICONS.caret}</span>
+        </button>
+      </div>
       <div class="fp-status" aria-live="polite"></div>
+      <div class="fp-ws-confirm hidden" role="dialog" aria-label="Start a new workspace">
+        <span>Start a new, empty workspace? The current one stays reachable by its link.</span>
+        <button type="button" class="fp-primary fp-ws-go">New workspace</button>
+        <button type="button" class="fp-ws-link fp-ws-cancel">Cancel</button>
+      </div>
     </div>
     <div id="fp-body" class="fp-body">
       <div class="fp-views" role="tablist" aria-label="Show">
-        ${VIEWS.map(([v, label]) => `<button type="button" role="tab" class="fp-view" data-view="${v}" aria-selected="${v === "all"}">${label}<span class="fp-view-n"></span></button>`).join("")}
+        ${VIEWS.map(([v, label]) => `<button type="button" role="tab" class="fp-view" data-view="${v}" aria-selected="${v === "all"}" title="${VIEW_TITLES[v]}">${label}<span class="fp-view-n"></span></button>`).join("")}
       </div>
       <div class="fp-composer">
         <form class="fp-form fp-form-post" data-mode="post">
@@ -193,8 +222,12 @@ function build(root) {
                     placeholder="What happened? Residents will remember it."
                     aria-label="What happened"></textarea>
           <div class="fp-row">
-            <button class="fp-kind" type="button" data-kind="news" title="Detected from the text · tap to change"
-                    aria-label="Kind: news. Tap to change.">news</button>
+            <select class="fp-select fp-kind" name="kind" aria-label="Kind of event" title="Detected from the text; change it here">
+              <option value="news">news</option>
+              <option value="policy">policy</option>
+              <option value="incident">incident</option>
+              <option value="rumor">rumor</option>
+            </select>
             <input class="fp-date-input" type="date" name="as_of_date" aria-label="Date it happened" />
             <button class="fp-primary" type="submit">Post</button>
           </div>
@@ -209,6 +242,7 @@ function build(root) {
     collapse: q(".fp-collapse"),
     city: q(".fp-city"),
     status: q(".fp-status"),
+    wsConfirm: q(".fp-ws-confirm"),
     body: q("#fp-body"),
     formPost: q(".fp-form-post"),
     kind: q(".fp-kind"),
@@ -218,8 +252,11 @@ function build(root) {
   };
   state.el.formPost.elements.as_of_date.value = today();
   const text = state.el.formPost.elements.text;
-  text.addEventListener("input", () => { if (!state.kindManual) setKind(detectKind(text.value)); if (!text.value.trim()) state.kindManual = false; });
-  state.el.kind.addEventListener("click", () => { state.kindManual = true; setKind(nextKind(state.el.kind.dataset.kind)); });
+  text.addEventListener("input", () => {
+    if (!text.value.trim()) { state.kindManual = false; setKind("news"); return; }
+    if (!state.kindManual) setKind(detectKind(text.value));
+  });
+  state.el.kind.addEventListener("change", () => { state.kindManual = true; setKind(state.el.kind.value); });
   state.el.views.addEventListener("click", (e) => {
     const b = e.target.closest(".fp-view");
     if (b) setView(b.dataset.view);
@@ -227,10 +264,9 @@ function build(root) {
 }
 
 function setKind(kind) {
-  const b = state.el.kind;
-  b.dataset.kind = kind;
-  b.textContent = kind;
-  b.setAttribute("aria-label", `Kind: ${kind}. Tap to change.`);
+  const sel = state.el.kind;
+  sel.value = kind;
+  sel.dataset.kind = kind;
 }
 
 // quick filters over the log; "news" also shows the city's baseline headlines
@@ -257,13 +293,14 @@ function syncViews() {
 export function lineageItems() { return state.items; }
 
 export function initFeedPanel({
-  getCity, getBranch, getCityDisplay, getResidents, getNews,
+  getCity, getBranch, getCityDisplay, getResidents, getNews, onScenario,
   setSegmentSelection, getSegmentSelectionSummary, getRawResidents, evidenceReady, dimensionLabels,
   groupLabel, drawHead, openPerson, fetchAnswers, fetchPersonal, sourceHint, getPopulationKey, openPastResult,
 } = {}) {
   const root = document.getElementById("feed-panel");
   if (!root) return;
   state.root = root;
+  state.onScenario = onScenario;
   if (getCity) state.getCity = getCity;
   if (getBranch) state.getBranch = getBranch;
   if (getCityDisplay) state.getCityDisplay = getCityDisplay;
@@ -284,17 +321,48 @@ export function initFeedPanel({
   if (openPastResult) state.openPastResult = openPastResult;
   build(root);
 
-  try { state.collapsed = localStorage.getItem(COLLAPSE_KEY) === "1"; } catch { /* private mode */ }
+  state.collapsed = false; // always expanded on load; the caret folds it for this session only
   try { const v = localStorage.getItem(VIEW_KEY); if (VIEWS.some(([k]) => k === v)) state.view = v; } catch { /* private mode */ }
   applyCollapsed();
-  state.el.collapse.addEventListener("click", () => {
+  for (const b of root.querySelectorAll(".fp-collapse")) b.addEventListener("click", () => {
     state.autoCollapsed = false;
     state.collapsed = !state.collapsed;
-    try { localStorage.setItem(COLLAPSE_KEY, state.collapsed ? "1" : "0"); } catch { /* ignore */ }
     applyCollapsed();
   });
 
   state.el.formPost.addEventListener("submit", postEvent);
+  // overflow menu: the workspace works invisibly; only its two actions surface here
+  const more = root.querySelector(".fp-more"), menu = root.querySelector(".fp-menu");
+  const closeMenu = () => { menu.classList.add("hidden"); more.setAttribute("aria-expanded", "false"); };
+  document.getElementById("ui")?.appendChild(menu); // outside the panel: never clipped by its overflow
+  const placeMenu = () => {
+    const r = more.getBoundingClientRect();
+    menu.style.top = `${Math.round(r.bottom + 6)}px`;
+    menu.style.left = `${Math.round(Math.min(r.right, window.innerWidth - 12) - menu.offsetWidth)}px`;
+  };
+  more.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const open = menu.classList.contains("hidden");
+    menu.classList.toggle("hidden", !open); more.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) { placeMenu(); menu.querySelector("button").focus(); }
+  });
+  window.addEventListener("resize", () => { if (!menu.classList.contains("hidden")) placeMenu(); });
+  document.addEventListener("pointerdown", (e) => { if (!menu.contains(e.target) && e.target !== more) closeMenu(); });
+  menu.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); closeMenu(); more.focus(); } });
+  menu.querySelector('[data-ws="share"]').addEventListener("click", async () => {
+    closeMenu();
+    const url = shareUrl();
+    try { await navigator.clipboard.writeText(url); notice("Link copied"); }
+    catch { notice(url); }
+    setTimeout(() => notice(""), 2500);
+  });
+  menu.querySelector('[data-ws="new"]').addEventListener("click", () => {
+    closeMenu();
+    state.el.wsConfirm.classList.remove("hidden");
+    state.el.wsConfirm.querySelector(".fp-ws-go").focus();
+  });
+  state.el.wsConfirm.querySelector(".fp-ws-cancel").addEventListener("click", () => state.el.wsConfirm.classList.add("hidden"));
+  state.el.wsConfirm.querySelector(".fp-ws-go").addEventListener("click", () => startNewWorkspace());
   for (const f of [state.el.formPost]) {
     f.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); f.requestSubmit(); }
@@ -317,6 +385,8 @@ export function initFeedPanel({
 export async function refreshFeedPanel({ quiet = false } = {}) {
   if (!state.root) return;
   const city = state.getCity();
+  if (state.busy > 0 && city === state.feedCity) return;
+  state.feedCity = city;
   const seq = ++state.loadSeq;
   syncHeader();
   if (!quiet) { state.el.thread.setAttribute("aria-busy", "true"); }
@@ -326,6 +396,7 @@ export async function refreshFeedPanel({ quiet = false } = {}) {
     state.memoryOff = false;
     if (state.chart && !items.some((i) => i.id === state.chart.id)) closeChart();
     state.items = items;
+    state.loaded = true;
     notice("");
     renderThread();
     syncHeader();
@@ -335,6 +406,7 @@ export async function refreshFeedPanel({ quiet = false } = {}) {
     if (e.status === 503) {
       state.memoryOff = true;
       state.items = [];
+      state.loaded = true;
       renderThread();
       notice("Persona memory is not configured on this backend, so residents cannot remember or react.");
     } else if (!quiet) {
@@ -382,15 +454,16 @@ function syncHeader() {
   else if (!branch) status = "waking the residents…";
   else status = `${n.toLocaleString()} residents`;
   if (events || asks || queries) {
-    const parts = [plural(events, "event"), plural(asks, "question")];
+    const parts = [plural(events, "event"), plural(asks, "survey")];
     if (queries) parts.push(plural(queries, "data query", "data queries"));
     status = `${parts.join(" · ")} in memory · ${status}`;
   }
   el.status.textContent = status;
+  el.status.classList.toggle("is-loading", /…$/.test(status) || (!state.loaded && !state.memoryOff));
   const canWrite = !!branch && !state.memoryOff;
   for (const f of [el.formPost]) {
     const btn = f.querySelector(".fp-primary");
-    btn.disabled = !canWrite;
+    btn.disabled = !canWrite || state.posting;
     btn.title = canWrite ? "" : (state.memoryOff ? "persona memory is off" : "wait for the residents to wake");
   }
 }
@@ -402,7 +475,7 @@ function watchResultCard() {
   const card = document.getElementById("result-card");
   if (!card || typeof MutationObserver === "undefined") return;
   const apply = () => {
-    const visible = !card.classList.contains("hidden");
+    const visible = !card.classList.contains("hidden") || ["research-workspace", "evolution"].some(id => { const el = document.getElementById(id); return el && !el.hidden; });
     // the result card owns the map highlight while it is up
     if (visible) closeChart();
     if (visible && !state.collapsed) {
@@ -415,7 +488,9 @@ function watchResultCard() {
       applyCollapsed();
     }
   };
-  new MutationObserver(apply).observe(card, { attributes: true, attributeFilter: ["class"] });
+  const observer = new MutationObserver(apply);
+  observer.observe(card, { attributes: true, attributeFilter: ["class"] });
+  for (const id of ["research-workspace", "evolution"]) { const el = document.getElementById(id); if (el) observer.observe(el, { attributes: true, attributeFilter: ["hidden"] }); }
   apply();
 }
 
@@ -438,10 +513,33 @@ function watchStatus() {
   placeBelowStatus();
 }
 
-function applyCollapsed() {
+const REDUCED = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+const FOLD_MS = 220;
+// Expand / collapse the body with a height + opacity fold so the change reads.
+function foldBody(show) {
+  const b = state.el.body;
+  if (REDUCED) { b.hidden = !show; return; }
+  clearTimeout(state.foldTimer);
+  const ease = `max-height ${FOLD_MS}ms cubic-bezier(.2,.7,.2,1), opacity ${FOLD_MS}ms ease`;
+  // A forced reflow between the start and end values makes the transition run
+  // deterministically (no reliance on requestAnimationFrame timing).
+  if (show) {
+    b.hidden = false;
+    b.style.transition = "none"; b.style.overflow = "hidden"; b.style.maxHeight = "0px"; b.style.opacity = "0";
+    void b.offsetHeight;
+    b.style.transition = ease; b.style.maxHeight = `${b.scrollHeight}px`; b.style.opacity = "1";
+    state.foldTimer = setTimeout(() => { b.style.maxHeight = ""; b.style.overflow = ""; b.style.transition = ""; b.style.opacity = ""; }, FOLD_MS + 20);
+  } else {
+    b.style.transition = "none"; b.style.overflow = "hidden"; b.style.maxHeight = `${b.getBoundingClientRect().height}px`; b.style.opacity = "1";
+    void b.offsetHeight;
+    b.style.transition = ease; b.style.maxHeight = "0px"; b.style.opacity = "0";
+    state.foldTimer = setTimeout(() => { b.hidden = true; b.style.maxHeight = ""; b.style.overflow = ""; b.style.transition = ""; b.style.opacity = ""; }, FOLD_MS + 20);
+  }
+}
+function applyCollapsed({ animate = true } = {}) {
   state.root.dataset.collapsed = state.collapsed ? "true" : "false";
-  state.el.collapse.setAttribute("aria-expanded", state.collapsed ? "false" : "true");
-  state.el.body.hidden = state.collapsed;
+  for (const b of state.root.querySelectorAll(".fp-collapse")) b.setAttribute("aria-expanded", state.collapsed ? "false" : "true");
+  if (animate) foldBody(!state.collapsed); else state.el.body.hidden = state.collapsed;
   syncHeader();
 }
 
@@ -477,12 +575,22 @@ function renderThread() {
   // the city's baseline headlines: what residents already know, as plain posts
   const news = state.view === "all" || state.view === "news" ? (state.getNews() || []) : [];
   for (const a of news.slice(0, 6)) frag.appendChild(newsPost(a));
+  const stillWaking = !state.getBranch() && !state.memoryOff;
+  if (!frag.childElementCount && (!state.loaded || stillWaking) && !state.memoryOff) {
+    // still fetching (or seeding a fresh workspace): skeleton rows, not an empty state
+    const sk = document.createElement("div");
+    sk.className = "fp-skeleton";
+    sk.setAttribute("aria-label", "Loading the timeline");
+    sk.innerHTML = `<div class="fp-skel-note"><span class="fp-spinner" aria-hidden="true"></span>${state.getBranch() ? "loading the timeline…" : "waking the residents…"}</div>` +
+      Array.from({ length: 3 }, () => `<div class="fp-skel-row"><span class="fp-skel-dot"></span><div><div class="fp-skel-line w40"></div><div class="fp-skel-line w90"></div><div class="fp-skel-line w70"></div></div></div>`).join("");
+    frag.appendChild(sk);
+  }
   if (!frag.childElementCount) {
     const empty = document.createElement("div");
     empty.className = "fp-empty";
     empty.textContent = state.memoryOff
       ? "Nothing to remember while persona memory is off."
-      : state.view === "asks" ? "No questions asked yet. Ask the city something from the box below."
+      : state.view === "asks" ? "No surveys yet. Ask the city something from the box below."
       : state.view === "data" ? "No data queries yet. Try \"show the age distribution\"."
       : "The residents remember nothing yet. Post an event and see how they take it.";
     frag.appendChild(empty);
@@ -528,6 +636,7 @@ function eventPost(item) {
   post.innerHTML = `
     ${postHead({ avatar: "n", avatarClass: "fp-avatar-event", source: "", date: "" })}
     <div class="fp-title"></div>
+    <div class="fp-progress hidden" role="progressbar" aria-label="Residents are reacting"><i></i></div>
     <div class="fp-engage" aria-hidden="true">
       <span class="fp-eng"><i class="fp-ico">${ICONS.heart}</i><span class="fp-eng-n"></span></span>
       <span class="fp-eng"><i class="fp-ico">${ICONS.comment}</i><span class="fp-eng-n"></span></span>
@@ -544,8 +653,9 @@ function fillEvent(post, item, { pending = 0 } = {}) {
   const kind = item.kind || "news";
   post.querySelector(".fp-avatar").textContent = kind[0];
   post.querySelector(".fp-source").textContent = `${state.getCity()} · ${kind}`;
-  post.querySelector(".fp-date").textContent = fmtDate(item.as_of_date);
+  post.querySelector(".fp-date").textContent = item.saving ? "Saving news…" : fmtDate(item.as_of_date);
   post.querySelector(".fp-title").textContent = item.text || "";
+  post.querySelector(".fp-progress")?.classList.toggle("hidden", !pending);
   const counts = item.sentiment && Object.keys(item.sentiment).length ? item.sentiment : tally(item.reactions);
   const total = item.reaction_count || Object.values(counts).reduce((a, b) => a + b, 0);
   const [heartN, commentN] = post.querySelectorAll(".fp-eng-n");
@@ -565,7 +675,7 @@ function fillEvent(post, item, { pending = 0 } = {}) {
     const parts = SENTIMENTS.filter((s) => counts[s]).map((s) => `${counts[s]} ${s}`);
     reacted.textContent = [`${plural(total, "resident")} reacted`, ...parts].join(" · ");
   } else {
-    reacted.textContent = pending ? "residents are reacting…" : "no reactions yet";
+    reacted.textContent = pending ? `asking ${pending} residents…` : "no reactions yet";
   }
 
   const comments = post.querySelector(".fp-comments");
@@ -573,7 +683,7 @@ function fillEvent(post, item, { pending = 0 } = {}) {
   comments.innerHTML = shown.map(commentNode).join("");
   if (pending) comments.insertAdjacentHTML("beforeend", `<div class="fp-skel"><i></i></div>`.repeat(2));
 
-  renderEventActions(post, item, { busy: pending > 0 });
+  renderEventActions(post, item, { busy: pending > 0 || item.saving });
 }
 
 function commentNode(r) {
@@ -607,7 +717,7 @@ function renderEventActions(post, item, { busy = false, note = "", error = false
   };
   if (total > shown) box.appendChild(link(`View all ${total} comments`, () => showAll(item.id)));
   if (branch && !state.memoryOff) {
-    box.appendChild(link(total ? `Ask ${REACT_N} more residents` : "Ask residents", () => reactTo(item.id), !total));
+    box.appendChild(link(total ? "Refresh resident reactions" : "Ask residents", () => reactTo(item.id), !total));
   }
   if (note) {
     const n = document.createElement("span");
@@ -635,29 +745,31 @@ async function showAll(eventId) {
   }
 }
 
+// One typed batch; retries replace the same residents instead of double-counting.
 async function reactTo(eventId, { pending = REACT_N } = {}) {
   const item = state.items.find((e) => e.id === eventId);
   const post = state.posts.get(eventId);
   const branch = state.getBranch();
-  if (!item || !post || !branch) return;
+  const city = state.getCity();
+  if (!item || !post || !branch || post.dataset.busy === "true") return;
   post.dataset.busy = "true";
   state.busy++;
+  ++state.loadSeq; // invalidate an older history request before it replaces this item
   fillEvent(post, item, { pending });
   try {
     const res = await api.react(branch, eventId, pending);
-    const fresh = res.reactions || [];
-    const counts = { ...(item.sentiment || {}) };
-    for (const r of fresh) { const s = sentimentOf(r.sentiment); counts[s] = (counts[s] || 0) + 1; }
-    item.sentiment = counts;
-    item.reaction_count = (item.reaction_count || 0) + fresh.length;
-    item.reactions = [...fresh, ...(item.reactions || [])];
-    post.dataset.busy = "false";
+    if (city !== state.getCity() || branch !== state.getBranch()) return;
+    // Endpoint refreshes a fixed diverse sample; these are the authoritative results.
+    item.reactions = [...new Map((res.reactions || []).map((r) => [r.agent_id, r])).values()];
+    item.sentiment = tally(item.reactions);
+    item.reaction_count = item.reactions.length;
     fillEvent(post, item);
   } catch (e) {
-    post.dataset.busy = "false";
+    if (city !== state.getCity() || branch !== state.getBranch()) return;
     fillEvent(post, item);
     renderEventActions(post, item, { note: friendly(e), error: true });
   } finally {
+    post.dataset.busy = "false";
     state.busy--;
   }
 }
@@ -681,7 +793,7 @@ function testPost(item) {
 }
 
 function fillTest(post, item) {
-  const kind = TEST_KINDS[item.kind] || item.kind || "poll";
+  const kind = TEST_KINDS[item.kind] || item.kind || "survey";
   post.querySelector(".fp-date").textContent = [fmtWhen(item.created_at), kind].join(" · ");
   post.querySelector(".fp-title").textContent = item.question || "";
   const options = Array.isArray(item.options) ? item.options : [];
@@ -810,7 +922,8 @@ function mountEvidenceChart(item, host) {
   const chartRef = state.chart;
   state.fetchAnswers(item.id).then((answers) => {
     if (state.chart !== chartRef) return;
-    const same = !item.population_key || item.population_key === state.getPopulationKey();
+    const mine = state.getPopulationKey();
+    const same = !item.population_key || !mine || item.population_key === mine || item.population_key.endsWith(":" + mine);
     if (answers && answers.size && same) inst.setAnswers(answers, "");
     else inst.setAnswers(null, answers && answers.size && !same
       ? "These residents were asked in a different simulation, so this view shows group shares without per-person answers."
@@ -886,31 +999,51 @@ function newsPost(a) {
 // ── composer actions ───────────────────────────────────────────────────────
 async function postEvent(ev) {
   ev.preventDefault();
+  if (state.posting) return;
   const f = state.el.formPost;
   const err = f.querySelector(".fp-error");
   err.textContent = "";
   const text = f.elements.text.value.trim();
   const as_of_date = f.elements.as_of_date.value || today();
-  const kind = state.el.kind.dataset.kind || detectKind(text);
+  const kind = state.el.kind.value || detectKind(text);
   if (!text) { err.textContent = "Write what happened first."; f.elements.text.focus(); return; }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(as_of_date)) { err.textContent = "Pick a valid date."; return; }
+  const city = state.getCity();
+  const branch = state.getBranch();
   const btn = f.querySelector(".fp-primary");
-  btn.disabled = true; btn.textContent = "Posting…";
+  const optimisticId = `pending-${crypto.randomUUID()}`;
+  state.posting = true;
+  state.busy++;
+  ++state.loadSeq;
+  btn.disabled = true; btn.textContent = "Saving…";
+  if (state.view !== "all" && state.view !== "news") setView("all");
+  // Show the news on this frame, clearly marked unsaved until persistence succeeds.
+  state.items.unshift({ type: "event", id: optimisticId, text, as_of_date, kind,
+    saving: true, reaction_count: 0, sentiment: {}, reactions: [] });
+  renderThread();
+  state.el.body.scrollTo({ top: state.el.thread.offsetTop - 8, behavior: "smooth" });
   try {
-    const { event } = await api.postEvent(state.getCity(), { text, as_of_date, kind });
-    f.elements.text.value = "";
+    const { event } = await api.postEvent(city, { text, as_of_date, kind });
+    if (city !== state.getCity() || branch !== state.getBranch()) return;
+    if (f.elements.text.value.trim() === text) f.elements.text.value = "";
     state.kindManual = false; setKind("news");
-    if (state.view !== "all" && state.view !== "news") setView("all");
     const item = { type: "event", ...event, reaction_count: 0, sentiment: {}, reactions: [] };
-    state.items = [item, ...state.items.filter((e) => e.id !== item.id)];
+    state.items = [item, ...state.items.filter((e) => e.id !== optimisticId && e.id !== item.id)];
     renderThread();
-    state.el.body.scrollTo({ top: state.el.thread.offsetTop - 8, behavior: "smooth" });
-    reactTo(item.id);
+    // The saved event is already part of city memory. Model work does not lock the composer.
+    void reactTo(item.id);
+    state.onScenario?.(text);
   } catch (e) {
-    err.textContent = friendly(e);
+    if (city === state.getCity() && branch === state.getBranch()) {
+      err.textContent = friendly(e);
+      state.items = state.items.filter((i) => i.id !== optimisticId);
+      renderThread();
+    }
   } finally {
+    state.items = state.items.filter((i) => i.id !== optimisticId);
+    state.posting = false;
+    state.busy--;
     btn.textContent = "Post";
     syncHeader();
   }
 }
-

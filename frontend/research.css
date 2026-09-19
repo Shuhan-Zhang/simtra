@@ -101,6 +101,7 @@
 @keyframes ex-pulse { 50% { opacity: .3; } }
 @media (max-width: 600px) {
   .experiment-card { padding: 17px; max-height: calc(100dvh - 315px); width: min(556px, 94vw); }
+  body.offline-demo .experiment-card { max-height: calc(100dvh - 355px); }
   .experiment-card h2 { font-size: 21px; }
   .ex-metrics { gap: 8px; }
   .ex-metrics strong { font-size: 23px; }

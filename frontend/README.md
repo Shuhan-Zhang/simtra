@@ -32,14 +32,15 @@ The map's colored residents visualize aggregate probabilities. Census weights an
 ## Automatic experiments
 
 The original blue town and ask box are the default surface. Enter a decision;
-Simtra proposes a compact experiment with tap-to-steer choices, then waits for
-explicit approval before polling residents. No experiment form or persistent
-setup sidebar is shown.
+Simtra plans and runs a bounded comparison automatically. General opinion questions
+use a quick prediction; images retain their image-aware prediction or A/B flow.
+Optional mode and location controls are collapsed under Options. Refine a completed
+experiment when you want to change its assumptions.
 
 `POST /cities/:city/experiment-plan` makes one typed Jev evaluation to select a
 bounded experiment recipe, outcome and two candidate areas from the city profile.
 Jev does not generate prose or invent a winner. The frontend expands that recipe
-into explicit proposed assumptions, shown before approval:
+into explicit experimental assumptions, available while running and with the results:
 
 - Commercial launches: two areas × six prices × two operating formats = 24
   combinations across three factors. Restaurants compare takeaway/dine-in;
@@ -87,15 +88,15 @@ sessions are not synced across devices. Offline demo history is stored separatel
 For fixture-based browser checks, serve `frontend` and run:
 
 ```sh
-AGENT_BROWSER=/path/to/agent-browser node frontend/tests/research-browser.mjs
+SIMTRA_TEST_BASE=http://127.0.0.1:5198 node frontend/tests/automatic-demo-browser.cjs
 ```
 
-The default test URL is `http://127.0.0.1:5197/?demo=1`. Set
-`SIMTRA_RESEARCH_URL=http://127.0.0.1:5197/?port=5188` to exercise the actual local
-API using `tests/fixture-server.rs` (see `tests/INTEGRATION-EVIDENCE.md`). The test
-uses 256 residents for repeated API workflows and covers filtering, history,
-resident selection, refinement, reload, cancellation and 390px layout. These are
-mock model checks; they do not validate predictive accuracy or call a paid model.
+Requires Chrome and Playwright (`SIMTRA_PLAYWRIGHT` may point to an installed package).
+Checks automatic launch/pricing runs, resident inspection, refinement, reload,
+390px layout, quick prediction and diagnostics with zero external requests.
+The Rust `research_contract` suite exercises the actual HTTP comparison pipeline
+against a loopback provider, including complete coverage and failure behavior.
+These checks do not validate predictive accuracy or call a paid model.
 `?demo=1` uses explicitly labeled illustrative fixed rankings/curves, independent
 of the submitted question. Live failures never fall back to those fixtures.
 
@@ -124,7 +125,7 @@ Start `cargo run -p simfrancisco --bin server` from the repository root with
 `TYPESAFE_API_KEY` configured in ignored `.env` (never in browser code). A missing
 server or key produces an error, not a substitute fixture result.
 
-After approval the browser uses `POST /branches/:bid/research/stream` (NDJSON).
+After planning the browser automatically uses `POST /branches/:bid/research/stream` (NDJSON).
 The customer surface displays only completion progress, not diagnostic logs.
 Open **Developer control panel** in About, or visit `control.html` on the same
 origin/browser. This local diagnostics page is not an authenticated admin endpoint.

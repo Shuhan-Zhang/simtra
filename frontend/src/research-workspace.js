@@ -63,6 +63,7 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
   function proposalHtml() {
   if (!plan) return `<p class="ex-error" role="alert">${esc(error)}</p><button class="ex-link" data-action="retry-plan">Try again</button>`;
   const exp=compilePlan(plan), commercial=plan.kind!=="compare";
+  if (busy) return `<h2>Comparing your options.</h2><p class="ex-question">${esc(plan.decision)}</p><div class="ex-loading" role="status"><span class="ex-progress">Testing ${exp.scenarios.length} combinations…</span><small>Same audience. Prices and formats are explicit experiment assumptions.</small></div><details class="ex-details"><summary>What’s being tested</summary><p>${esc(exp.question)}</p><p>${esc(exp.assumptions)}</p></details><button class="ex-link" data-action="cancel">Cancel</button>`;
   return `<h2>${plan.kind==="launch"?"Find the right launch.":plan.kind==="price"?"Find the price trade-off.":"Find the stronger option."}</h2>
     <p class="ex-question">${esc(plan.decision)}</p>
     <div class="ex-context"><span>${esc(audienceText(ctx().audience))}</span><button class="ex-link" data-action="audience">Change</button></div>
@@ -76,8 +77,8 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
     <div class="ex-steer"><span>Measure</span><div class="ex-chips">${(commercial?[["intent","Willingness to buy"],["frequency","Repeat interest"]]:[["support","Support"],["intent","Would try"]]).map(([id,label])=>chip(label,"measure",id,plan.measure===id)).join("")}</div></div>
     <details class="ex-details"><summary>What we’ll ask & assume</summary><p>${esc(exp.question)}</p><p>${esc(exp.assumptions)}</p><p>Same ${ctx().residents.length.toLocaleString()} synthetic residents across all combinations. Group estimates, not individual interviews.</p></details>
     ${error?`<p class="ex-error" role="alert">${esc(error)}</p>`:""}
-    ${busy?`<div class="ex-loading" role="status"><span class="ex-progress">Testing ${exp.scenarios.length} combinations…</span><small>Comparing the same people across each configuration.</small></div><button class="ex-link" data-action="cancel">Cancel experiment</button>`:`<button class="ex-primary" data-action="approve" ${!ctx().ready?"disabled":""}>Approve & test ${exp.scenarios.length} combinations<span>→</span></button>`}
-    <p class="ex-foot">${parentId?"Your previous experiment stays saved. ":""}Proposed hypotheses. Tap to steer, then approve.</p>`;
+    ${busy?`<div class="ex-loading" role="status"><span class="ex-progress">Testing ${exp.scenarios.length} combinations…</span><small>Comparing the same people across each configuration.</small></div><button class="ex-link" data-action="cancel">Cancel experiment</button>`:`<button class="ex-primary" data-action="approve" ${!ctx().ready?"disabled":""}>Run ${exp.scenarios.length} combinations<span>→</span></button>`}
+    <p class="ex-foot">${parentId?"Your previous experiment stays saved. ":""}Experimental assumptions. Adjust only what you need, then run again.</p>`;
 }
   function resultHtml() {
   const run=active,exp=run.experiment,ranked=rankScenarios(run),best=ranked[0], current=exp.scenarios[selected];
@@ -171,6 +172,7 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
       plan=autoPlan(question,route); planCity=city; const experiment=compilePlan(plan); view="proposal";syncControl("awaiting_approval",{experiment});
     } catch(e) { if(seq===generation) { if(e.trace?.events) executionLog.push(...e.trace.events.map(e=>({...e,phase:"Plan"}))); addLog({kind:"client.failed",message:e.message});syncControl("failed",{error:e.message});error=e.message;view="proposal"; } }
     finally { if(seq===generation) {busy=false;abort=null;setBusy(false);render();} }
+    if(seq===generation && plan && !error) await submit();
   }
   async function submit() {
     if(busy || !plan || !ctx().ready) return;
