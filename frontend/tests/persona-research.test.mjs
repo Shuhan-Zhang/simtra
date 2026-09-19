@@ -36,7 +36,9 @@ test('client calls only research endpoints without browser credentials', async (
   const body = makeResearchRequest(values);
   await researchRequest('/panels', { base: 'http://localhost:8080', body, fetcher });
   assert.equal(calls[0].url, 'http://localhost:8080/audience-research/panels');
-  assert.deepEqual(calls[0].options.headers, { 'content-type': 'application/json' });
+  assert.equal(calls[0].options.headers['content-type'], 'application/json');
+  assert.match(calls[0].options.headers['X-Simtra-Workspace'], /^[A-Za-z0-9_-]{1,32}$/);
+  assert.equal(calls[0].options.headers.Authorization, undefined);
   assert.deepEqual(JSON.parse(calls[0].options.body), body);
   await assert.rejects(researchRequest('/panels', { base: '', fetcher }), /Set SIMTRA_BACKEND/);
   assert.equal(calls.length, 1);

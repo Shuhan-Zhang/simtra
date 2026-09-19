@@ -49,6 +49,28 @@
   padding: var(--s-4); border-bottom: var(--hair) solid var(--sep);
 }
 .feed-panel[data-collapsed="true"] .fp-head { border-bottom: none; }
+.fp-head-row { display: flex; align-items: center; gap: var(--s-2); min-width: 0; }
+.fp-head-row .fp-collapse:first-child { flex: 1 1 auto; }
+.fp-collapse-caret { flex: none; }
+.fp-menu-wrap { position: relative; flex: none; }
+.fp-more {
+  border: 0; background: none; padding: 0 6px; height: var(--s-6); border-radius: var(--r-sm);
+  color: var(--ink-3); font: inherit; font-size: var(--fs-subhead); letter-spacing: 1px; line-height: 1; cursor: pointer;
+}
+.fp-more:hover, .fp-more[aria-expanded="true"] { background: var(--fill); color: var(--ink); }
+.fp-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.fp-menu {
+  position: fixed; z-index: 60; min-width: 200px; pointer-events: auto;
+  display: flex; flex-direction: column; padding: var(--s-1);
+  background: var(--card); border-radius: var(--r-md); box-shadow: var(--sh-2);
+}
+.fp-menu button {
+  border: 0; background: none; text-align: left; padding: 8px 10px; border-radius: var(--r-sm);
+  font: inherit; font-size: var(--fp-fs-footnote, var(--fs-footnote)); color: var(--ink); cursor: pointer;
+}
+.fp-menu button:hover, .fp-menu button:focus-visible { background: var(--fill); outline: none; }
+.fp-collapse:focus { outline: none; }
+.fp-collapse:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .fp-collapse {
   display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); min-width: 0;
   background: none; border: 0; padding: 0; margin: 0; color: inherit; font: inherit;
@@ -100,13 +122,7 @@
 .fp-view[aria-selected="true"] { background: var(--ink); color: #fff; }
 .fp-view-n { color: inherit; opacity: .6; font-variant-numeric: var(--nums); }
 /* kind chip: detected from the text, tap to change */
-.fp-kind {
-  border: 0; flex: none; padding: 0 12px; height: 36px; border-radius: var(--r-full);
-  background: var(--fill); color: var(--ink-2);
-  font-family: var(--font); font-size: var(--fs-footnote); font-weight: var(--fw-med); line-height: 1;
-  cursor: pointer; transition: background var(--t) var(--ease), color var(--t) var(--ease);
-}
-.fp-kind:hover { background: var(--fill-hi); color: var(--ink); }
+.fp-kind { flex: 0 0 auto; width: auto; min-width: 104px; }
 .fp-kind[data-kind="incident"] { color: var(--no); }
 .fp-kind[data-kind="policy"] { color: var(--accent); }
 .fp-form { display: flex; flex-direction: column; gap: var(--s-2); }
@@ -257,6 +273,12 @@
 .fp-hypo { font-size: var(--fs-caption); line-height: var(--lh-body); color: var(--ink-2); }
 .fp-muted { color: var(--ink-3); font-weight: var(--fw-reg); }
 
+/* progress: a thin indeterminate bar under the headline while residents answer */
+.fp-progress { height: 3px; margin: 2px 0 var(--s-2); border-radius: var(--r-full); background: var(--fill); overflow: hidden; }
+.fp-progress i { display: block; width: 38%; height: 100%; border-radius: var(--r-full); background: var(--accent); animation: fp-slide 1.15s cubic-bezier(.4,0,.2,1) infinite; }
+@keyframes fp-slide { 0% { transform: translateX(-120%); } 100% { transform: translateX(280%); } }
+@media (prefers-reduced-motion: reduce) { .fp-progress i { animation: none; width: 100%; opacity: .5; } }
+
 /* pending */
 .fp-skel i { display: block; height: 8px; width: 70%; border-radius: var(--r-full); background: var(--fill-hi); animation: fp-pulse 1.1s ease-in-out infinite; }
 @keyframes fp-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
@@ -304,3 +326,26 @@
 .fp-chart .pc { margin-top: var(--s-3); padding-top: var(--s-3); }
 .fp-title-link { cursor: pointer; }
 .fp-title-link:hover, .fp-title-link:focus-visible { color: var(--accent); outline: none; }
+
+/* ── workspace line: who sees this memory ── */
+.fp-ws-label { text-transform: uppercase; letter-spacing: var(--tr-label); font-weight: var(--fw-semi); }
+.fp-ws-id { font-family: var(--font); font-size: var(--fs-caption2); color: var(--ink-2); background: var(--fill); padding: 1px 6px; border-radius: var(--r-full); }
+.fp-ws-link { border: 0; background: none; padding: 0; color: var(--accent); font: inherit; font-size: var(--fs-caption2); cursor: pointer; }
+.fp-ws-link:hover { text-decoration: underline; }
+.fp-ws-sep { color: var(--sep); }
+.fp-ws-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); margin: var(--s-2) var(--s-4) 0; padding: var(--s-3); border-radius: var(--r-md); background: var(--fill); font-size: var(--fs-footnote); color: var(--ink-2); }
+.fp-ws-confirm .fp-primary { padding: 6px 12px; font-size: var(--fs-caption); }
+
+/* loading: a small spinner next to the status line, skeleton rows in the thread */
+.fp-spinner { display: inline-block; width: 12px; height: 12px; margin-right: 6px; vertical-align: -2px; border-radius: 50%; border: 2px solid var(--sep); border-top-color: var(--accent); animation: fp-spin .8s linear infinite; }
+.fp-status.is-loading::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; border-radius: 50%; border: 2px solid var(--sep); border-top-color: var(--accent); animation: fp-spin .8s linear infinite; }
+.fp-skeleton { padding: var(--s-3) var(--s-5) var(--s-5); }
+.fp-skel-note { font-size: var(--fs-footnote); color: var(--ink-2); margin-bottom: var(--s-3); }
+.fp-skel-row { display: flex; gap: var(--s-3); padding: var(--s-3) 0; border-top: var(--hair) solid var(--sep); }
+.fp-skel-row > div { flex: 1; }
+.fp-skel-dot { flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--fill); }
+.fp-skel-line { height: 10px; border-radius: 5px; background: linear-gradient(90deg, var(--fill) 25%, var(--fill-hi) 50%, var(--fill) 75%); background-size: 200% 100%; animation: fp-shimmer 1.2s ease-in-out infinite; margin: 6px 0; }
+.fp-skel-line.w40 { width: 40%; } .fp-skel-line.w90 { width: 90%; } .fp-skel-line.w70 { width: 70%; }
+@keyframes fp-spin { to { transform: rotate(360deg); } }
+@keyframes fp-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .fp-spinner, .fp-status.is-loading::before, .fp-skel-line { animation: none; } }

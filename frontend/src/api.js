@@ -4,6 +4,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { BASE, SIM, PREDICT, BACKEND_SETUP_MESSAGE } from "./config.js";
+import { workspaceHeaders } from "./workspace.js?v=2";
 
 async function req(path, { method = "GET", body, timeout = 30000, signal } = {}) {
   if (isDemo && path === "/data-query") return {
@@ -23,7 +24,7 @@ async function req(path, { method = "GET", body, timeout = 30000, signal } = {})
   try {
     const res = await fetch(`${BASE}${path}`, {
       method,
-      headers: body ? { "content-type": "application/json" } : undefined,
+      headers: { ...workspaceHeaders(), ...(body ? { "content-type": "application/json" } : {}) },
       body: body ? JSON.stringify(body) : undefined,
       signal: ctrl.signal,
     });
@@ -35,6 +36,7 @@ async function req(path, { method = "GET", body, timeout = 30000, signal } = {})
       const error = new Error(`${method} ${path} → ${res.status}: ${msg}`);
       error.status = res.status;
       error.path = path;
+      error.serverMessage = data?.error || data?.message || "";
       throw error;
     }
     return data;
@@ -51,6 +53,7 @@ export const dataQuery = (city, question, signal, { record = true } = {}) =>
   req("/data-query", { method:"POST", body:{city, question, ...(record ? {} : { record: false })}, signal, timeout:60000 });
 
 export const health = () => req("/health", { timeout: 8000 });
+export const seedWorkspace = () => req("/workspace/seed", { method: "POST", body: {}, timeout: 90000 });
 
 // Persisted prediction history from InsForge. The Rust backend keeps the
 // InsForge admin key server-side and returns only stored result data here.
@@ -84,6 +87,16 @@ export const parseQuestion = (city, question, signal) =>
     method: "POST",
     body: { question, model: PREDICT.model },
     timeout: 60000,
+    signal,
+  });
+
+// Turn 1–2 downscaled images into neutral stimulus attributes with the server's
+// vision model. Returns { stimuli:[{kind, summary, attributes, unknowns}], provider }.
+export const describeStimulus = (city, images, question, signal) =>
+  req(`/cities/${encodeURIComponent(city)}/stimulus`, {
+    method: "POST",
+    body: { images, ...(question ? { question } : {}) },
+    timeout: 90000,
     signal,
   });
 
@@ -199,3 +212,7 @@ async function demoRequest(path, { method, body, signal }) {
   else throw new Error(`Unsupported offline fixture route: ${method} ${route}`);
   return structuredClone(result);
 }
+
+// Public geography only: no population, demand, or prediction estimates.
+export const getLocations = (city = "sf", signal) =>
+  req(`/cities/${encodeURIComponent(city)}/locations/areas`, { timeout: 12000, signal });

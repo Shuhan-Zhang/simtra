@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>sim francisco — predict the city</title>
+  <title>Simtra - Simulate anything</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23141414' d='M12 2l1.8 5L19 9l-5.2 2L12 16l-1.8-5L5 9l5.2-2z'/%3E%3C/svg%3E" />
 
   <!-- fonts: Pixelify Sans (title) · Neue Haas Grotesk Display (body, via Typekit); skipped in ?demo=1 -->
-  <link rel="stylesheet" href="styles.css?v=pa-1" />
-  <link rel="stylesheet" href="feedpanel.css?v=9" />
+  <link rel="stylesheet" href="styles.css?v=fix6-5" />
+  <link rel="stylesheet" href="feedpanel.css?v=13" />
   <link rel="stylesheet" href="persona-research.css?v=1" />
   <script>
     if (new URLSearchParams(location.search).get("demo") !== "1") {
@@ -17,6 +17,7 @@
       }
     }
   </script>
+  <link rel="stylesheet" href="evolution.css?v=3">
 </head>
 <body>
   <!-- the pixel-art city fills the entire page -->
@@ -115,9 +116,17 @@
             </svg>
             <span id="ask-label" class="ask-label">ask</span>
             <textarea id="ask-input" class="ask-input" rows="1" autocomplete="off" spellcheck="false"
-                      placeholder="Ask a question — for choices, list options: bus, train, or bicycle"
+                      placeholder="Would you try a new local service offering $5 off your first order?"
                       aria-label="Predict anything"></textarea>
-            <button id="ask-submit" class="ask-send" type="button" aria-label="Send">
+            <button id="ask-attach" class="ask-attach" type="button" aria-label="Add an image" title="Add an image — a storefront, product or ad residents should react to (or paste / drop one)">
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                <rect x="3" y="5" width="18" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="2" />
+                <circle cx="8.5" cy="10" r="1.6" fill="currentColor" />
+                <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 17l5-5 4 4 3-3 4 4" />
+              </svg>
+            </button>
+            <input id="ask-file" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple hidden>
+            <button id="ask-submit" class="ask-send" type="button" aria-label="Send" title="Send the question (Enter)">
               <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
                 <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
                       d="M21 3 10.5 13.5M21 3l-7 18-3.5-7.5L3 10z" />
@@ -126,10 +135,16 @@
           </div>
           <!-- question type + the extra fields each type needs; shown while composing -->
           <div class="ask-extra">
+            <details id="location-context" class="location-context"><summary>Location context (optional)</summary>
+              <label for="location-area">Launch area</label>
+              <select id="location-area" aria-describedby="location-note" disabled><option value="">Loading mapped places…</option></select>
+              <p id="location-note" role="status">Loading geographic context…</p>
+            </details>
+            <!-- images residents react to: thumbnail + what Simtra saw, editable before sending -->
+            <div id="stimulus-strip" class="stimulus-strip" hidden aria-live="polite"></div>
             <div class="ask-modes" role="radiogroup" aria-label="Question type">
-              <button type="button" class="ask-mode" role="radio" data-mode="predict" aria-checked="true">Predict</button>
-              <button type="button" class="ask-mode" role="radio" data-mode="ab" aria-checked="false">A/B</button>
-              <button type="button" class="ask-mode" role="radio" data-mode="marketing" aria-checked="false">Post test</button>
+              <button type="button" class="ask-mode" role="radio" data-mode="predict" aria-checked="true" title="Ask one question">Predict</button>
+              <button type="button" class="ask-mode" role="radio" data-mode="ab" aria-checked="false" title="Compare two messages with the same audience">A/B</button>
             </div>
             <div id="ab-fields" class="ask-fields" hidden>
               <textarea id="ab-a" class="ask-field" rows="2" maxlength="4000" placeholder="Variant A" aria-label="Variant A"></textarea>
@@ -144,7 +159,7 @@
           </div>
         </div>
         <div class="dock-tools dock-tools--balance">
-          <button id="info-btn" class="info-btn" aria-label="About simit" title="About">?</button>
+          <button id="info-btn" class="info-btn" aria-label="User manual" title="User manual">?</button>
         </div>
       </div>
     </div>
@@ -211,37 +226,57 @@
 
     <!-- about card (opened by the ? button) -->
     <div id="about-scrim" class="about-scrim hidden"></div>
-    <div id="about" class="about hidden" role="dialog" aria-modal="true" aria-label="About simit">
+    <div id="about" class="about hidden" role="dialog" aria-modal="true" aria-label="Simtra user manual">
       <button id="about-close" class="about-close" aria-label="Close">×</button>
-      <div class="about-title">simit</div>
-      <div class="about-sub">simulate and predict our golden city and beyond</div>
+      <div class="about-title">Simtra</div>
+      <div class="about-sub">Know the impact of a million-dollar decision in twenty minutes instead of four months.</div>
+      <p class="about-intro">A live simulation of San Francisco: 10,000 digital residents built from real US Census data, each with a background, motivation, memory and daily life.</p>
 
-      <div class="about-h">The pitch</div>
-      <p>What if you could predict how your customers responded to releases before they went out into the real world? Or if you could get a signal on who will win an election?</p>
-      <p>We simulated the population of San Francisco distributed across real US Census data and achieved near-parity with these types of real-world events.</p>
-      <p>It now spans <b>five US cities</b> — San Francisco plus <b>New York City</b>, <b>Los Angeles</b>, <b>Chicago</b>, and <b>Miami</b> — each its own Census-sampled population. Switch between them from the title in the top-left.</p>
+      <section class="manual-step">
+        <div class="manual-kicker"><span class="manual-n">1</span><span class="manual-name">Simulate</span></div>
+        <h3 class="manual-title">Ask the city anything.</h3>
+        <ul class="about-list">
+          <li>Type a question in the box at the bottom, e.g. <b>What if I increase the price of Chipotle bowls by 20%?</b></li>
+          <li>Residents inherit their demographic group’s modeled response; you get the split (keep buying · buy less · switch · stop) and the reasons.</li>
+          <li><b>A/B</b>: compare two messages with the same audience.</li>
+        </ul>
+      </section>
 
-      <div class="about-h">Historically predictive</div>
-      <p>How do we know if our simulation of SF is accurate? The honest test needs a model whose knowledge cutoff <i>predates</i> the event, so it can't have just memorized the outcome. The older Claude models with a 2023 cutoff have since been <b>retired</b> — so for this leakage-free backtest we ran <b>GPT-4o</b> (knowledge cutoff <b>October 2023</b>) and asked the twin city to predict results it had never seen. The live app now uses <b>Jev</b>; the historical scores below do not validate Jev's predictions. Jev selects structured decisions and factors; resident chatter and reactions use labeled illustrative templates.</p>
+      <section class="manual-step">
+        <div class="manual-kicker"><span class="manual-n">2</span><span class="manual-name">Filter</span></div>
+        <h3 class="manual-title">Ask exactly who matters.</h3>
+        <ul class="about-list">
+          <li>Tap the audience pill: age, neighborhood, occupation, education, e.g. <b>25-year-old software engineers</b>.</li>
+          <li>The result shows who was asked and how many Census records back it.</li>
+        </ul>
+      </section>
 
-      <div class="about-ex">
-        <div class="about-ex-title"><i>2024 Presidency</i></div>
-        <div class="about-ex-q">In November 2024 do you vote for the Democratic presidential ticket (Harris) over the Republican (Trump)?</div>
-        <div class="about-ex-nums"><span class="actual">Actual: 83.8% Dem</span><span class="pred">Predicted: 81.3% Dem</span></div>
-      </div>
+      <section class="manual-step">
+        <div class="manual-kicker"><span class="manual-n">3</span><span class="manual-name">Understand</span></div>
+        <h3 class="manual-title">See the people behind every number.</h3>
+        <ul class="about-list">
+          <li>Under each result: bar, histogram, scatter, box or line by demographic.</li>
+          <li>Hover a bar to see the residents; click it to read each person’s own answer and why; click a person for their full profile.</li>
+        </ul>
+      </section>
 
-      <div class="about-ex">
-        <div class="about-ex-title"><i>March 2024 · Proposition A</i></div>
-        <div class="about-ex-q">There's a measure on your March ballot, Proposition A, that would let the City borrow up to $300 million through general obligation bonds to build and preserve affordable housing — for low-income families, seniors, and working residents. It's backed by Mayor Breed and would need a two-thirds supermajority to pass. Are you voting yes or no?</div>
-        <div class="about-ex-nums"><span class="actual">Actual: 70.38% yes</span><span class="pred">Predicted: 70% yes</span></div>
-      </div>
+      <section class="manual-step">
+        <div class="manual-kicker"><span class="manual-n">4</span><span class="manual-name">Remember</span></div>
+        <h3 class="manual-title">The city evolves as you use it.</h3>
+        <ul class="about-list">
+          <li>Post news or events in the Timeline (<b>A 5.9 earthquake hit the Bay Area</b>); residents react in character.</li>
+          <li>Every event and survey is remembered and shapes the next answer. Ask the same question again and the timeline shows the shift.</li>
+          <li>Everything you post and ask lives in the Timeline; verified Census questions (<b>show the age distribution</b>) work too.</li>
+        </ul>
+      </section>
 
-      <div class="about-h">The future</div>
-      <p>All of decision-making is predicated on our understanding of causality. How will the choices we make influence the world? How will people react?</p>
-      <p>To enable (first) SF, and then the world, to understand the causal nature of reality, we present <span class="about-name">simit</span>.</p>
+      <div class="about-h">Track record</div>
+      <p class="about-track"><b>2024 presidency:</b> 83.8% actual vs 81.3% predicted. <b>March 2024 Prop A:</b> 70.4% vs 70%.
+        Historical GPT-4o backtests; these scores do not validate the current Jev model or establish demand accuracy.</p>
 
       <div class="about-credit">
         Built by <b>Nandan Pericherla</b>, <b>Abhay Sudhir</b>, and <b>Mahin Bharathwaj</b>.
+        <button id="about-tips" class="about-tips" type="button">Show tips again</button>
       </div>
     </div>
 
@@ -259,6 +294,6 @@
   </div>
 
   <script src="backend-config.js?v=1"></script>
-  <script type="module" src="src/app.js?v=pa-1"></script>
+  <script type="module" src="src/app.js?v=evolution-3"></script>
 </body>
 </html>

@@ -1,5 +1,6 @@
 // Data-only audience research. This module never calls scenario/poll endpoints.
 import { BASE, BACKEND_SETUP_MESSAGE } from './config.js';
+import { workspaceHeaders } from './workspace.js?v=2';
 
 export const escapeText = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 export function sourceUrl(value) {
@@ -41,7 +42,7 @@ export async function researchRequest(path, { body, base = BASE, fetcher = globa
   if (signal?.aborted) abort();
   const timer = setTimeout(abort, timeout);
   try {
-    const response = await fetcher(`${base}/audience-research${path}`, { method: body ? 'POST' : 'GET', signal: controller.signal, ...(body ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}) });
+    const response = await fetcher(`${base}/audience-research${path}`, { method: body ? 'POST' : 'GET', signal: controller.signal, headers: { ...workspaceHeaders(), ...(body ? { 'content-type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
     if (response.ok && response.headers.get('content-type')?.includes('application/x-ndjson')) {
       return await readResearchStream(response.body, onActivity, controller.signal);
     }
@@ -139,7 +140,7 @@ export function renderResearchPanel(panel, latestVersion = panel.version) {
 
 export function mountPersonaResearch() {
   const trigger = document.createElement('button');
-  trigger.className = 'pr-trigger'; trigger.type = 'button'; trigger.textContent = 'Audience research · automatic'; trigger.setAttribute('aria-haspopup', 'dialog');
+  trigger.hidden = true; trigger.className = 'pr-trigger'; trigger.type = 'button'; trigger.textContent = 'Audience research · automatic'; trigger.setAttribute('aria-haspopup', 'dialog');
   const dialog = document.createElement('dialog'); dialog.className = 'pr-dialog pr-readonly'; dialog.setAttribute('aria-labelledby', 'pr-title');
   dialog.innerHTML = `<header class="pr-head"><div><span class="pr-kicker">Simtra · audience research</span><h2 id="pr-title">Your audience research.</h2></div><button type="button" data-pr-action="close" aria-label="Close audience research">×</button></header>
     <p class="pr-intro">Hover or tap a persona to explore its research-backed traits.</p>
@@ -149,7 +150,7 @@ export function mountPersonaResearch() {
     <section id="pr-result" aria-label="Research panel"><p class="pr-empty">Your audience, citations and missing information will appear here after you ask a question.</p></section>
     <details class="pr-history"><summary>Saved research</summary><p id="pr-history-status" class="pr-muted"></p><div id="pr-history"></div></details>`;
   const activity = document.createElement('details');
-  activity.className = 'pr-activity'; activity.hidden = true; activity.open = true;
+  activity.className = 'pr-activity'; activity.hidden = true; activity.open = false;
   activity.innerHTML = '<summary>Research activity</summary><div class="pr-activity-body" role="status" aria-live="polite"></div>';
   document.body.append(trigger, activity, dialog);
   let activityEntries = [];
@@ -207,7 +208,7 @@ export function mountPersonaResearch() {
   });
   function updateAutomatic({ stage, question, panel, reused, message, step }) {
     if (['checking', 'skipped', 'demo'].includes(stage)) {
-      activityEntries = []; activity.hidden = true; activity.open = true;
+      activityEntries = []; activity.hidden = true; activity.open = false;
     }
     if (stage === 'checking') addActivity('saved', 'Checking saved research for this question');
     if (stage === 'researching') addActivity('start', 'Starting audience research');
@@ -234,6 +235,7 @@ export function mountPersonaResearch() {
     };
     q('#pr-auto-status').textContent = labels[stage] || '';
     trigger.textContent = stage === 'skipped' ? 'Audience · city residents' : stage === 'unavailable' ? 'Audience · research unavailable' : stage === 'needs_evidence' ? 'Audience · limited evidence' : stage === 'demo' ? 'Audience · offline demo' : stage === 'ready' ? `Audience · ${label}` : stage === 'researching' || stage === 'checking' ? 'Audience · researching…' : stage === 'cancelled' ? 'Audience · cancelled' : 'Audience · needs attention';
+    trigger.hidden = !['ready', 'needs_evidence'].includes(stage);
     trigger.title = question || ''; trigger.setAttribute('aria-live', 'polite');
     if (['checking', 'demo', 'skipped', 'unavailable'].includes(stage)) {
       error(''); selected = null;

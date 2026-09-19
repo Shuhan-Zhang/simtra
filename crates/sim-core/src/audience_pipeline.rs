@@ -992,16 +992,20 @@ fn panel_hash(panel: &Panel) -> Result<String> {
 
 /// Separate SQLite table; never changes simulation branch state or persona memory.
 pub struct PanelStore {
-    conn: Mutex<Connection>,
+    conn: std::sync::Arc<Mutex<Connection>>,
+    workspace: String,
 }
 impl PanelStore {
     pub fn open(path: &str) -> Result<Self> {
         let conn = Connection::open(path).context("open audience panel store")?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch("CREATE TABLE IF NOT EXISTS audience_panels (id TEXT NOT NULL, version INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY(id, version));")?;
-        Ok(Self {
-            conn: Mutex::new(conn),
-        })
+        conn.execute_batch("CREATE TABLE IF NOT EXISTS audience_panels_scoped (workspace TEXT NOT NULL, id TEXT NOT NULL, version INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY(workspace,id,version)); INSERT OR IGNORE INTO audience_panels_scoped SELECT 'public',id,version,body FROM audience_panels;")?;
+        Ok(Self { conn: std::sync::Arc::new(Mutex::new(conn)), workspace: "public".into() })
+    }
+
+    pub fn in_workspace(&self, workspace: &str) -> Self {
+        Self { conn: self.conn.clone(), workspace: crate::memory::normalize_workspace(Some(workspace)) }
     }
 
     pub fn save(&self, mut panel: Panel) -> Result<Panel> {
@@ -1012,8 +1016,8 @@ impl PanelStore {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let latest: Option<String> = tx
             .query_row(
-                "SELECT body FROM audience_panels WHERE id=?1 ORDER BY version DESC LIMIT 1",
-                [&panel.id],
+                "SELECT body FROM audience_panels_scoped WHERE id=?1 AND workspace=?2 ORDER BY version DESC LIMIT 1",
+                params![panel.id, self.workspace],
                 |r| r.get(0),
             )
             .optional()?;
@@ -1037,8 +1041,8 @@ impl PanelStore {
             panel.version = 1;
         }
         tx.execute(
-            "INSERT INTO audience_panels (id,version,body) VALUES (?1,?2,?3)",
-            params![panel.id, panel.version, serde_json::to_string(&panel)?],
+            "INSERT INTO audience_panels_scoped (id,version,body,workspace) VALUES (?1,?2,?3,?4)",
+            params![panel.id, panel.version, serde_json::to_string(&panel)?, self.workspace],
         )?;
         tx.commit()?;
         Ok(panel)
@@ -1049,8 +1053,8 @@ impl PanelStore {
             .conn
             .lock()
             .map_err(|_| anyhow!("panel store unavailable"))?;
-        let mut statement = conn.prepare("SELECT p.body FROM audience_panels p JOIN (SELECT id,MAX(version) version FROM audience_panels GROUP BY id) latest ON p.id=latest.id AND p.version=latest.version ORDER BY p.rowid DESC LIMIT 100")?;
-        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        let mut statement = conn.prepare("SELECT p.body FROM audience_panels_scoped p JOIN (SELECT id,MAX(version) version FROM audience_panels_scoped WHERE workspace=?1 GROUP BY id) latest ON p.id=latest.id AND p.version=latest.version WHERE p.workspace=?1 ORDER BY p.rowid DESC LIMIT 100")?;
+        let rows = statement.query_map([&self.workspace], |row| row.get::<_, String>(0))?;
         rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
     }
 
@@ -1059,7 +1063,7 @@ impl PanelStore {
             .conn
             .lock()
             .map_err(|_| anyhow!("panel store unavailable"))?;
-        let body: Option<String> = conn.query_row("SELECT body FROM audience_panels WHERE id=?1 AND (?2 IS NULL OR version=?2) ORDER BY version DESC LIMIT 1", params![id, version], |r| r.get(0)).optional()?;
+        let body: Option<String> = conn.query_row("SELECT body FROM audience_panels_scoped WHERE id=?1 AND (?2 IS NULL OR version=?2) AND workspace=?3 ORDER BY version DESC LIMIT 1", params![id, version, self.workspace], |r| r.get(0)).optional()?;
         body.map(|body| serde_json::from_str(&body).map_err(Into::into))
             .transpose()
     }

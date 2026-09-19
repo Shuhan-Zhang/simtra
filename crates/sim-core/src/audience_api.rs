@@ -3,7 +3,7 @@ use crate::audience_pipeline::{build_panel, BuildRequest, PanelStore};
 use crate::{audience_sources, model::ModelClient};
 use axum::{
     extract::{DefaultBodyLimit, Path, Query, State},
-    http::StatusCode,
+    http::{StatusCode, HeaderMap},
     routing::{get, post},
     Json, Router,
 };
@@ -19,6 +19,10 @@ pub struct ResearchState {
     gate: Arc<Semaphore>,
 }
 impl ResearchState {
+    fn in_workspace(&self, headers: &HeaderMap) -> Self {
+        let workspace = crate::memory::normalize_workspace(headers.get("x-simtra-workspace").and_then(|v| v.to_str().ok()));
+        Self { client: self.client.clone(), panels: Arc::new(self.panels.in_workspace(&workspace)), gate: self.gate.clone() }
+    }
     pub fn new(client: ModelClient, path: &str) -> anyhow::Result<Self> {
         Ok(Self {
             client,
@@ -47,7 +51,8 @@ async fn config(State(st): State<ResearchState>) -> Json<Value> {
         json!({"search_configured":audience_sources::search_configured(),"jev_configured":st.client.has_key(),"max_sources":8,"max_panel_size":12,"scope":"persona_data_only","progress_stream":true}),
     )
 }
-async fn list(State(st): State<ResearchState>) -> Reply {
+async fn list(State(st): State<ResearchState>, headers: HeaderMap) -> Reply {
+    let st = st.in_workspace(&headers);
     match st.panels.list() {
         Ok(panels) => (StatusCode::OK, Json(json!({"panels":panels}))),
         Err(_) => error(
@@ -62,9 +67,11 @@ struct Version {
 }
 async fn detail(
     State(st): State<ResearchState>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     Query(q): Query<Version>,
 ) -> Reply {
+    let st = st.in_workspace(&headers);
     match st.panels.get(&id, q.version) {
         Ok(Some(panel)) => (StatusCode::OK, Json(json!(panel))),
         Ok(None) => error(StatusCode::NOT_FOUND, "Audience panel version not found."),
@@ -137,8 +144,10 @@ fn validate(req: &BuildRequest) -> Result<(), &'static str> {
 
 async fn create(
     State(st): State<ResearchState>,
+    headers: HeaderMap,
     payload: Result<Json<BuildRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Reply {
+    let st = st.in_workspace(&headers);
     let Json(mut req) = match payload {
         Ok(req) => req,
         Err(_) => {
@@ -200,8 +209,10 @@ struct AutomaticRequest {
 }
 async fn automatic(
     State(st): State<ResearchState>,
+    headers: HeaderMap,
     payload: Result<Json<AutomaticRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Reply {
+    let st = st.in_workspace(&headers);
     automatic_run(st, payload, None).await
 }
 
@@ -211,8 +222,10 @@ fn report(progress: &Option<Progress>, step: &str, message: &str) {
 }
 async fn automatic_stream(
     State(st): State<ResearchState>,
+    headers: HeaderMap,
     payload: Result<Json<AutomaticRequest>, axum::extract::rejection::JsonRejection>,
 ) -> axum::response::Response {
+    let st = st.in_workspace(&headers);
     use axum::response::IntoResponse;
     use futures::StreamExt;
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Value>();

@@ -122,6 +122,18 @@ async fn research_persists_immutable_versions_and_rejects_invalid_requests() {
             .status(),
         404
     );
+    // Another workspace cannot discover or retrieve the public panel.
+    let private: Value = http.get(format!("{base}/audience-research/panels"))
+        .header("X-Simtra-Workspace", "private-demo").send().await.unwrap().json().await.unwrap();
+    assert!(private["panels"].as_array().unwrap().is_empty());
+    assert_eq!(http.get(format!("{base}/audience-research/panels/{id}"))
+        .header("X-Simtra-Workspace", "private-demo").send().await.unwrap().status(), 404);
+    let private_panel: Value = http.post(format!("{base}/audience-research/panels"))
+        .header("X-Simtra-Workspace", "private-demo").json(&input).send().await.unwrap().json().await.unwrap();
+    assert_eq!(private_panel["version"], 1);
+    let other: Value = http.get(format!("{base}/audience-research/panels"))
+        .header("X-Simtra-Workspace", "other-demo").send().await.unwrap().json().await.unwrap();
+    assert!(other["panels"].as_array().unwrap().is_empty());
     task.abort();
     let reopened =
         ResearchState::new(ModelClient::from_env(None).unwrap(), path.to_str().unwrap()).unwrap();

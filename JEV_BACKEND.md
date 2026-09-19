@@ -19,6 +19,12 @@ Native endpoint: `POST /v1/systemone`, Bearer authentication, `{model, state, qu
 
 PUMS weighting, filtered populations, archetype clustering, confidence intervals, memory recall/persistence, and optional evidence integrations remain in place. Legacy Azure/Anthropic models remain explicitly selectable for frozen historical rubrics; Gemini transport and credentials have been removed from the backend.
 
+## Image input (visual stimuli)
+
+Jev evaluates text and structured state only, so an uploaded image never reaches it directly. `POST /cities/:city/stimulus` with `{images:[{media_type, data}], question?}` (1–2 base64 images) runs one vision call per image and returns neutral, observable attributes (`kind`, `summary`, `attributes`, `unknowns`). The frontend shows that under the question ("what Simtra saw") and sends it back as `stimulus` on `/branches/:bid/poll`; it lands in Jev `state.stimulus`, and the Jev rule tells residents to react to exactly those attributes and treat `unknowns` as information they lack. Two images switch the composer to A/B with both variants written from the attributes.
+
+Vision uses `ANTHROPIC_API_KEY` (claude-opus-5) when set, else `GEMINI_API_KEY` (gemini-3.5-flash); with neither, the endpoint returns 503 and the attach control reports it. Responses are cached like text completions (keyed by image hash + prompt). Results are reactions to the extracted description, not to pixels.
+
 ## Output semantics
 
 Jev cannot generate free-form prose. Rationales report an independently selected factor, not a generated chain of reasoning. Chatter and reactions explicitly say `Jev-selected template`; they are illustrative synthetic text, not authentic quotations. The frontend identifies these as Jev-selected factors and preserves template labels.
