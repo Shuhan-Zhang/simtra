@@ -99,3 +99,7 @@ The summary is context only: these profiles do not calculate the Census-based si
 Research summaries show illustrative persona heads and up to two supported traits. Hover, keyboard focus, or tap opens the full supported-trait list. Source excerpts and limits remain in collapsed disclosures; avatars do not imply demographic evidence. Full research and saved versions remain available separately.
 
 The optional `/audience-research/automatic/stream` endpoint emits NDJSON progress at actual context, source-collection, profile-building and saving boundaries, followed by a confirmed result or error. The frontend uses this when advertised by configuration; older backends keep their combined research status. This activity is an operation log, not model reasoning.
+
+### Workspace isolation
+
+Research requests carry the same `X-Simtra-Workspace` header as predictions and timeline events. Saved panels and version lookup are scoped to that workspace; old unscoped rows remain available only in `public`. Workspaces are shareable browser scopes, not authenticated accounts. Research controls stay hidden until a panel is available, and activity starts collapsed.
