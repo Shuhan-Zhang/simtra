@@ -170,16 +170,18 @@ export function mountPersonaResearch() {
       checking: 'Checking saved audience research…',
       researching: 'Identifying business, topic and audience → discovering evidence → saving profiles…',
       ready: `${reused ? 'Reusing' : 'Saved'} audience · ${label} · version ${panel?.version || ''}`,
-      needs_evidence: 'Research saved · insufficient evidence for profiles. See the gaps below; refine your question in the main input.',
+      needs_evidence: 'Research saved · insufficient evidence for profiles. Simulation continues without research profiles; gaps remain available below.',
+      skipped: 'Customer research is not needed for this question. Continuing with the city simulation.',
+      unavailable: `Research unavailable. Simulation continues without research profiles. ${message || ''}`,
       failed: message || 'Audience research could not finish.',
       cancelled: 'Audience research cancelled. No simulation started from this request.',
     };
     q('#pr-auto-status').textContent = labels[stage] || '';
-    trigger.textContent = stage === 'demo' ? 'Audience · offline demo' : stage === 'ready' ? `Audience · ${label}` : stage === 'researching' || stage === 'checking' ? 'Audience · researching…' : stage === 'cancelled' ? 'Audience · cancelled' : 'Audience · needs attention';
+    trigger.textContent = stage === 'skipped' ? 'Audience · city residents' : stage === 'unavailable' ? 'Audience · research unavailable' : stage === 'needs_evidence' ? 'Audience · limited evidence' : stage === 'demo' ? 'Audience · offline demo' : stage === 'ready' ? `Audience · ${label}` : stage === 'researching' || stage === 'checking' ? 'Audience · researching…' : stage === 'cancelled' ? 'Audience · cancelled' : 'Audience · needs attention';
     trigger.title = question || ''; trigger.setAttribute('aria-live', 'polite');
-    if (stage === 'checking' || stage === 'demo') {
+    if (['checking', 'demo', 'skipped', 'unavailable'].includes(stage)) {
       error(''); selected = null;
-      q('#pr-result').innerHTML = `<p class="pr-empty">${stage === 'demo' ? 'Offline fixture demonstration. No audience research was performed.' : 'Preparing research for your current question…'}</p>`;
+      q('#pr-result').innerHTML = `<p class="pr-empty">${stage === 'skipped' ? 'Using the city residents for this question; no customer research was requested.' : stage === 'unavailable' ? 'No research profiles are attached to this simulation.' : stage === 'demo' ? 'Offline fixture demonstration. No audience research was performed.' : 'Preparing research for your current question…'}</p>`;
     }
     if (panel) showPanel(panel);
   }

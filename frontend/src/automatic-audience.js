@@ -45,3 +45,31 @@ export const researchReference = panel => panel ? ({
   id: panel.id, version: panel.version, content_hash: panel.content_hash,
   role: 'research_context_only',
 }) : null;
+
+// A conservative, local relevance check avoids research calls for general opinions.
+// Dedicated marketing and A/B flows supply their explicit commercial context.
+export function audienceResearchHelpful(question, { commercial = false } = {}) {
+  return commercial || /\b(customers?|consumers?|buyers?|buy(?:ing)?|purchase[sd]?|purchasing|shop(?:ping|pers)?|prices?|pricing|cheaper|expensive|afford(?:able)?|discounts?|products?|brands?|business|marketing|advertis(?:ing|ements?)|ads?|subscriptions?|sales|competitors?|switching|willing to pay)\b/i.test(question || '');
+}
+
+export async function prepareHelpfulAudience(question, options = {}) {
+  const { signal, onProgress = () => {} } = options;
+  const check = () => { if (signal?.aborted) throw new DOMException('Audience research cancelled', 'AbortError'); };
+  check();
+  if (!audienceResearchHelpful(question, options)) {
+    onProgress({ stage: 'skipped', question });
+    return null;
+  }
+  let incomplete = false;
+  try {
+    return await prepareAutomaticAudience(question, { ...options, onProgress: progress => {
+      incomplete = progress.stage === 'needs_evidence';
+      onProgress(progress);
+    } });
+  } catch (error) {
+    check();
+    if (error.name === 'AbortError') throw error;
+    if (!incomplete) onProgress({ stage: 'unavailable', question, message: error.message });
+    return null; // Research context is optional; the Census evaluator can continue.
+  }
+}

@@ -92,3 +92,40 @@ test('legacy panels without interpreted context do not bypass automatic identifi
   } });
   assert.deepEqual(calls, ['/panels', '/config', '/automatic']);
 });
+
+const { prepareHelpfulAudience, audienceResearchHelpful } = await import('../src/automatic-audience.js');
+test('general opinions skip all research requests while commercial questions opt in', async () => {
+  for (const general of ['do you like the golden state bridge', 'Do you like the Golden Gate Bridge?', 'Will residents support the new park?']) {
+    const progress = [];
+    assert.equal(await prepareHelpfulAudience(general, { onProgress: p => progress.push(p.stage), request: async () => { assert.fail('No research request expected'); } }), null);
+    assert.deepEqual(progress, ['skipped']);
+  }
+  for (const commercial of [question, 'Would people buy this?', 'What if I raise prices by 20%?', 'Which product would residents prefer?']) assert.equal(audienceResearchHelpful(commercial), true);
+  assert.equal(audienceResearchHelpful('Which message is better?', { commercial: true }), true);
+});
+test('optional research keeps successful saved profiles', async () => {
+  assert.equal(await prepareHelpfulAudience(question, { location: panel.location, request: async path => path === '/panels' ? { panels: [panel] } : panel }), panel);
+});
+test('insufficient evidence remains inspectable and permits simulation without research', async () => {
+  const empty = { ...panel, status: 'needs_evidence', personas: [] }, progress = [];
+  const result = await prepareHelpfulAudience(question, { onProgress: p => progress.push(p), request: async (path, options) => options.body ? empty : path === '/config' ? { search_configured: true, jev_configured: true } : { panels: [] } });
+  assert.equal(result, null);
+  assert.equal(progress.at(-1).stage, 'needs_evidence');
+  assert.equal(progress.at(-1).panel, empty);
+  assert.equal(researchReference(result), null);
+});
+test('missing configuration and failed services do not block optional research callers', async () => {
+  for (const request of [async path => path === '/panels' ? { panels: [] } : { search_configured: false }, async () => { throw new Error('Service unavailable'); }]) {
+    const progress = [];
+    assert.equal(await prepareHelpfulAudience(question, { request, onProgress: p => progress.push(p) }), null);
+    assert.equal(progress.at(-1).stage, 'unavailable');
+  }
+});
+test('optional research must never swallow cancellation, including skipped questions', async () => {
+  for (const q of [question, 'Do you like the bridge?']) {
+    const controller = new AbortController(); controller.abort();
+    await assert.rejects(prepareHelpfulAudience(q, { signal: controller.signal }), { name: 'AbortError' });
+  }
+  const controller = new AbortController();
+  await assert.rejects(prepareHelpfulAudience(question, { signal: controller.signal, request: async () => { controller.abort(); throw new Error('Cancelled transport'); } }), { name: 'AbortError' });
+});

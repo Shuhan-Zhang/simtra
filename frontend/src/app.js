@@ -10,7 +10,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { SIM, PREDICT, TIMING, MAP, BASE, BACKEND_SETUP_MESSAGE } from "./config.js";
-import { prepareAutomaticAudience, researchReference } from "./automatic-audience.js";
+import { prepareHelpfulAudience, researchReference } from "./automatic-audience.js";
 import { personaResearchUI, renderResearchSummary } from "./persona-research.js";
 import { rationaleLabel, estimateLabel } from "./model-display.js";
 import { SFMap } from "./map.js";
@@ -1125,7 +1125,7 @@ function looksLikeVerifiedQuestion(question) {
 }
 
 // Research is automatic data preparation; it never changes the evaluator population.
-async function prepareQuestionAudience(question, signal) {
+async function prepareQuestionAudience(question, signal, commercial = false) {
   if (api.isDemo) {
     personaResearchUI.updateAutomatic({ stage: 'demo', question });
     return null; // Explicit offline demo never performs live discovery.
@@ -1133,14 +1133,16 @@ async function prepareQuestionAudience(question, signal) {
   const cancelled = () => { personaResearchUI.updateAutomatic({ stage: 'cancelled', question }); };
   signal.addEventListener('abort', cancelled, { once: true });
   try {
-    return await prepareAutomaticAudience(question, {
+    return await prepareHelpfulAudience(question, {
+      commercial,
       location: state.city?.display || '', signal,
       onProgress: progress => {
         personaResearchUI.updateAutomatic(progress);
-        els.askLabel.textContent = progress.stage === 'ready' ? 'audience ready…' : 'researching audience…';
-        els.progressLabel.textContent = progress.stage === 'ready'
-          ? 'audience research saved; continuing simulation…'
-          : 'finding evidence and building audience profiles… (esc to cancel)';
+        const researching = ['checking', 'researching'].includes(progress.stage);
+        els.askLabel.textContent = researching ? 'researching audience…' : 'preparing simulation…';
+        els.progressLabel.textContent = researching
+          ? 'finding evidence and building audience profiles… (esc to cancel)'
+          : 'continuing simulation… (esc to cancel)';
       },
     });
   } catch (error) {
@@ -1286,7 +1288,7 @@ async function runMarketingTest() {
   setMarketingBusy(true);
 
   try {
-    const researchPanel = await prepareQuestionAudience(input.question, signal);
+    const researchPanel = await prepareQuestionAudience(input.question, signal, true);
     if (myReq !== state.reqId) return;
     const parsed = await api.parseQuestion(citySlug(), input.question, signal);
     if (myReq !== state.reqId) return;
@@ -1432,7 +1434,7 @@ async function runAbTest() {
   map.setWaiting();
 
   try {
-    const researchPanel = await prepareQuestionAudience(input.question, signal);
+    const researchPanel = await prepareQuestionAudience(input.question, signal, true);
     if (myReq !== state.reqId) return;
     const result = await api.abTest(state.mainBranch, {
       ...input,
