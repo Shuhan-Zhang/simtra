@@ -163,7 +163,7 @@ export async function compareScenarios(branchId, payload, signal, onLog = () => 
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
       const error = new Error(data.error || `Experiment backend returned HTTP ${response.status}.`);
-      error.status = response.status; error.trace = data.trace; throw error;
+      error.status = response.status; error.serverMessage = data.error || ""; error.trace = data.trace; throw error;
     }
     if (!response.headers.get("content-type")?.includes("application/x-ndjson")) throw new Error("The backend needs the updated streaming experiment endpoint.");
     return await readExecutionStream(response, onLog);
@@ -173,7 +173,7 @@ export async function compareScenarios(branchId, payload, signal, onLog = () => 
   } finally { clearTimeout(timer); signal?.removeEventListener("abort", cancel); }
 }
 
-// Planning selects a recipe; no synthetic resident is polled until approval.
+// Planning selects a recipe; automatic comparison follows once the recipe is valid.
 export const proposeExperiment = (city, question, signal) =>
   req(`/cities/${encodeURIComponent(city)}/experiment-plan`, { method: "POST", body: { question, city }, signal, timeout: 60000 });
 
