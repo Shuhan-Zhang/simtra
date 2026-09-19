@@ -16,7 +16,7 @@ const ask=async page=>{await page.locator('#ask-input').fill(question);await pag
   // The offline path remains explicit and does not contact external providers.
   const offline=await browser.newPage({viewport:{width:1440,height:1000}}),external=[];
   await offline.route('**/*',r=>r.request().url().startsWith(base+'/')?r.continue():(external.push(r.request().url()),r.abort()));
-  await offline.goto(base+'/?demo=1');await ready(offline);await ask(offline);await offline.locator('.ex-rank').first().waitFor();
+  await offline.goto(base+'/?demo=1');await ready(offline);await ask(offline);await offline.locator('.ex-matrix-cell').first().waitFor();
   assert.match(await offline.locator('.ex-curve').textContent(),/20%/);
   assert.equal(await offline.locator('input[type=file]').count(),0,'image upload removed from entry');
   assert.equal(await offline.locator('.ask-options').count(),0);
@@ -75,7 +75,7 @@ const ask=async page=>{await page.locator('#ask-input').fill(question);await pag
   assert.deepEqual(compareBody.research_panel,{id:panel.id,version:1,content_hash:'pinned-hash',role:'research_context_only'});
   assert.equal(compareBody.scenarios.length,24);assert.ok(compareBody.scenarios.some(s=>s.change===0));assert.ok(compareBody.scenarios.some(s=>s.change===20));
   await page.screenshot({path:'/tmp/simtra-chipotle-plan.png'});comparisonRelease();
-  await page.locator('.ex-rank').first().waitFor();
+  await page.locator('.ex-matrix-cell').first().waitFor();
   assert.equal(await page.locator('.ex-curve [data-scenario]').count(),6);
   assert.match(await page.locator('.ex-impact').innerText(),/Price|Location/);
   assert.match(await page.locator('#research-workspace').innerText(),/20%/);

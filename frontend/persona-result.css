@@ -1,0 +1,25 @@
+/* Profile summaries use one selected result and a single controlled comparison. */
+.pr-scenario-chips { display:flex; flex-wrap:wrap; gap:8px; margin:20px 0; }
+.pr-scenario-chips span { padding:7px 11px; border:1px solid #d8dde4; border-radius:18px; font-size:15px; color:#333f4c; background:#fff; }
+.pr-person-metric { display:flex; align-items:center; gap:18px; margin:20px 0 8px; }
+.pr-person-metric > strong { font-size:42px; color:#087cff; letter-spacing:-1.5px; line-height:1.1; }
+.pr-person-metric > span { font-size:17px; line-height:1.45; color:#303d4b; }
+.pr-group-note, .pr-context { color:#596474; font-size:15px; line-height:1.5; }
+.pr-comparison { display:flex; flex-wrap:wrap; align-items:center; gap:16px; padding:18px 0; border-block:1px solid #d8dde4; margin:20px 0; }
+.pr-comparison > span, .pr-comparison > strong { font-size:23px; }
+.pr-comparison small { display:block; color:#596474; font-size:14px; font-weight:400; margin-top:4px; }
+.pr-comparison > strong { margin-left:auto; }
+.pr-driver { display:flex; align-items:baseline; flex-wrap:wrap; gap:10px; font-size:16px; margin:18px 0; }
+.pr-driver > span { color:#596474; }
+.pr-price-compare h4 { font-size:18px; margin:24px 0 4px; }
+.pr-context { margin:0 0 14px; }
+.pr-price-bars { display:grid; gap:6px; }
+.pr-price-point { display:grid; grid-template-columns:66px minmax(36px, 1fr) 80px; gap:12px; align-items:center; text-align:left; padding:10px; border:1px solid transparent; border-radius:10px; background:transparent; color:#303d4b; font:inherit; font-size:16px; cursor:pointer; }
+.pr-price-point strong { text-align:right; font-size:16px; }
+.pr-price-point[aria-pressed="true"] { border-color:#087cff; background:#eaf3ff; color:#005dcc; }
+.pr-price-point:hover { background:#eaf3ff; }
+.pr-price-point:focus-visible { outline:2px solid #087cff; outline-offset:2px; }
+.pr-bar-track { display:block; height:12px; overflow:hidden; border-radius:8px; background:#dfe5ed; }
+.pr-bar-track > span { display:block; height:100%; background:#87b9ef; border-radius:8px; }
+.pr-price-point[aria-pressed="true"] .pr-bar-track > span { background:#087cff; }
+@media(max-width:480px) { .pr-person-metric { align-items:flex-start; flex-direction:column; gap:8px; } .pr-price-point { gap:7px; padding:9px 5px; } }

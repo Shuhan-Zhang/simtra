@@ -14,6 +14,7 @@
 
 import { COLORS, TIMING, MAP } from "./config.js";
 import { residentResponseLabels } from "./resident-responses.js";
+import { researchMapColors } from "./map-colors.js";
 import { createSegmentIndex, normalizeSegmentSelection, selectSegments } from "./segment-selection.js";
 
 const POP_MS = 340; // per-sprite verdict pop duration
@@ -610,13 +611,14 @@ export class SFMap {
     const now = performance.now();
     this.revealT0 = now; this.clearFade = 1;
     const spread = durationMs * 0.82;
-    this.agents.forEach((a, i) => { a.verdict = verdicts[i]; a.activateAt = this.reducedMotion ? now - POP_MS : now + Math.random() * spread; });
+    this.agents.forEach((a, i) => { a.markerColor = null; a.verdict = verdicts[i]; a.activateAt = this.reducedMotion ? now - POP_MS : now + Math.random() * spread; });
     this.revealCount = 0; this.mode = "reveal";
   }
 
   clearVerdicts() {
     this.hasResearchResponses = false;
-    for (const a of this.agents) { a.rationale = null; a.response = null; }
+    this.mapColorLegend = []; this.mapColorMode = "response";
+    for (const a of this.agents) { a.rationale = null; a.response = null; a.markerColor = null; }
     if (this.reducedMotion) { for (const a of this.agents) a.verdict = null; this.mode = "idle"; this.clearFade = 1; return; }
     if (this.mode === "idle") return;
     this.clearT0 = performance.now(); this.mode = "clearing";
@@ -626,31 +628,23 @@ export class SFMap {
   // over arbitrary people. Keep this compatibility hook for quick-poll callers.
   setRationales() {}
 
-  setResearchResponses(groups, options) {
+  setResearchResponses(groups, options, { colorBy = "response" } = {}) {
     const labels = residentResponseLabels(groups, options);
     this.hasResearchResponses = labels.size > 0;
-    // A head dot describes the resident's modeled response group, not an
-    // independently sampled vote. Only binary groups with a clear preference
-    // receive a color; missing estimates and ties stay neutral.
-    const verdicts = new Map();
-    if (options?.length === 2) {
-      for (const group of groups || []) {
-        const probabilities = group.probabilities;
-        const valid = residentResponseLabels([group], options).size > 0;
-        if (!valid) continue;
-        const verdict = probabilities[0] === probabilities[1] ? null : probabilities[0] > probabilities[1] ? "yes" : "no";
-        for (const id of group.agent_ids || []) verdicts.set(Number(id), verdict);
-      }
-    }
+    const colors = researchMapColors(groups, options, this.agents, colorBy);
+    this.mapColorMode = colors.mode;
+    this.mapColorLegend = colors.legend;
     const now = performance.now();
     for (const a of this.agents) {
       a.response = labels.get(Number(a.seed)) || null;
-      a.verdict = verdicts.get(Number(a.seed)) || null;
+      a.verdict = colors.verdicts.get(Number(a.seed)) || null;
+      a.markerColor = colors.colors.get(Number(a.seed)) || null;
       a.activateAt = now - POP_MS;
     }
     this.clearFade = 1;
     this.mode = this.hasResearchResponses ? "results" : "idle";
     this.bubbleT = 0;
+    return colors;
   }
 
   start() { if (!this._raf) { this.lastT = performance.now(); this._raf = requestAnimationFrame(this._loop); } }
@@ -783,7 +777,7 @@ export class SFMap {
 
       // verdict pop scale
       let vScale = 0;
-      if (showVerdict && a.verdict) {
+      if (showVerdict && (a.markerColor || (!this.hasResearchResponses && a.verdict))) {
         const local = now - a.activateAt;
         if (local >= 0) vScale = (this.reducedMotion ? 1 : easeOutBack(clamp01(local / POP_MS))) * this.clearFade;
       }
@@ -824,7 +818,7 @@ export class SFMap {
       ctx.globalAlpha = selectionAlpha;
       // verdict marker: a colored dot floating just above the sprite's head
       if (vScale > 0.01) {
-        const col = a.verdict === "yes" ? COLORS.yes : COLORS.no;
+        const col = a.markerColor || (a.verdict === "yes" ? COLORS.yes : COLORS.no);
         const rr = Math.max(2.2, w * 0.22) * clamp01(vScale);
         const mx = footX, my = footY - h - rr * 0.6;
         ctx.beginPath(); ctx.fillStyle = withAlpha(col, 0.92 * clamp01(vScale));
