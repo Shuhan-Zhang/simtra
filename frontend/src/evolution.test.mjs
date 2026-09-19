@@ -14,10 +14,10 @@ function harness(){
  const document={body:{append(e){els.push(e)},classList:{add(){},remove(){}}},createElement:element,addEventListener(){}};
  const ctx=vm.createContext({document,console,AbortController,BASE:'',workspaceHeaders:()=>({'X-Simtra-Workspace':'test'}),sessionStorage:{getItem:k=>saved.get(k),setItem:(k,v)=>saved.set(k,v),removeItem:k=>saved.delete(k)},setTimeout:()=>1,clearTimeout(){},setInterval(){},fetch:(url)=>new Promise(resolve=>pending.push({url,resolve:data=>resolve({ok:true,json:async()=>data})}))});
  vm.runInContext(source+'\nglobalThis.init=initEvolution;',ctx);
- ctx.init({map,getBranch:()=> 'main',getCity:()=> 'sf',isReady:()=>true});
- const [launch,root,transport]=els,q=s=>root.querySelector(s),t=s=>transport.querySelector(s);
- launch.fire();
- return {map,pending,q,t,launch,root,async start(){t('[data-step-forward]').fire();pending.shift().resolve(fixture());await flush();},resolveStep(tick){pending.shift().resolve({frame:frame(tick)});}};
+ const controller=ctx.init({map,getBranch:()=> 'main',getCity:()=> 'sf',isReady:()=>true});
+ const [root,transport]=els,q=s=>root.querySelector(s),t=s=>transport.querySelector(s);
+ controller.open();
+ return {map,pending,q,t,launch:{fire:()=>controller.open()},root,controller,async start(){t('[data-step-forward]').fire();pending.shift().resolve(fixture());await flush();},resolveStep(tick){pending.shift().resolve({frame:frame(tick)});}};
 }
 test('reset during pending step retains baseline and records result for exact replay',async()=>{
  const h=harness();await h.start();h.t('[data-reset]').fire();h.resolveStep(1);await flush();
@@ -44,4 +44,12 @@ test('scrubber retains the requested value when pause refreshes the controls',as
  const slider=h.t('[data-scrub]');slider.value='0';slider.fire('input',{target:slider});
  assert.equal(h.map.evolution.frame.tick,0);assert.equal(h.pending.length,0);
  slider.value='1';slider.fire('input',{target:slider});assert.equal(h.map.evolution.frame.tick,1);
+});
+
+test('an event starts playback without a launcher or another scenario submission',async()=>{
+ const h=harness();h.controller.start('A local restaurant raises prices');
+ assert.equal(h.q('#evo-scenario').value,'A local restaurant raises prices');
+ assert.equal(h.pending.length,1);h.pending.shift().resolve(fixture());await flush();
+ assert.equal(h.pending.length,1);h.resolveStep(1);await flush();
+ assert.equal(h.map.evolution.frame.tick,1);
 });

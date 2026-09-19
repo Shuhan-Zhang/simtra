@@ -216,6 +216,7 @@ mod tests {
             population: None,
             event: None,
             options: vec![],
+            stimulus: None,
         };
         let result = PollResult {
             question: poll.question.clone(),

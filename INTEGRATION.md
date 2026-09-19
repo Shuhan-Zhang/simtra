@@ -424,8 +424,8 @@ unchanged. Recalled event memories include the saved sentiment.
 
 **Simulate city response** measures primary practical behavior across the whole
 synthetic population: for example switching restaurants, eating out less, or staying
-home more. Enter a hypothetical scenario and use Start/Pause, Next day, Rewind,
-speed controls and the timeline slider to compare 14 daily snapshots. Outcome bars
+home more. Post an event in the existing timeline to start playback automatically. Pause or scrub
+to compare 14 daily snapshots; manual step, rewind and speed controls are under Playback options. Outcome bars
 and a time-series chart use the existing white/blue chart style. Click an outcome
 to inspect its trend and highlight its cohorts on the map.
 
@@ -450,3 +450,40 @@ to inspect its trend and highlight its cohorts on the map.
 
 Checks: `node --test frontend/src/evolution.test.mjs frontend/src/feedpanel.test.mjs`
 and `cargo test -p simfrancisco`.
+## Workspaces
+
+Residents (Persona/Population nodes) are shared by every workspace; only what a workspace posts and asks is private (`Test.workspace`, `Event.workspace`, and a per-workspace City node). A fresh workspace is seeded with a curated set of surveys and events copied from `public` onto the same residents. (per-browser memory)
+
+Memory (events, reactions, asks and their answers, personal answers, data queries) is
+scoped to a **workspace**. There are no accounts: the browser makes an id on first
+visit (`localStorage` key `simtra.workspace`) and sends it on every request as
+
+```
+X-Simtra-Workspace: <id>      # [A-Za-z0-9_-]{1,32}
+```
+
+A missing or invalid header means workspace `public`, which holds everything written
+before workspaces existed. `?ws=<id>` in the page URL adopts that workspace (and stores
+it), so a workspace can be shared by link; the timeline's ··· menu has *Share timeline link* / *Start a new workspace*.
+Simulations and populations are deterministic and shared across workspaces; only the
+memory graph is partitioned (City nodes are keyed `"{ws}:{slug}"`, populations
+`"{ws}:{city}:{seed}:{n}"`). The frontend also sends `ngrok-skip-browser-warning: 1`
+so a tunnelled backend answers JSON instead of the ngrok interstitial.
+
+`POST /workspace/seed` → fill a brand-new workspace with examples so it never opens
+empty: the 3 most recent public surveys (polls with stored breakdowns, answers re-keyed
+onto the workspace's own `sf` / seed 42 / 10,000 personas, personal answers included)
+and the 3 most recent public news events with their reactions. Copied nodes get new
+ids and `seeded: true` but keep their original dates. No-op for `public` and once the
+workspace has any survey or event. The frontend calls it once, right after it mints a
+new workspace id.
+
+```json
+{"workspace":"a1b2c3d4e5f6","seeded":true,"tests":3,"events":3}
+```
+
+`GET /workspace` → what the current workspace remembers:
+
+```json
+{"workspace":"a1b2c3d4e5f6","memory_configured":true,"events":3,"tests":2,"data_queries":0}
+```

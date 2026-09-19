@@ -32,7 +32,6 @@ async function request(path,body){
 }
 
 export function initEvolution({map,getBranch,getCity,isReady}){
-  const launch=document.createElement('button');launch.id='evo-launch';launch.className='evo-launch';launch.innerHTML='<span aria-hidden="true">↗</span> Simulate city response';document.body.append(launch);
   const root=document.createElement('section');root.id='evolution';root.hidden=true;root.setAttribute('aria-label','City behavior simulation');
   root.innerHTML=`<div class="evo-heading"><div><span class="evo-eyebrow">CITY SIMULATION</span><h2>What changes across the city?</h2></div><button data-close aria-label="Close city simulation">×</button></div>
     <div data-setup class="evo-setup"><label for="evo-scenario">What happens?</label><textarea id="evo-scenario" maxlength="2000" rows="3" placeholder="Chipotle raises menu prices by 20% in San Francisco."></textarea><div class="evo-examples"><button data-example="Chipotle raises menu prices by 20% in this city.">Restaurant prices +20%</button><button data-example="A serious public safety incident occurs downtown. How do residents change their outings?">Safety incident</button><button data-example="Public transit fares increase by 50% across this city.">Transit fares +50%</button></div><p class="evo-empty">Watch how everyday choices change over 14 simulated days.</p></div>
@@ -47,7 +46,7 @@ export function initEvolution({map,getBranch,getCity,isReady}){
   const transport=document.createElement('section');transport.id='evo-transport';transport.hidden=true;transport.setAttribute('aria-label','Simulation playback');
   transport.innerHTML=`<div class="evo-transport-top"><div><span class="evo-live" data-mode>READY</span><strong data-clock>Before event</strong><span data-step>0 / 14 days</span></div><span data-latency></span></div>
     <input type="range" min="0" max="0" value="0" step="1" data-scrub aria-label="Simulation timeline" disabled>
-    <div class="evo-controls"><button data-play class="evo-primary">▶ Start</button><button data-step-forward>Next day →</button><button data-reset>↶ Rewind</button><button data-latest>Latest</button><button data-new>New scenario</button><label>Speed <select data-speed aria-label="Playback speed"><option value="1800">1×</option><option value="800">2×</option><option value="300">4×</option></select></label></div>
+    <div class="evo-controls"><button data-play class="evo-primary">▶ Start</button><details class="evo-more"><summary>Playback options</summary><button data-step-forward>Next day →</button><button data-reset>↶ Rewind</button><button data-latest>Latest</button><button data-new>New scenario</button><label>Speed <select data-speed aria-label="Playback speed"><option value="1800">1×</option><option value="800">2×</option><option value="300">4×</option></select></label></details></div>
     <div class="evo-track-note">Drag back to compare earlier days. Replay uses the same recorded results.</div>`;
   document.body.append(transport);
   const q=s=>root.querySelector(s),t=s=>transport.querySelector(s);
@@ -114,7 +113,7 @@ export function initEvolution({map,getBranch,getCity,isReady}){
     }catch(e){if(gen===generation){pause();q('[data-error]').textContent=e.message;}}
     finally{busy=false;renderControls();if(playing&&opened){if(index>=(run?.max_ticks||14))pause();else timer=setTimeout(advance,Number(t('[data-speed]').value));}}
   }
-  function close(){pause();opened=false;root.hidden=true;transport.hidden=true;document.body.classList.remove('evolution-open');map.setEvolution(null);launch.focus();}
+  function close(){pause();opened=false;root.hidden=true;transport.hidden=true;document.body.classList.remove('evolution-open');map.setEvolution(null);document.getElementById?.('ask-input')?.focus();}
   function open(){
     if(!isReady())return;
     if(context!==contextKey()){generation++;run=null;index=0;context=contextKey();}
@@ -122,7 +121,7 @@ export function initEvolution({map,getBranch,getCity,isReady}){
     if(!run)try{const saved=JSON.parse(sessionStorage.getItem(storageKey())||'null');if(saved?.branch===getBranch()&&saved.outcomes&&saved.frames?.length){run=saved;}}catch{}
     render();if(run)t('[data-play]').focus();else q('#evo-scenario').focus();
   }
-  launch.addEventListener('click',open);q('[data-close]').addEventListener('click',close);
+  q('[data-close]').addEventListener('click',close);
   t('[data-play]').addEventListener('click',()=>{if(playing){pause();return;}playing=true;renderControls();if(!busy)void advance();});
   t('[data-step-forward]').addEventListener('click',()=>{pause();void advance();});
   t('[data-new]').addEventListener('click',()=>{pause();generation++;if(run)q('#evo-scenario').value=run.scenario;run=null;index=0;metric='changed';try{sessionStorage.removeItem(storageKey());}catch{}map.setEvolution(null);q('[data-error]').textContent='';render();q('#evo-scenario').focus();});
@@ -135,6 +134,12 @@ export function initEvolution({map,getBranch,getCity,isReady}){
   for(const el of [root,transport])for(const event of ['pointerdown','wheel','keydown'])el.addEventListener(event,e=>e.stopPropagation());
   document.addEventListener('keydown',e=>{if(opened&&e.key==='Escape'){e.preventDefault();close();}},true);
   document.addEventListener('visibilitychange',()=>{if(document.hidden)pause();});
-  setInterval(()=>{launch.disabled=!isReady();if(opened&&context!==contextKey()){close();generation++;run=null;index=0;}},500);
+  setInterval(()=>{if(opened&&context!==contextKey()){close();generation++;run=null;index=0;}},500);
   renderControls();
+  return { open, start(scenario) {
+    if (!isReady() || busy || initializing) return;
+    open(); pause(); generation++; run=null; index=0; metric='changed';
+    q('#evo-scenario').value=scenario;
+    playing=true; render(); void advance();
+  }};
 }

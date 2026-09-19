@@ -18,12 +18,17 @@ import {
   AB_CROSS_KEY_SEP, AB_MIN_SEGMENT_N, abCrossMatrix, abLeanAlpha, abSegments,
   abTopMovers, isCrossBreakdown, normalizeBreakdowns, pct, signedPp,
 } from "./ab-analysis.js";
-import * as api from "./api.js?v=pa-1";
+import { initLocationContext, locationEvidence } from "./location-context.js";
+import { withSimulationRecovery } from "./simulation-recovery.js";
+import * as api from "./api.js?v=ws-1";
 import { buildEvidenceChartModel } from "./evidence-chart.js";
-import { createPersonaChart, answerLabel } from "./persona-chart.js?v=4";
+import { createPersonaChart, answerLabel } from "./persona-chart.js?v=5";
 import { buildVerifiedDataModel, renderVerifiedData, bindVerifiedData, reduceVerifiedSelection, verifiedMapSelection } from "./verified-data.js";
 import { snapshotAudience, describeAudience, audienceHeader, audienceScope } from "./audience.js";
-import { initFeedPanel, refreshFeedPanel, lineageItems } from "./feedpanel.js?v=19";
+import { initFeedPanel, refreshFeedPanel, lineageItems } from "./feedpanel.js?v=18";
+import { startTour } from "./tour.js?v=1";
+import { isFreshWorkspace } from "./workspace.js?v=2";
+import { prepareImage, stimulusText, attributesLine, MAX_STIMULI, esc as escStim } from "./stimulus.js?v=1";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -54,6 +59,9 @@ const els = {
   askExtra: document.querySelector(".ask-extra"),
   askModes: document.querySelector(".ask-modes"),
   askError: $("ask-error"),
+  askAttach: $("ask-attach"),
+  askFile: $("ask-file"),
+  stimulusStrip: $("stimulus-strip"),
   abFields: $("ab-fields"),
   abA: $("ab-a"),
   abB: $("ab-b"),
@@ -85,6 +93,7 @@ const els = {
 };
 
 export const map = new SFMap(els.canvas);
+const locationContext = initLocationContext({ select: $("location-area"), note: $("location-note"), getLocations: api.getLocations });
 const motionPreference = matchMedia("(prefers-reduced-motion: reduce)");
 map.reducedMotion = motionPreference.matches;
 motionPreference.addEventListener("change", (event) => { map.reducedMotion = event.matches; });
@@ -95,6 +104,8 @@ export const state = {
   phase: "booting", queryMode: "simulation", askMode: "predict",
   simId: null, mainBranch: null, branchId: null,
   lastResult: null, lastAbInput: null, lastMarketingInput: null, reqId: 0, abort: null,
+  // images attached to the composer: [{thumb, media_type, data, stimulus, loading, filledText}]
+  stimuli: [],
   residents: SIM.n, rawResidents: [],
   cities: [],            // [{slug, display, bbox, ...}] from GET /cities
   city: null,            // the active city object (falls back to a synthetic "sf")
@@ -209,7 +220,7 @@ const inputOpen = () => els.ask.dataset.state === "input";
 
 const ASK_MODE_LABEL = { predict: "ask", ab: "A/B test", marketing: "post test" };
 const ASK_MODE_PLACEHOLDER = {
-  predict: "Ask a question — for choices, list options: bus, train, or bicycle",
+  predict: "Would you try a new local service offering $5 off your first order?",
   ab: "Which message makes you more likely to support this proposal?",
   marketing: "Do you support the proposed transit measure?",
 };
@@ -224,6 +235,7 @@ function setAsk(s) {
 // switching never leaves the place the question is typed.
 function setAskMode(mode) {
   state.askMode = mode;
+  locationContext.setMode(mode);
   els.ask.dataset.mode = mode;
   for (const b of els.askModes.querySelectorAll(".ask-mode")) b.setAttribute("aria-checked", b.dataset.mode === mode ? "true" : "false");
   els.abFields.hidden = mode !== "ab";
@@ -237,6 +249,30 @@ function setAskMode(mode) {
 function cleanupBranch() {
   resetEvidence();
   if (state.branchId) { api.deleteBranch(state.branchId); state.branchId = null; }
+}
+
+// Recreate the same seeded, filtered population after a backend restart without
+// clearing the user's question, launch area, workspace or in-flight UI state.
+function withCurrentSimulation(run, signal) {
+  const requestId = state.reqId;
+  const city = citySlug();
+  const filters = { ...state.filters };
+  return withSimulationRecovery({run, signal, restore: async () => {
+    els.progressLabel.textContent = "reconnecting your audience after a server restart…";
+    const sim = await api.createSimulation({city, ...(filterCount(filters) ? {filters} : {})});
+    const agents = await api.getAllAgents(sim.main_branch);
+    if (signal?.aborted || requestId !== state.reqId) throw new DOMException("Request cancelled", "AbortError");
+    if (!agents.length) throw new Error("Couldn't restore the selected audience");
+    state.simId = sim.simulation_id;
+    state.mainBranch = sim.main_branch;
+    state.rawResidents = agents;
+    state.residents = agents.length;
+    state.filterSourceRecords = sim.source_records ?? state.filterSourceRecords;
+    map.setAgents(agents);
+    map.setSim(city, sim.main_branch);
+    map.setWaiting();
+    refreshFeedPanel({quiet:true});
+  }});
 }
 
 
@@ -365,7 +401,7 @@ function attachEvidence(result, ab = false) {
   if (testId) {
     fetchAnswers(testId).then((answers) => {
       if (seq !== chart.seq || !chart.inst) return;
-      const samePopulation = !result.past || result.past.population_key === populationKey();
+      const samePopulation = !result.past || samePopulationAs(result.past.population_key);
       if (answers && answers.size && samePopulation) chart.inst.setAnswers(answers, "");
       else chart.inst.setAnswers(null, answers && answers.size && !samePopulation
         ? "These residents were asked in a different simulation, so this view shows group shares without per-person answers."
@@ -377,6 +413,14 @@ function populationKey() {
   const c = citySlug(); const seed = SIM.seed; const n = state.residents;
   return filterCount() ? null : `${c}:${seed}:${n}`;
 }
+// Backend population keys carry a workspace prefix outside `public`
+// ("<ws>:sf:42:10000"), so compare on the city:seed:n tail.
+function samePopulationAs(key) {
+  const mine = populationKey();
+  if (!key || !mine) return !key;
+  return key === mine || key.endsWith(":" + mine);
+}
+export { samePopulationAs };
 // Census figures back the chart only as tooltip text: one verified-data query per
 // dimension, cached per city, never used as chart data.
 const CENSUS_ALIAS = { age: "age", gender: "sex", race: "race and ethnicity", education: "education", employment: "employment", citizenship: "citizenship", nativity: "nativity", marital: "marital status", tenure: "tenure" };
@@ -487,8 +531,9 @@ function setBoot(p) { els.bootFill.style.width = `${Math.round(Math.max(0, Math.
 async function boot() {
   map.onZoomChange = (zoomedIn) => { zoomedIn ? show(els.returnBtn) : hide(els.returnBtn); };
   map.start();
-  initEvolution({map, getBranch:()=>state.mainBranch, getCity:citySlug, isReady:()=>!!state.mainBranch && !state.switching && !api.isDemo && !isBusy() && state.phase!=="booting"});
+  const evolution = initEvolution({map, getBranch:()=>state.mainBranch, getCity:citySlug, isReady:()=>!!state.mainBranch && !state.switching && !api.isDemo && !isBusy() && state.phase!=="booting"});
   initFeedPanel({
+    onScenario: text => evolution.start(text),
     getCity: citySlug,
     getBranch: () => state.mainBranch,
     getCityDisplay: () => state.city?.display || "San Francisco",
@@ -511,9 +556,14 @@ async function boot() {
     getPopulationKey: populationKey,
     openPastResult,
   });
-  els.status.textContent = "waking the city…";
+  setStatusLoading("waking the city…");
   if (api.isDemo) { document.body.classList.add("offline-demo"); $("demo-banner").hidden = false; }
   syncFilterButton();
+  // A brand-new workspace gets example surveys and events so it never opens empty.
+  if (isFreshWorkspace() && !api.isDemo) {
+    setStatusLoading("loading example surveys…");
+    try { await api.seedWorkspace(); } catch (e) { console.warn("workspace seeding skipped:", e); }
+  }
 
   // Load the city catalog first (best-effort). If it fails we keep the existing
   // single-city SF behavior — the switcher just stays hidden.
@@ -531,6 +581,7 @@ async function boot() {
   }
 
   await loadCity(initial);
+  // Tips are available from Help; let the demo open directly into the city.
 }
 
 // Create (or re-create) the simulation for a city, point the map base/bbox at it,
@@ -540,15 +591,16 @@ async function loadCity(city, { filters = state.filters, preserveOnError = false
   resetEvidence();
   state.rawResidents = [];
   state.city = city;
+  void locationContext.load(city.slug);
   // Committed local tiles supply dimensions and shoreline masks without a live source call.
   const maskBase = `assets/${city.slug}_tiles.png`;
   if (city.bbox) MAP.bbox = { ...city.bbox };
   MAP.base = maskBase;
-  map.setSatellite(true);           // satellite imagery on (PR 3 had switched to flat local tiles)
+  map.setSatellite(!api.isDemo);    // offline demos use the bundled city tiles
   map.setBase(maskBase);
   syncActiveTitle();
 
-  els.status.textContent = `waking ${city.display}…`;
+  setStatusLoading(`waking ${city.display}…`);
   hide(els.newsBubble);            // clear the previous city's news while loading
   state.news = [];
   state.mainBranch = null;
@@ -600,11 +652,45 @@ async function loadCity(city, { filters = state.filters, preserveOnError = false
     toast(!BASE ? BACKEND_SETUP_MESSAGE : "Couldn't reach the Jev backend — showing an offline preview.");
     state.phase = "error";
     syncFilterButton();
+    scheduleBackendRetry(city, filters);
     return null;
   }
 }
 
+// After an outage the page keeps checking the backend and reloads the city the
+// moment it answers, instead of sitting in a dead "offline" state.
+const RETRY_EVERY_MS = 5000, RETRY_MAX = 24;
+function scheduleBackendRetry(city, filters) {
+  if (state.retryTimer) return;
+  let tries = 0;
+  const tick = async () => {
+    tries += 1;
+    try {
+      const h = await api.health();
+      if (h && h.status === "ok") {
+        clearInterval(state.retryTimer); state.retryTimer = null;
+        els.status.textContent = "backend is back · waking the city…";
+        state.phase = "booting";
+        await loadCity(city, { filters });
+        return;
+      }
+    } catch { /* still down */ }
+    if (tries >= RETRY_MAX) {
+      clearInterval(state.retryTimer); state.retryTimer = null;
+      els.status.textContent = "backend unreachable · reload to try again";
+    }
+  };
+  state.retryTimer = setInterval(tick, RETRY_EVERY_MS);
+}
+
+// status card in a loading state: spinner instead of the live dot
+function setStatusLoading(text) {
+  els.status.textContent = text;
+  els.status.classList.add("is-loading");
+}
+
 function setIdleStatus() {
+  els.status.classList.remove("is-loading");
   const n = state.residents.toLocaleString();
   const display = (state.city?.display || "san francisco").toLowerCase();
   const kd = state.city?.knowledge_date;
@@ -968,7 +1054,7 @@ function openInput({ mode = "predict", preserve = false } = {}) {
   hide(els.resultCard);
   setAskMode(mode);
   els.askInput.value = ""; els.askInput.style.height = LINE_H + "px";
-  if (!preserve) { els.abA.value = ""; els.abB.value = ""; els.marketingCopy.value = ""; }
+  if (!preserve) { els.abA.value = ""; els.abB.value = ""; els.marketingCopy.value = ""; clearStimuli(); }
   else if (mode === "ab" && state.lastAbInput) {
     els.askInput.value = state.lastAbInput.question; els.abA.value = state.lastAbInput.variant_a; els.abB.value = state.lastAbInput.variant_b;
   } else if (mode === "marketing" && state.lastMarketingInput) {
@@ -988,6 +1074,7 @@ function closeInput() {
   els.askInput.blur();
   els.askError.textContent = "";
   setComposerBusy(false);
+  clearStimuli();
   setAskMode("predict");
 }
 
@@ -997,6 +1084,7 @@ function setComposerBusy(busy) {
   els.ask.setAttribute("aria-busy", busy ? "true" : "false");
   for (const f of [els.askInput, els.abA, els.abB, els.marketingCopy]) f.disabled = busy;
   els.askSubmit.disabled = busy;
+  els.askAttach.disabled = busy;
 }
 
 
@@ -1009,6 +1097,20 @@ function showResultCard() {
     btn.textContent = "×";
     btn.addEventListener("click", dismissResults);
     els.resultCard.prepend(btn);
+  }
+  // Live results carry the images residents reacted to; reopened timeline items don't.
+  const stimuli = state.lastResult?.stimuli;
+  const q = els.resultCard.querySelector(".res-q");
+  if (stimuli?.length && q && !els.resultCard.querySelector(".res-stim")) {
+    const frag = document.createDocumentFragment();
+    stimuli.forEach((st, i) => {
+      const block = document.createElement("div");
+      block.className = "res-stim";
+      const label = stimuli.length > 1 ? `Variant ${"AB"[i]} · ` : "";
+      block.innerHTML = `<img class="stim-thumb" src="${st.thumb}" alt=""><div><div class="stim-kicker">${label}what residents were shown</div><div class="stim-summary">${escStim(st.stimulus?.summary || "")}</div><div class="stim-attrs">${escStim(attributesLine(st.stimulus))}</div></div>`;
+      frag.appendChild(block);
+    });
+    q.after(frag);
   }
   show(els.resultCard);
 }
@@ -1129,12 +1231,20 @@ async function runPrediction(question) {
   if (!question) return;
   if (state.askMode === "ab") return runAbTest();
   if (state.askMode === "marketing") return runMarketingTest();
+  if (state.stimuli.some((s) => s.loading)) { els.askError.textContent = "Still reading the image…"; return; }
+  if (state.stimuli.length >= 2) {
+    // two images = compare them: hand off to the A/B path with the variants prefilled
+    setAskMode("ab"); fillVariantsFromStimuli(); els.askError.textContent = "";
+    return runAbTest();
+  }
   if (looksLikeVerifiedQuestion(question)) return runVerifiedQuery(question);
   state.queryMode = "simulation";
   if (state.phase === "error" || !state.simId) { toast("Predictions need the backend — it's currently unreachable."); return; }
 
   const audience = currentAudience();
   setRunAudience(audience);
+
+  const locationAreaId = locationContext.selectedId();
 
   cleanupBranch();
   const myReq = ++state.reqId;
@@ -1169,22 +1279,26 @@ async function runPrediction(question) {
     // description and any option list, but the question residents see (and the
     // timeline records) is exactly what was typed.
     const pollQuestion = question;
+    const stimuli = state.stimuli.filter((s) => s.stimulus).map((s) => ({ thumb: s.thumb, stimulus: s.stimulus }));
+    const stimulus = stimuli[0]?.stimulus;
 
     els.summaryLabel.textContent = "PREDICTING";
     els.progressFill.style.width = "18%";
     els.progressLabel.textContent = "tallying the electorate… (esc to cancel)";
 
-    const branch = await api.createBranch(state.simId, { ticks: PREDICT.branch_ticks, name: "predict", signal });
+    const branch = await withCurrentSimulation(() => api.createBranch(state.simId, { ticks: PREDICT.branch_ticks, name: "predict", signal }), signal);
     if (myReq !== state.reqId) { api.deleteBranch(branch.branch_id); return; }
     state.branchId = branch.branch_id;
 
     const result = await api.poll(state.branchId, {
       question: pollQuestion, description, framing, ...(options ? { options } : {}),
+      ...(locationAreaId ? { location_area_id: locationAreaId } : {}),
+      ...(stimulus ? { stimulus } : {}),
       as_of_date: PREDICT.as_of_date, model: PREDICT.model,
     }, signal);
     if (myReq !== state.reqId) return;
 
-    state.lastResult = { ...result, framing, question: pollQuestion, audience };
+    state.lastResult = { ...result, framing, question: pollQuestion, audience, stimuli };
     setTimeout(() => refreshFeedPanel({ quiet: true }), 1500); // the poll is now a post in the feed
 
     // p_yes drives the on-map green/red reveal for both paths; for options it is the
@@ -1298,11 +1412,11 @@ async function runMarketingTest() {
     map.setWaiting();
 
     setMarketingBusy(true, "Comparing responses…");
-    const branch = await api.createBranch(state.simId, {
+    const branch = await withCurrentSimulation(() => api.createBranch(state.simId, {
       ticks: PREDICT.branch_ticks,
       name: "marketing-counterfactual",
       signal,
-    });
+    }), signal);
     if (myReq !== state.reqId) { api.deleteBranch(branch.branch_id); return; }
     state.branchId = branch.branch_id;
 
@@ -1380,6 +1494,8 @@ async function runAbTest() {
   }
   if (state.phase === "error" || !state.mainBranch) { els.askError.textContent = "A/B tests need the backend — it's currently unreachable."; return; }
 
+  if (state.stimuli.some((s) => s.loading)) { els.askError.textContent = "Still reading the image…"; return; }
+  const stimuli = state.stimuli.filter((s) => s.stimulus).map((s) => ({ thumb: s.thumb, stimulus: s.stimulus }));
   cleanupBranch();
   state.lastAbInput = input;
   const audience = currentAudience();
@@ -1402,14 +1518,14 @@ async function runAbTest() {
   map.setWaiting();
 
   try {
-    const result = await api.abTest(state.mainBranch, {
+    const result = await withCurrentSimulation(() => api.abTest(state.mainBranch, {
       ...input,
       as_of_date: PREDICT.as_of_date,
       model: PREDICT.model,
       population: "all",
-    }, signal);
+    }, signal), signal);
     if (myReq !== state.reqId) return;
-    state.lastResult = { ...result, audience };
+    state.lastResult = { ...result, audience, stimuli };
     setTimeout(() => refreshFeedPanel({ quiet: true }), 1500); // the A/B test is now a post in the feed
     const verdicts = assignVerdicts(map.agents, result.a_share, input.question, map.proj.planarSize);
     map.setRationales(result.sample_rationales || []);
@@ -1461,10 +1577,10 @@ function pastMeta(result) {
 
 function hydraMeta(result) {
   const hydra = result?.hydra;
-  if (!hydra || hydra.status !== "connected" || !Number(hydra.chunks)) return "";
+  if (!hydra || hydra.status !== "connected" || !Number(hydra.chunks)) return locationEvidence(result.location_context);
   const sourceTitles = (hydra.sources || []).map((source) => source.title).filter(Boolean);
   const sourceText = sourceTitles.length ? ` · ${sourceTitles.slice(0, 3).join(", ")}` : "";
-  return `<div class="res-meta res-hydra">Additional source context${escapeHtml(sourceText)}</div>`;
+  return locationEvidence(result.location_context) + `<div class="res-meta res-hydra">Additional source context${escapeHtml(sourceText)}</div>`;
 }
 
 function showMarketingResults(result) {
@@ -1862,15 +1978,27 @@ function abAdvancedSection(result, segments, breakdowns) {
       aria-selected="${active}" aria-controls="ab-adv-body" tabindex="${active ? 0 : -1}"
       data-ab-view="${view}">${label}</button>`;
   }).join("");
-  return `<section class="ab-adv${abPanel.labels.a === "A" ? "" : " tone-yesno"}">
-    <div class="ab-adv-head">
-      <span class="res-why-label">advanced breakdown</span>
-      <div class="ab-views" role="tablist" aria-label="Breakdown view">${tabs}</div>
+  let open = false;
+  try { open = sessionStorage.getItem("simtra.adv.open") === "1"; } catch { /* ignore */ }
+  return `<details class="ab-adv${abPanel.labels.a === "A" ? "" : " tone-yesno"}"${open ? " open" : ""}>
+    <summary class="ab-adv-summary">
+      <span class="ab-adv-caret" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M9 6l6 6-6 6"/></svg></span>
+      <span class="ab-adv-title">Advanced breakdown</span>
+      <span class="ab-adv-hint">top movers, by dimension, cross-tabs</span>
+    </summary>
+    <div class="ab-adv-inner">
+      <div class="ab-adv-head">
+        <div class="ab-views" role="tablist" aria-label="Breakdown view">${tabs}</div>
+      </div>
+      <div class="ab-adv-body" id="ab-adv-body" role="tabpanel" tabindex="0"
+        aria-labelledby="ab-tab-${abPanel.view}">${abPanelBody(result, segments, breakdowns)}</div>
     </div>
-    <div class="ab-adv-body" id="ab-adv-body" role="tabpanel" tabindex="0"
-      aria-labelledby="ab-tab-${abPanel.view}">${abPanelBody(result, segments, breakdowns)}</div>
-  </section>`;
+  </details>`;
 }
+// remember the disclosure for the session (re-renders rebuild the markup)
+els.resultCard.addEventListener("toggle", (e) => {
+  if (e.target.classList?.contains("ab-adv")) { try { sessionStorage.setItem("simtra.adv.open", e.target.open ? "1" : "0"); } catch { /* ignore */ } }
+}, true);
 
 function showAbResults(result) {
   resetEvidence();
@@ -1981,11 +2109,14 @@ const typingTarget = (el) => el && (el.tagName === "INPUT" || el.tagName === "TE
 els.askSubmit.addEventListener("click", event => { event.stopPropagation(); runPrediction(els.askInput.value); });
 
 // ── events ───────────────────────────────────────────────────────────────
+// The composer is always expanded. A click anywhere in it focuses the field;
+// nothing is cleared and no result card is dismissed until a question is sent.
 els.ask.addEventListener("click", (e) => {
   if (isBusy()) { cancelPrediction(); return; }
-  if (inputOpen()) { if (!els.askExtra.contains(e.target)) els.askInput.focus(); return; }
-  openInput();
+  if (!inputOpen()) setAsk("input");
+  if (!els.askExtra.contains(e.target)) els.askInput.focus();
 });
+els.askInput.addEventListener("focus", () => { if (!isBusy() && !inputOpen()) setAsk("input"); });
 els.askModes.addEventListener("click", (e) => {
   const b = e.target.closest(".ask-mode");
   if (!b) return;
@@ -2003,6 +2134,98 @@ els.ask.addEventListener("keydown", (event) => {
 });
 
 // multiline composer: Enter submits, Shift+Enter inserts a newline
+// ── image stimuli (drop / paste / attach) ───────────────────────────────────
+// Each image becomes editable "what Simtra saw" chips; only the confirmed chips
+// reach residents. One image → predict; two → A/B with the variants prefilled.
+function clearStimuli() {
+  state.stimuli = [];
+  renderStimulusStrip();
+  els.askFile.value = "";
+}
+
+function renderStimulusStrip() {
+  const list = state.stimuli;
+  els.askAttach.dataset.count = String(list.length);
+  els.stimulusStrip.hidden = list.length === 0;
+  els.stimulusStrip.replaceChildren();
+  list.forEach((item, i) => {
+    const card = document.createElement("div");
+    card.className = "stim-card" + (item.loading ? " is-loading" : "");
+    const label = list.length > 1 ? `${"AB"[i]} · ` : "";
+    const head = item.loading ? "reading the image…" : item.error ? `couldn't read it — ${item.error}` : `${label}what Simtra saw`;
+    card.innerHTML = `<img class="stim-thumb" src="${item.thumb}" alt=""><div><div class="stim-head"><span class="stim-kicker">${escStim(head)}</span><button type="button" class="stim-remove" aria-label="Remove image" title="Remove image">×</button></div><div class="stim-summary">${escStim(item.stimulus?.summary || "")}</div><div class="stim-attrs">${escStim(attributesLine(item.stimulus))}</div></div>`;
+    card.querySelector(".stim-remove").addEventListener("click", () => { state.stimuli.splice(i, 1); renderStimulusStrip(); syncStimuliToComposer(); });
+    els.stimulusStrip.appendChild(card);
+  });
+  autoGrow();
+}
+
+// Keep the composer coherent with the attached images: two images switch to A/B
+// with the variants written from the chips (still editable text).
+function syncStimuliToComposer() {
+  if (state.stimuli.length >= 2 && state.askMode !== "ab") setAskMode("ab");
+  fillVariantsFromStimuli();
+}
+function fillVariantsFromStimuli() {
+  [els.abA, els.abB].forEach((field, i) => {
+    const item = state.stimuli[i];
+    if (!item?.stimulus) return;
+    const text = stimulusText(item.stimulus);
+    // don't clobber a variant the user has already hand-edited
+    if (!field.value.trim() || field.value === item.filledText) { field.value = text; item.filledText = text; }
+  });
+}
+
+async function addStimulusFiles(files) {
+  const images = Array.from(files || []).filter((f) => /^image\//.test(f.type));
+  if (!images.length) return;
+  if (state.phase === "error" || !state.simId) { toast("Image questions need the backend — it's currently unreachable."); return; }
+  if (!inputOpen()) openInput({ mode: state.askMode, preserve: true });
+  const room = MAX_STIMULI - state.stimuli.length;
+  if (room <= 0) { els.askError.textContent = `Up to ${MAX_STIMULI} images: one to test, two to compare.`; return; }
+  els.askError.textContent = "";
+  const batch = images.slice(0, room);
+  const items = [];
+  for (const file of batch) {
+    try {
+      const prepared = await prepareImage(file);
+      const item = { ...prepared, stimulus: null, loading: true, error: null };
+      state.stimuli.push(item); items.push(item);
+    } catch (err) { els.askError.textContent = err.message; }
+  }
+  renderStimulusStrip();
+  if (!items.length) return;
+  try {
+    const res = await api.describeStimulus(citySlug(), items.map(({ media_type, data }) => ({ media_type, data })), els.askInput.value.trim());
+    items.forEach((item, i) => { item.stimulus = res.stimuli?.[i] || null; item.loading = false; if (!item.stimulus) item.error = "no description returned"; });
+  } catch (err) {
+    console.error(err);
+    items.forEach((item) => { item.loading = false; item.error = err.status === 503 ? "no vision model on the server" : "vision call failed"; });
+    els.askError.textContent = `Couldn't read the image: ${err.message}`;
+  }
+  renderStimulusStrip();
+  syncStimuliToComposer();
+  els.askInput.focus();
+}
+
+els.askAttach.addEventListener("click", (e) => { e.stopPropagation(); if (!isBusy()) els.askFile.click(); });
+els.askFile.addEventListener("change", () => { addStimulusFiles(els.askFile.files); els.askFile.value = ""; });
+els.askInput.addEventListener("paste", (e) => {
+  const files = Array.from(e.clipboardData?.files || []).filter((f) => /^image\//.test(f.type));
+  if (files.length) { e.preventDefault(); addStimulusFiles(files); }
+});
+for (const ev of ["dragenter", "dragover"]) els.ask.addEventListener(ev, (e) => {
+  if (!Array.from(e.dataTransfer?.types || []).includes("Files")) return;
+  e.preventDefault(); e.dataTransfer.dropEffect = "copy"; els.ask.classList.add("is-dropping");
+});
+els.ask.addEventListener("dragleave", (e) => { if (!els.ask.contains(e.relatedTarget)) els.ask.classList.remove("is-dropping"); });
+els.ask.addEventListener("drop", (e) => {
+  els.ask.classList.remove("is-dropping");
+  if (!e.dataTransfer?.files?.length) return;
+  e.preventDefault(); e.stopPropagation();
+  addStimulusFiles(e.dataTransfer.files);
+});
+
 els.askInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runPrediction(els.askInput.value); }
 });
@@ -2123,14 +2346,11 @@ map.onEmptyTap = () => { if (charOpen()) { closeCharCard(); return true; } retur
 const aboutOpen = () => !els.about.classList.contains("hidden");
 function openAbout() { show(els.about); show(els.aboutScrim); }
 function closeAbout() { hide(els.about); hide(els.aboutScrim); }
+$("about-tips")?.addEventListener("click", () => { closeAbout(); startTour(); });
 els.infoBtn.addEventListener("click", openAbout);
 els.aboutClose.addEventListener("click", closeAbout);
 els.aboutScrim.addEventListener("click", closeAbout);
 
-// click outside the dock collapses an open composer
-document.addEventListener("mousedown", (e) => {
-  if (inputOpen() && !els.dock.contains(e.target)) closeInput();
-});
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Tab" && filterOpen()) {
@@ -2155,7 +2375,8 @@ document.addEventListener("keydown", (e) => {
     else if (charOpen()) closeCharCard();
     else if (isBusy()) cancelPrediction();
     else if (state.phase === "results" || !els.resultCard.classList.contains("hidden")) dismissResults();
-    else if (inputOpen()) closeInput();
+    else if (els.askInput.value) { els.askInput.value = ""; autoGrow(); els.askError.textContent = ""; }
+    else if (typingTarget(document.activeElement)) document.activeElement.blur();
     else if (map.zoomedIn) map.returnToOverview();
   } else if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
     e.preventDefault();

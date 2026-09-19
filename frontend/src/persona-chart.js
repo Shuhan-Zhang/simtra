@@ -17,6 +17,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 export const CHART_TYPES = ["bar", "histogram", "scatter", "box", "line"];
+const CHART_TITLES = { bar: "Share by group", histogram: "How support is spread across residents", scatter: "Each resident: age or income vs support", box: "Spread of support within each group", line: "Trend across groups, or over time when asked more than once" };
 const NUMERIC_DIMENSIONS = new Set(["age", "income"]);
 const ORDERED_DIMENSIONS = new Set(["age", "income", "education"]);
 const HEAD_CAP = 12;
@@ -155,9 +156,10 @@ export function createPersonaChart(host, opts) {
   host.innerHTML = `
     <div class="pc-head">
       <span class="res-why-label pc-kicker">by demographic${tip("Group shares are the simulation's predicted answers within each group, weighted by Census person weights. Residents inherit their archetype's answer, so groups can look chunky.")}</span>
+      <h3 class="pc-title">How different groups answered</h3>
       <div class="pc-controls">
         <select class="pc-dim" aria-label="Demographic dimension">${dims.map((d) => `<option value="${esc(d)}">${esc(o.labels.dimension(d))}</option>`).join("")}</select>
-        <div class="pc-types" role="tablist" aria-label="Chart type">${CHART_TYPES.map((t) => `<button type="button" role="tab" class="pc-type" data-type="${t}" aria-selected="false">${t}</button>`).join("")}</div>
+        <div class="pc-types" role="tablist" aria-label="Chart type">${CHART_TYPES.map((t) => `<button type="button" role="tab" class="pc-type" data-type="${t}" aria-selected="false" title="${CHART_TITLES[t]}">${t}</button>`).join("")}</div>
       </div>
     </div>
     <div class="pc-note hidden"></div>

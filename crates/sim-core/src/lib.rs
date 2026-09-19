@@ -19,6 +19,7 @@ pub mod hydra;
 pub mod insforge;
 pub mod lifestyle;
 pub mod jev;
+pub mod locations;
 pub mod memory;
 pub mod model;
 pub mod news;
@@ -32,6 +33,7 @@ pub mod rocketride;
 pub mod rubric;
 pub mod sim;
 pub mod state;
+pub mod stimulus;
 pub mod store;
 
 pub mod api;

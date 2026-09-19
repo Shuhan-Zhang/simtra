@@ -169,6 +169,7 @@ pub struct ModelClient {
     anthropic_url: String,
     jev_key: String,
     jev_url: String,
+    gemini_key: String,
     sem: Arc<Semaphore>,
     max_retries: u32,
     cache: Option<Arc<Cache>>,
@@ -176,6 +177,10 @@ pub struct ModelClient {
     /// when true, network is disabled and only cache hits succeed (offline/deterministic).
     offline: bool,
 }
+
+/// Vision models used only to turn uploaded images into neutral attributes.
+const VISION_MODEL_ANTHROPIC: &str = "claude-opus-5";
+const VISION_MODEL_GEMINI: &str = "gemini-3.5-flash";
 
 const DEFAULT_BASE: &str = "https://claude-day-resource.services.ai.azure.com/openai/v1";
 
@@ -203,6 +208,7 @@ impl ModelClient {
         let jev_url = std::env::var("TYPESAFE_BASE_URL")
             .unwrap_or_else(|_| "https://api.typesafe.ai".to_string());
         let jev_url = format!("{}/v1/systemone", jev_url.trim_end_matches('/'));
+        let gemini_key = std::env::var("GEMINI_API_KEY").unwrap_or_default().trim().to_string();
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(180))
             .connect_timeout(Duration::from_secs(15))
@@ -215,6 +221,7 @@ impl ModelClient {
             anthropic_url,
             jev_key,
             jev_url,
+            gemini_key,
             sem: Arc::new(Semaphore::new(max_inflight.max(1))),
             max_retries: 5,
             cache,
@@ -307,6 +314,98 @@ impl ModelClient {
             c.put(&key, model.id(), &text);
         }
         Ok(text)
+    }
+
+    /// Which provider answers image-description calls, if any. Jev is text-only,
+    /// so vision goes to Anthropic when configured, else Gemini.
+    pub fn vision_provider(&self) -> Option<&'static str> {
+        if !self.anthropic_key.is_empty() { Some("anthropic") }
+        else if !self.gemini_key.is_empty() { Some("gemini") }
+        else { None }
+    }
+    pub fn has_vision(&self) -> bool { self.vision_provider().is_some() }
+
+    /// Describe one base64 image with a vision model and return its text. Cached
+    /// by (provider model, prompts, image hash) like text completions.
+    pub async fn describe_image(&self, media_type: &str, data_b64: &str, system: &str, user: &str, max_tokens: u32) -> Result<String> {
+        let provider = self.vision_provider().ok_or_else(|| anyhow!("no vision model configured (ANTHROPIC_API_KEY or GEMINI_API_KEY)"))?;
+        let model_id = match provider { "anthropic" => VISION_MODEL_ANTHROPIC, _ => VISION_MODEL_GEMINI };
+        let image_hash = {
+            use sha2::{Digest, Sha256};
+            let mut h = Sha256::new(); h.update(media_type.as_bytes()); h.update(b"\x00"); h.update(data_b64.as_bytes());
+            hex::encode(h.finalize())
+        };
+        let key = {
+            use sha2::{Digest, Sha256};
+            let mut h = Sha256::new();
+            for part in [model_id, system, user, &image_hash] { h.update(part.as_bytes()); h.update(b"\x00"); }
+            h.update(max_tokens.to_le_bytes());
+            hex::encode(h.finalize())
+        };
+        if let Some(hit) = self.cache.as_ref().and_then(|c| c.get(&key)) {
+            self.usage.cache_hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(hit);
+        }
+        if self.offline { return Err(anyhow!("offline mode: cache miss for {model_id}")); }
+        let (url, body) = if provider == "anthropic" {
+            (self.anthropic_url.clone(), json!({
+                "model": model_id, "max_tokens": max_tokens.max(64), "system": system,
+                "messages": [{"role":"user","content":[
+                    {"type":"image","source":{"type":"base64","media_type":media_type,"data":data_b64}},
+                    {"type":"text","text":user}]}],
+            }))
+        } else {
+            (format!("https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent"), json!({
+                "system_instruction": {"parts":[{"text":system}]},
+                "contents": [{"role":"user","parts":[
+                    {"inline_data":{"mime_type":media_type,"data":data_b64}},
+                    {"text":user}]}],
+                // thoughts count toward maxOutputTokens on Gemini 3.x; keep them short so the JSON fits
+                "generationConfig": {"maxOutputTokens": max_tokens.max(64), "responseMimeType": "application/json", "thinkingConfig": {"thinkingLevel": "low"}},
+            }))
+        };
+        let _permit = self.sem.acquire().await?;
+        let mut attempt = 0u32;
+        loop {
+            self.usage.calls.fetch_add(1, Ordering::Relaxed);
+            let req = if provider == "anthropic" {
+                self.http.post(&url).header("x-api-key", &self.anthropic_key).header("anthropic-version", "2023-06-01")
+            } else {
+                self.http.post(&url).header("x-goog-api-key", &self.gemini_key)
+            };
+            let resp = req.json(&body).send().await;
+            match resp {
+                Ok(r) => {
+                    let status = r.status();
+                    let text = r.text().await.unwrap_or_default();
+                    if status.is_success() {
+                        let v: Value = serde_json::from_str(&text).context("vision response was not JSON")?;
+                        let out = if provider == "anthropic" {
+                            v.get("content").and_then(Value::as_array).map(|blocks| blocks.iter()
+                                .filter_map(|b| b.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("")).unwrap_or_default()
+                        } else {
+                            v.pointer("/candidates/0/content/parts").and_then(Value::as_array).map(|parts| parts.iter()
+                                .filter_map(|p| p.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("")).unwrap_or_default()
+                        };
+                        if out.trim().is_empty() { return Err(anyhow!("vision model returned no text")); }
+                        if let Some(c) = &self.cache { c.put(&key, model_id, &out); }
+                        return Ok(out);
+                    }
+                    if (status.as_u16() == 429 || status.is_server_error()) && attempt < self.max_retries {
+                        self.usage.retries.fetch_add(1, Ordering::Relaxed);
+                        self.backoff(attempt).await; attempt += 1; continue;
+                    }
+                    // Provider bodies can echo request data; report status only.
+                    return Err(anyhow!("vision HTTP {}", status.as_u16()));
+                }
+                Err(e) if attempt < self.max_retries => {
+                    self.usage.retries.fetch_add(1, Ordering::Relaxed);
+                    tracing::warn!("vision request error: {e}");
+                    self.backoff(attempt).await; attempt += 1;
+                }
+                Err(e) => return Err(anyhow!("vision request failed: {e}")),
+            }
+        }
     }
 
     /// Native TypeSafe /v1/systemone evaluation. Validate before caching, and
@@ -733,6 +832,7 @@ mod tests {
             anthropic_key: String::new(),
             anthropic_url: "https://api.anthropic.com/v1/messages".to_string(),
             jev_key: String::new(),
+            gemini_key: String::new(),
             jev_url: "https://api.typesafe.ai/v1/systemone".to_string(),
             sem: Arc::new(Semaphore::new(1)),
             max_retries: 0,
