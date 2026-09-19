@@ -1759,6 +1759,7 @@ mod tests {
         let poll = Poll {
             question: "Q?".into(), description: String::new(), framing: Framing::Vote,
             as_of_date: "2026-09-12".into(), model: None, population: None, event: None, options: vec![],
+            stimulus: None,
         };
         let mut breakdowns = HashMap::new();
         breakdowns.insert("age".to_string(), vec![DemoBreak { key: "25-34".into(), yes_share: 0.7, weight: 100.0, n: 12 }]);

@@ -116,6 +116,7 @@ async fn neo4j_memory_roundtrip() {
         population: None,
         event: None,
         options: vec![],
+        stimulus: None,
     };
     let result = PollResult {
         question: poll.question.clone(),

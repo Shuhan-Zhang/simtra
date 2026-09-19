@@ -89,6 +89,16 @@ export const parseQuestion = (city, question, signal) =>
     signal,
   });
 
+// Turn 1–2 downscaled images into neutral stimulus attributes with the server's
+// vision model. Returns { stimuli:[{kind, summary, attributes, unknowns}], provider }.
+export const describeStimulus = (city, images, question, signal) =>
+  req(`/cities/${encodeURIComponent(city)}/stimulus`, {
+    method: "POST",
+    body: { images, ...(question ? { question } : {}) },
+    timeout: 90000,
+    signal,
+  });
+
 // `city` rides along in the body (defaults to "sf" server-side when omitted).
 export const createSimulation = (overrides = {}) =>
   req("/simulations", { method: "POST", body: { ...SIM, ...overrides }, timeout: 60000 });

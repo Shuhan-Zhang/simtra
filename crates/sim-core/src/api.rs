@@ -95,6 +95,7 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(root))
         .route("/cities", get(list_cities))
         .route("/cities/:city/parse", post(parse_question_handler))
+        .route("/cities/:city/stimulus", post(describe_stimulus_handler))
         .route("/cities/:city/news", get(city_news))
         .route("/cities/:city/events", post(create_city_event))
         .route("/cities/:city/events", get(list_city_events))
@@ -124,6 +125,8 @@ pub fn router(state: AppState) -> Router {
         // answered question is remembered in the city's timeline when memory is on.
         .route("/data-query", post(data_query_handler))
         .with_state(state)
+        // image uploads: two downscaled JPEGs as base64 fit well under this
+        .layer(axum::extract::DefaultBodyLimit::max(24 * 1024 * 1024))
         .layer(cors)
 }
 
@@ -1167,6 +1170,7 @@ fn counterfactual_inputs(req: CounterfactualReq) -> Result<(Poll, Event), String
         population,
         event: None,
         options: Vec::new(),
+        stimulus: None,
     };
     let event = Event {
         text: marketing_event_text(&req.marketing_text),
@@ -1464,6 +1468,7 @@ async fn predict_market(
         population: None,
         event: None,
         options: Vec::new(),
+        stimulus: None,
     };
     match st
         .engine
@@ -1611,7 +1616,9 @@ fn poll_from_json(req: &Value) -> Result<Poll, String> {
         || options.iter().enumerate().any(|(i,s)| options[..i].contains(s))) {
         return Err("options framing requires 2–255 distinct nonempty choices".into());
     }
+    let stimulus = req.get("stimulus").and_then(crate::stimulus::Stimulus::from_value);
     Ok(Poll {
+        stimulus,
         question,
         description,
         framing,
@@ -1765,6 +1772,46 @@ fn short_hash(s: &str) -> String {
     let mut h = Sha256::new();
     h.update(s.as_bytes());
     hex::encode(&h.finalize()[..4])
+}
+
+/// Turn up to two uploaded images into neutral, editable stimulus attributes with
+/// a vision model. Residents later react to the confirmed attributes via
+/// `state.stimulus`; the pixels never reach Jev.
+async fn describe_stimulus_handler(
+    State(st): State<AppState>,
+    Path(_city): Path<String>,
+    Json(req): Json<Value>,
+) -> impl IntoResponse {
+    use crate::stimulus::{extract, ImageInput, MAX_IMAGES};
+    if !st.client.has_vision() {
+        return (StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error":"image input needs a vision model: set ANTHROPIC_API_KEY or GEMINI_API_KEY on the server"}))).into_response();
+    }
+    let images: Vec<ImageInput> = match req.get("images").cloned().map(serde_json::from_value) {
+        Some(Ok(v)) => v,
+        _ => return (StatusCode::BAD_REQUEST, Json(json!({"error":"images: [{media_type, data}] required"}))).into_response(),
+    };
+    if images.is_empty() || images.len() > MAX_IMAGES {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("send 1–{MAX_IMAGES} images")}))).into_response();
+    }
+    for image in &images {
+        if let Err(e) = image.validate() {
+            return (StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))).into_response();
+        }
+    }
+    let hint = req.get("question").and_then(Value::as_str).unwrap_or("");
+    let results = futures::future::join_all(images.iter().map(|img| extract(&st.client, img, hint))).await;
+    let mut stimuli = Vec::with_capacity(results.len());
+    for r in results {
+        match r {
+            Ok(s) => stimuli.push(s),
+            Err(e) => {
+                tracing::warn!("stimulus extraction failed: {e:#}");
+                return (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("could not read the image: {e}")}))).into_response();
+            }
+        }
+    }
+    Json(json!({"stimuli": stimuli, "provider": st.client.vision_provider()})).into_response()
 }
 
 /// Parse a free-text question into a pollable spec (framing + options), or return a

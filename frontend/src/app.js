@@ -25,6 +25,7 @@ import { snapshotAudience, describeAudience, audienceHeader, audienceScope } fro
 import { initFeedPanel, refreshFeedPanel, lineageItems } from "./feedpanel.js?v=18";
 import { initTour, startTour } from "./tour.js?v=1";
 import { isFreshWorkspace } from "./workspace.js?v=2";
+import { prepareImage, stimulusText, attributesLine, MAX_STIMULI, esc as escStim } from "./stimulus.js?v=1";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -55,6 +56,9 @@ const els = {
   askExtra: document.querySelector(".ask-extra"),
   askModes: document.querySelector(".ask-modes"),
   askError: $("ask-error"),
+  askAttach: $("ask-attach"),
+  askFile: $("ask-file"),
+  stimulusStrip: $("stimulus-strip"),
   abFields: $("ab-fields"),
   abA: $("ab-a"),
   abB: $("ab-b"),
@@ -96,6 +100,8 @@ export const state = {
   phase: "booting", queryMode: "simulation", askMode: "predict",
   simId: null, mainBranch: null, branchId: null,
   lastResult: null, lastAbInput: null, lastMarketingInput: null, reqId: 0, abort: null,
+  // images attached to the composer: [{thumb, media_type, data, stimulus, loading, filledText}]
+  stimuli: [],
   residents: SIM.n, rawResidents: [],
   cities: [],            // [{slug, display, bbox, ...}] from GET /cities
   city: null,            // the active city object (falls back to a synthetic "sf")
@@ -1016,7 +1022,7 @@ function openInput({ mode = "predict", preserve = false } = {}) {
   hide(els.resultCard);
   setAskMode(mode);
   els.askInput.value = ""; els.askInput.style.height = LINE_H + "px";
-  if (!preserve) { els.abA.value = ""; els.abB.value = ""; els.marketingCopy.value = ""; }
+  if (!preserve) { els.abA.value = ""; els.abB.value = ""; els.marketingCopy.value = ""; clearStimuli(); }
   else if (mode === "ab" && state.lastAbInput) {
     els.askInput.value = state.lastAbInput.question; els.abA.value = state.lastAbInput.variant_a; els.abB.value = state.lastAbInput.variant_b;
   } else if (mode === "marketing" && state.lastMarketingInput) {
@@ -1036,6 +1042,7 @@ function closeInput() {
   els.askInput.blur();
   els.askError.textContent = "";
   setComposerBusy(false);
+  clearStimuli();
   setAskMode("predict");
 }
 
@@ -1045,6 +1052,7 @@ function setComposerBusy(busy) {
   els.ask.setAttribute("aria-busy", busy ? "true" : "false");
   for (const f of [els.askInput, els.abA, els.abB, els.marketingCopy]) f.disabled = busy;
   els.askSubmit.disabled = busy;
+  els.askAttach.disabled = busy;
 }
 
 
@@ -1057,6 +1065,20 @@ function showResultCard() {
     btn.textContent = "×";
     btn.addEventListener("click", dismissResults);
     els.resultCard.prepend(btn);
+  }
+  // Live results carry the images residents reacted to; reopened timeline items don't.
+  const stimuli = state.lastResult?.stimuli;
+  const q = els.resultCard.querySelector(".res-q");
+  if (stimuli?.length && q && !els.resultCard.querySelector(".res-stim")) {
+    const frag = document.createDocumentFragment();
+    stimuli.forEach((st, i) => {
+      const block = document.createElement("div");
+      block.className = "res-stim";
+      const label = stimuli.length > 1 ? `Variant ${"AB"[i]} · ` : "";
+      block.innerHTML = `<img class="stim-thumb" src="${st.thumb}" alt=""><div><div class="stim-kicker">${label}what residents were shown</div><div class="stim-summary">${escStim(st.stimulus?.summary || "")}</div><div class="stim-attrs">${escStim(attributesLine(st.stimulus))}</div></div>`;
+      frag.appendChild(block);
+    });
+    q.after(frag);
   }
   show(els.resultCard);
 }
@@ -1177,6 +1199,12 @@ async function runPrediction(question) {
   if (!question) return;
   if (state.askMode === "ab") return runAbTest();
   if (state.askMode === "marketing") return runMarketingTest();
+  if (state.stimuli.some((s) => s.loading)) { els.askError.textContent = "Still reading the image…"; return; }
+  if (state.stimuli.length >= 2) {
+    // two images = compare them: hand off to the A/B path with the variants prefilled
+    setAskMode("ab"); fillVariantsFromStimuli(); els.askError.textContent = "";
+    return runAbTest();
+  }
   if (looksLikeVerifiedQuestion(question)) return runVerifiedQuery(question);
   state.queryMode = "simulation";
   if (state.phase === "error" || !state.simId) { toast("Predictions need the backend — it's currently unreachable."); return; }
@@ -1217,6 +1245,8 @@ async function runPrediction(question) {
     // description and any option list, but the question residents see (and the
     // timeline records) is exactly what was typed.
     const pollQuestion = question;
+    const stimuli = state.stimuli.filter((s) => s.stimulus).map((s) => ({ thumb: s.thumb, stimulus: s.stimulus }));
+    const stimulus = stimuli[0]?.stimulus;
 
     els.summaryLabel.textContent = "PREDICTING";
     els.progressFill.style.width = "18%";
@@ -1228,11 +1258,12 @@ async function runPrediction(question) {
 
     const result = await api.poll(state.branchId, {
       question: pollQuestion, description, framing, ...(options ? { options } : {}),
+      ...(stimulus ? { stimulus } : {}),
       as_of_date: PREDICT.as_of_date, model: PREDICT.model,
     }, signal);
     if (myReq !== state.reqId) return;
 
-    state.lastResult = { ...result, framing, question: pollQuestion, audience };
+    state.lastResult = { ...result, framing, question: pollQuestion, audience, stimuli };
     setTimeout(() => refreshFeedPanel({ quiet: true }), 1500); // the poll is now a post in the feed
 
     // p_yes drives the on-map green/red reveal for both paths; for options it is the
@@ -1428,6 +1459,8 @@ async function runAbTest() {
   }
   if (state.phase === "error" || !state.mainBranch) { els.askError.textContent = "A/B tests need the backend — it's currently unreachable."; return; }
 
+  if (state.stimuli.some((s) => s.loading)) { els.askError.textContent = "Still reading the image…"; return; }
+  const stimuli = state.stimuli.filter((s) => s.stimulus).map((s) => ({ thumb: s.thumb, stimulus: s.stimulus }));
   cleanupBranch();
   state.lastAbInput = input;
   const audience = currentAudience();
@@ -1457,7 +1490,7 @@ async function runAbTest() {
       population: "all",
     }, signal);
     if (myReq !== state.reqId) return;
-    state.lastResult = { ...result, audience };
+    state.lastResult = { ...result, audience, stimuli };
     setTimeout(() => refreshFeedPanel({ quiet: true }), 1500); // the A/B test is now a post in the feed
     const verdicts = assignVerdicts(map.agents, result.a_share, input.question, map.proj.planarSize);
     map.setRationales(result.sample_rationales || []);
@@ -2066,6 +2099,98 @@ els.ask.addEventListener("keydown", (event) => {
 });
 
 // multiline composer: Enter submits, Shift+Enter inserts a newline
+// ── image stimuli (drop / paste / attach) ───────────────────────────────────
+// Each image becomes editable "what Simtra saw" chips; only the confirmed chips
+// reach residents. One image → predict; two → A/B with the variants prefilled.
+function clearStimuli() {
+  state.stimuli = [];
+  renderStimulusStrip();
+  els.askFile.value = "";
+}
+
+function renderStimulusStrip() {
+  const list = state.stimuli;
+  els.askAttach.dataset.count = String(list.length);
+  els.stimulusStrip.hidden = list.length === 0;
+  els.stimulusStrip.replaceChildren();
+  list.forEach((item, i) => {
+    const card = document.createElement("div");
+    card.className = "stim-card" + (item.loading ? " is-loading" : "");
+    const label = list.length > 1 ? `${"AB"[i]} · ` : "";
+    const head = item.loading ? "reading the image…" : item.error ? `couldn't read it — ${item.error}` : `${label}what Simtra saw`;
+    card.innerHTML = `<img class="stim-thumb" src="${item.thumb}" alt=""><div><div class="stim-head"><span class="stim-kicker">${escStim(head)}</span><button type="button" class="stim-remove" aria-label="Remove image" title="Remove image">×</button></div><div class="stim-summary">${escStim(item.stimulus?.summary || "")}</div><div class="stim-attrs">${escStim(attributesLine(item.stimulus))}</div></div>`;
+    card.querySelector(".stim-remove").addEventListener("click", () => { state.stimuli.splice(i, 1); renderStimulusStrip(); syncStimuliToComposer(); });
+    els.stimulusStrip.appendChild(card);
+  });
+  autoGrow();
+}
+
+// Keep the composer coherent with the attached images: two images switch to A/B
+// with the variants written from the chips (still editable text).
+function syncStimuliToComposer() {
+  if (state.stimuli.length >= 2 && state.askMode !== "ab") setAskMode("ab");
+  fillVariantsFromStimuli();
+}
+function fillVariantsFromStimuli() {
+  [els.abA, els.abB].forEach((field, i) => {
+    const item = state.stimuli[i];
+    if (!item?.stimulus) return;
+    const text = stimulusText(item.stimulus);
+    // don't clobber a variant the user has already hand-edited
+    if (!field.value.trim() || field.value === item.filledText) { field.value = text; item.filledText = text; }
+  });
+}
+
+async function addStimulusFiles(files) {
+  const images = Array.from(files || []).filter((f) => /^image\//.test(f.type));
+  if (!images.length) return;
+  if (state.phase === "error" || !state.simId) { toast("Image questions need the backend — it's currently unreachable."); return; }
+  if (!inputOpen()) openInput({ mode: state.askMode, preserve: true });
+  const room = MAX_STIMULI - state.stimuli.length;
+  if (room <= 0) { els.askError.textContent = `Up to ${MAX_STIMULI} images: one to test, two to compare.`; return; }
+  els.askError.textContent = "";
+  const batch = images.slice(0, room);
+  const items = [];
+  for (const file of batch) {
+    try {
+      const prepared = await prepareImage(file);
+      const item = { ...prepared, stimulus: null, loading: true, error: null };
+      state.stimuli.push(item); items.push(item);
+    } catch (err) { els.askError.textContent = err.message; }
+  }
+  renderStimulusStrip();
+  if (!items.length) return;
+  try {
+    const res = await api.describeStimulus(citySlug(), items.map(({ media_type, data }) => ({ media_type, data })), els.askInput.value.trim());
+    items.forEach((item, i) => { item.stimulus = res.stimuli?.[i] || null; item.loading = false; if (!item.stimulus) item.error = "no description returned"; });
+  } catch (err) {
+    console.error(err);
+    items.forEach((item) => { item.loading = false; item.error = err.status === 503 ? "no vision model on the server" : "vision call failed"; });
+    els.askError.textContent = `Couldn't read the image: ${err.message}`;
+  }
+  renderStimulusStrip();
+  syncStimuliToComposer();
+  els.askInput.focus();
+}
+
+els.askAttach.addEventListener("click", (e) => { e.stopPropagation(); if (!isBusy()) els.askFile.click(); });
+els.askFile.addEventListener("change", () => { addStimulusFiles(els.askFile.files); els.askFile.value = ""; });
+els.askInput.addEventListener("paste", (e) => {
+  const files = Array.from(e.clipboardData?.files || []).filter((f) => /^image\//.test(f.type));
+  if (files.length) { e.preventDefault(); addStimulusFiles(files); }
+});
+for (const ev of ["dragenter", "dragover"]) els.ask.addEventListener(ev, (e) => {
+  if (!Array.from(e.dataTransfer?.types || []).includes("Files")) return;
+  e.preventDefault(); e.dataTransfer.dropEffect = "copy"; els.ask.classList.add("is-dropping");
+});
+els.ask.addEventListener("dragleave", (e) => { if (!els.ask.contains(e.relatedTarget)) els.ask.classList.remove("is-dropping"); });
+els.ask.addEventListener("drop", (e) => {
+  els.ask.classList.remove("is-dropping");
+  if (!e.dataTransfer?.files?.length) return;
+  e.preventDefault(); e.stopPropagation();
+  addStimulusFiles(e.dataTransfer.files);
+});
+
 els.askInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runPrediction(els.askInput.value); }
 });

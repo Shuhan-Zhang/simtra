@@ -369,6 +369,35 @@ body {
   background: #fff; color: var(--accent); font-size: var(--fs-caption2); font-weight: var(--fw-semi);
   font-variant-numeric: var(--nums);
 }
+/* image attach: quiet icon button beside send; accent when images are attached */
+.ask-attach {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px; border: none; border-radius: var(--r-full);
+  background: transparent; color: var(--ink-3); cursor: pointer;
+  transition: background var(--t) var(--ease), color var(--t) var(--ease);
+}
+.ask-attach:hover { background: var(--fill); color: var(--ink); }
+.ask-attach[data-count]:not([data-count="0"]) { color: var(--accent); }
+.ask-attach:disabled { opacity: .5; cursor: default; }
+.ask[data-state="idle"] .ask-attach { display: none; }
+.ask.is-dropping { box-shadow: 0 0 0 2px var(--accent), var(--sh-2); }
+/* what Simtra saw in each image; chips are editable before the question is sent */
+.stimulus-strip { display: grid; gap: var(--s-2); }
+.stim-card {
+  display: grid; grid-template-columns: 64px 1fr; gap: var(--s-2) var(--s-3);
+  padding: var(--s-2); border-radius: var(--r-md); background: var(--fill);
+}
+.stim-card.is-loading { opacity: .7; }
+.stim-thumb { width: 64px; height: 64px; object-fit: cover; border-radius: 10px; background: #fff; }
+.stim-head { display: flex; align-items: baseline; gap: var(--s-2); min-width: 0; }
+.stim-kicker { font-size: var(--fs-caption2); font-weight: var(--fw-semi); letter-spacing: .04em; text-transform: uppercase; color: var(--accent); }
+.stim-summary { font-size: var(--fs-footnote); color: var(--ink-2, var(--ink)); line-height: var(--lh-tight); }
+.stim-remove { margin-left: auto; border: none; background: transparent; color: var(--ink-3); cursor: pointer; font-size: 16px; line-height: 1; padding: 0 4px; }
+.stim-remove:hover { color: var(--ink); }
+.stim-attrs { font-size: var(--fs-caption2); color: var(--ink-3); line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* the same stimulus, read-only, at the top of a result card */
+.res-stim { display: grid; grid-template-columns: 56px 1fr; gap: var(--s-2) var(--s-3); align-items: start; margin: var(--s-2) 0 var(--s-3); }
+.res-stim .stim-thumb { width: 56px; height: 56px; }
 /* the send action: a round accent button, same footprint as the dock icons */
 .ask-send {
   border: 0; flex: none; display: none; align-items: center; justify-content: center;

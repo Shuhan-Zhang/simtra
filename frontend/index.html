@@ -116,6 +116,14 @@
             <textarea id="ask-input" class="ask-input" rows="1" autocomplete="off" spellcheck="false"
                       placeholder="Ask a question — for choices, list options: bus, train, or bicycle"
                       aria-label="Predict anything"></textarea>
+            <button id="ask-attach" class="ask-attach" type="button" aria-label="Add an image" title="Add an image — a storefront, product or ad residents should react to (or paste / drop one)">
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                <rect x="3" y="5" width="18" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="2" />
+                <circle cx="8.5" cy="10" r="1.6" fill="currentColor" />
+                <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M4 17l5-5 4 4 3-3 4 4" />
+              </svg>
+            </button>
+            <input id="ask-file" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple hidden>
             <button id="ask-submit" class="ask-send" type="button" aria-label="Send" title="Send the question (Enter)">
               <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
                 <path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
@@ -125,6 +133,8 @@
           </div>
           <!-- question type + the extra fields each type needs; shown while composing -->
           <div class="ask-extra">
+            <!-- images residents react to: thumbnail + what Simtra saw, editable before sending -->
+            <div id="stimulus-strip" class="stimulus-strip" hidden aria-live="polite"></div>
             <div class="ask-modes" role="radiogroup" aria-label="Question type">
               <button type="button" class="ask-mode" role="radio" data-mode="predict" aria-checked="true" title="Ask one question">Predict</button>
               <button type="button" class="ask-mode" role="radio" data-mode="ab" aria-checked="false" title="Compare two messages with the same audience">A/B</button>

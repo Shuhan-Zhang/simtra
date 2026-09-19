@@ -114,6 +114,7 @@ async fn run(args: Args) -> i32 {
             population: Some(e.population.clone()),
             event: None,
             options: Vec::new(),
+            stimulus: None,
         };
         let res = match engine.run_poll(&pop, &poll).await {
             Ok(r) => r,
@@ -195,6 +196,7 @@ async fn run(args: Args) -> i32 {
             population: c.population.clone(),
             event: None,
             options: Vec::new(),
+            stimulus: None,
         };
         let ev = Event { text: c.event.clone(), as_of_date: c.as_of_date.clone() };
         let (b0, b1, delta) = match engine
@@ -267,6 +269,7 @@ fn market_poll(m: &MarketEntry) -> Poll {
         population: None,
         event: None,
         options: Vec::new(),
+        stimulus: None,
     }
 }
 
