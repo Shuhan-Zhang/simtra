@@ -32,6 +32,7 @@ pub fn router(state: ResearchState) -> Router {
     Router::new()
         .route("/audience-research/config", get(config))
         .route("/audience-research/automatic", post(automatic))
+        .route("/audience-research/automatic/stream", post(automatic_stream))
         .route("/audience-research/panels", get(list).post(create))
         .route("/audience-research/panels/:id", get(detail))
         .layer(DefaultBodyLimit::max(128 * 1024))
@@ -43,7 +44,7 @@ fn error(status: StatusCode, message: &str) -> Reply {
 }
 async fn config(State(st): State<ResearchState>) -> Json<Value> {
     Json(
-        json!({"search_configured":audience_sources::search_configured(),"jev_configured":st.client.has_key(),"max_sources":8,"max_panel_size":12,"scope":"persona_data_only"}),
+        json!({"search_configured":audience_sources::search_configured(),"jev_configured":st.client.has_key(),"max_sources":8,"max_panel_size":12,"scope":"persona_data_only","progress_stream":true}),
     )
 }
 async fn list(State(st): State<ResearchState>) -> Reply {
@@ -201,6 +202,35 @@ async fn automatic(
     State(st): State<ResearchState>,
     payload: Result<Json<AutomaticRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Reply {
+    automatic_run(st, payload, None).await
+}
+
+type Progress = tokio::sync::mpsc::UnboundedSender<Value>;
+fn report(progress: &Option<Progress>, step: &str, message: &str) {
+    if let Some(tx) = progress { let _ = tx.send(json!({"type":"progress", "step":step, "message":message})); }
+}
+async fn automatic_stream(
+    State(st): State<ResearchState>,
+    payload: Result<Json<AutomaticRequest>, axum::extract::rejection::JsonRejection>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    use futures::StreamExt;
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
+    tokio::spawn(async move {
+        let (status, Json(value)) = automatic_run(st, payload, Some(tx.clone())).await;
+        let event = if status.is_success() { json!({"type":"result", "panel":value}) }
+            else { json!({"type":"error", "message":value["error"]}) };
+        let _ = tx.send(event);
+    });
+    let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx)
+        .map(|event| Ok::<_, std::convert::Infallible>(format!("{}\n", event)));
+    ([("content-type", "application/x-ndjson"), ("cache-control", "no-store")], axum::body::Body::from_stream(stream)).into_response()
+}
+async fn automatic_run(
+    st: ResearchState,
+    payload: Result<Json<AutomaticRequest>, axum::extract::rejection::JsonRejection>,
+    progress: Option<Progress>,
+) -> Reply {
     let Ok(Json(input)) = payload else {
         return error(StatusCode::BAD_REQUEST, "Provide a question to research.");
     };
@@ -243,17 +273,21 @@ async fn automatic(
         return error(StatusCode::SERVICE_UNAVAILABLE, "Automatic research requires server-side Jev and Brave Search configuration. No profile was invented.");
     }
     let result = tokio::time::timeout(std::time::Duration::from_secs(150), async {
+        report(&progress, "context", "Jev · identifying the business, audience and market");
         let context = crate::audience_context::identify(&st.client, question, market).await?;
         let req = BuildRequest {
             question: question.into(), business: context.business.value.clone().unwrap_or_else(|| "Unspecified business".into()),
             location: context.market.value.clone().unwrap_or_default(), panel_size: 4,
             sources: vec![], discover: true, founder_context: String::new(), panel_id: None,
         };
+        report(&progress, "sources", "Brave Search + web reader · finding and reading public evidence");
         let (sources, warnings) = audience_sources::collect_automatic(&req).await?;
+        report(&progress, "profiles", &format!("Jev · checking {} collected sources and building supported profiles", sources.len()));
         let mut panel = build_panel(&st.client, &req, sources, warnings).await?;
         if context.business.value.is_none() { panel.gaps.push("The question does not identify a business or product unambiguously; none was invented.".into()); }
         if context.audience.value.is_none() { panel.gaps.push("No explicit audience was identified in the question. Profiles are inferred from the discovered evidence.".into()); }
         panel.question_context = Some(context);
+        report(&progress, "saving", &format!("Saving {} profiles with citations and evidence gaps", panel.personas.len()));
         st.panels.save(panel)
     }).await;
     match result {

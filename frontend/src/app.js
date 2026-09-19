@@ -1138,7 +1138,7 @@ async function prepareQuestionAudience(question, signal, commercial = false) {
       location: state.city?.display || '', signal,
       onProgress: progress => {
         personaResearchUI.updateAutomatic(progress);
-        const researching = ['checking', 'researching'].includes(progress.stage);
+        const researching = ['checking', 'researching', 'activity'].includes(progress.stage);
         els.askLabel.textContent = researching ? 'researching audience…' : 'preparing simulation…';
         els.progressLabel.textContent = researching
           ? 'finding evidence and building audience profiles… (esc to cancel)'

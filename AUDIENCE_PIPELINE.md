@@ -93,3 +93,9 @@ Source excerpts can contain first-person reviews or third-party reporting. The U
 Prediction, multi-option, A/B and marketing results include the exact saved research panel used for that request as a separate audience research summary. It shows profile attributes, provenance, expandable source excerpts and links, unknowns, conflicts, gaps and limitations. Saved research also includes this summary. Attributes appear only when their citation resolves to an exact excerpt in the saved source snapshot. No additional model calls are needed.
 
 The summary is context only: these profiles do not calculate the Census-based simulation result. No research characters, gold outlines, numbered controls, camera focus or research-driven crowd dimming are added to the map. Ordinary city residents keep moving, including with reduced motion enabled; camera/reveal effects still respect that preference.
+
+## Compact persona display and activity
+
+Research summaries show illustrative persona heads and up to two supported traits. Hover, keyboard focus, or tap opens the full supported-trait list. Source excerpts and limits remain in collapsed disclosures; avatars do not imply demographic evidence. Full research and saved versions remain available separately.
+
+The optional `/audience-research/automatic/stream` endpoint emits NDJSON progress at actual context, source-collection, profile-building and saving boundaries, followed by a confirmed result or error. The frontend uses this when advertised by configuration; older backends keep their combined research status. This activity is an operation log, not model reasoning.

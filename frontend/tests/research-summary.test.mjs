@@ -13,8 +13,8 @@ const panel = {
 };
 test('summary retains profile evidence, provenance, version and uncertainty separately from simulation', () => {
   const html = renderResearchSummary(panel);
-  for (const value of ['Audience research summary','Value-oriented buyers',quote,'https://example.com/review','inferred','saved panel v2','Unknown: purchase frequency','Conflicting evidence','No purchase history','Small source sample','not used to calculate the simulation']) assert.ok(html.includes(value), value);
-  assert.ok(renderResearchPanel(panel).includes('Audience research summary'));
+  for (const value of ['Customer personas','Value-oriented buyers',quote,'https://example.com/review','inferred','saved panel v2','Unknown: purchase frequency','Conflicting evidence','No purchase history','Small source sample','not used to calculate the simulation']) assert.ok(html.includes(value), value);
+  assert.ok(renderResearchPanel(panel).includes('Customer personas'));
   assert.doesNotMatch(html, /research-cast|data-research-index|gold-outlined/);
 });
 test('summary rejects unsupported claims and fabricated or missing citations', () => {
@@ -28,4 +28,19 @@ test('summary escapes untrusted text and refuses unsafe links', () => {
   const copy = structuredClone(panel); copy.personas[0].label='<script>alert(1)</script>'; copy.sources[0].url='javascript:alert(1)';
   const html = renderResearchSummary(copy);
   assert.match(html,/&lt;script&gt;/); assert.doesNotMatch(html,/<script>|javascript:/);
+});
+
+test('personas are compact interactive heads with evidence behind disclosure', () => {
+  const html = renderResearchSummary(panel);
+  assert.match(html, /class="pr-persona-head"/);
+  assert.match(html, /What this persona adds/);
+  assert.match(html, /Sources &amp; limits/);
+  assert.match(html, /class="pc-person-portrait pr-sprite-head"/);
+  assert.doesNotMatch(html, /<details[^>]* open/);
+});
+
+test('persona heads reuse the city sprite sheet crop, not custom avatar artwork', () => {
+  const html = renderResearchSummary(panel);
+  assert.match(html, /background-position:-64px -0px/);
+  assert.doesNotMatch(html, /<svg|pr-avatar/);
 });

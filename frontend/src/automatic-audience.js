@@ -35,7 +35,9 @@ export async function prepareAutomaticAudience(question, { location = '', signal
     throw new Error('Automatic audience research needs Brave Search and Jev configured on the server. No audience was invented.');
   }
   onProgress({ stage: 'researching', question: body.question });
-  const panel = await call('/automatic', { body });
+  const panel = await call(config.progress_stream ? '/automatic/stream' : '/automatic', { body,
+    onActivity: event => { check(); onProgress({ stage: 'activity', question: body.question, step: event.step, message: event.message }); },
+  });
   onProgress({ stage: usableResearchPanel(panel) ? 'ready' : 'needs_evidence', question: body.question, panel, reused: false });
   if (!usableResearchPanel(panel)) throw new Error('Research was saved, but it does not support an audience yet. Open Audience research to see the gaps, then refine your question in the main input.');
   return panel;
