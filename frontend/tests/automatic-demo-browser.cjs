@@ -61,7 +61,7 @@ const base = process.env.SIMTRA_TEST_BASE || 'http://127.0.0.1:5198';
       return first.residents[0].name;
     });
     await page.reload(); await ready(); await page.locator('#research-launch').waitFor();
-    assert.equal(await page.locator('#feed-panel #research-launch').count(),1, 'history navigation belongs in the right panel');
+    assert.equal(await page.locator('#feed-panel .fp-views #research-launch').count(),1, 'history navigation belongs in the right panel');
     assert.equal(await page.locator('#dock #research-launch').count(),0, 'no floating experiments button');
     await page.locator('#research-launch').click();
     await page.locator('.ex-history-entry').first().waitFor();

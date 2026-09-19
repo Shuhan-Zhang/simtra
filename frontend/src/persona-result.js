@@ -15,6 +15,7 @@ export function personaResultHtml(run, id, selected = 0) {
   const metric = experiment.metric || 'Response';
   const hasPrice = Number.isFinite(scenario.change ?? scenario.price);
   const series = hasPrice ? priceSeries(run, selected) : [];
+  const shownSeries = series.length <= 8 ? series : series.filter((row,i)=>i % Math.ceil((series.length-1)/5) === 0 || i === series.length-1 || row.index === selected);
   const baseline = series.find(row => row.scenario.change === 0) || series[0];
   const baselineValue = baseline ? share(baseline.index) : null;
   const delta = value == null || baselineValue == null ? null : (value - baselineValue) * 100;
@@ -23,7 +24,7 @@ export function personaResultHtml(run, id, selected = 0) {
   const chips = hasPrice ? [scenario.location, price(scenario), scenario.format] : [scenario.label];
   const comparison = baseline && baseline.index !== selected && delta != null
     ? `<div class="pr-comparison"><span>${pct(baselineValue)}<small>${baseline.scenario.change === 0 ? 'At current price' : `At ${esc(price(baseline.scenario))}`}</small></span><span aria-hidden="true">→</span><span>${pct(value)}<small>Selected scenario</small></span><strong>${delta > 0 ? '+' : ''}${delta.toFixed(1)}<small>percentage points</small></strong></div>` : '';
-  const chart = series.length > 1 ? `<section class="pr-price-compare" aria-label="Profile response by price"><h4>How price changes this group's response</h4><p class="pr-context">${esc(scenario.location)} · ${esc(scenario.format)} held fixed</p><div class="pr-price-bars">${series.map(row => {
+  const chart = series.length > 1 ? `<section class="pr-price-compare" aria-label="Profile response by price"><h4>How price changes this group's response</h4><p class="pr-context">${esc(scenario.location)} · ${esc(scenario.format)} held fixed</p><div class="pr-price-bars">${shownSeries.map(row => {
     const v = share(row.index);
     return `<button type="button" class="pr-price-point" data-scenario="${row.index}" aria-pressed="${row.index === selected}" aria-label="${esc(price(row.scenario))}: ${esc(pct(v))}"><span>${esc(price(row.scenario))}</span><span class="pr-bar-track" aria-hidden="true"><span style="width:${v == null ? 0 : Math.max(0, Math.min(100, v * 100))}%"></span></span><strong>${esc(pct(v))}</strong></button>`;
   }).join('')}</div></section>` : '';
