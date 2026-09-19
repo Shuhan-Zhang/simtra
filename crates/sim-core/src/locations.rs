@@ -184,7 +184,7 @@ mod tests {
         let mut poll = crate::predict::Poll {
             question: "Q".into(), description: "Unchanged".into(),
             framing: crate::predict::Framing::Belief, as_of_date: "2026-09-19".into(),
-            model: None, population: None, event: None, options: vec![],
+            model: None, population: None, event: None, options: vec![], stimulus: None,
         };
         assert!(apply_poll_context("sf", None, &mut poll).await.unwrap().is_none());
         assert_eq!(poll.description, "Unchanged");
