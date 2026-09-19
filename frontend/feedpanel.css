@@ -349,3 +349,18 @@
 @keyframes fp-spin { to { transform: rotate(360deg); } }
 @keyframes fp-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 @media (prefers-reduced-motion: reduce) { .fp-spinner, .fp-status.is-loading::before, .fp-skel-line { animation: none; } }
+
+.fp-views[hidden] { display:none; }
+.fp-experiment-open { display:block; width:100%; text-align:left; border:0; padding:0; background:transparent; font:inherit; color:inherit; cursor:pointer; }
+.fp-experiment-open .fp-title { display:block; }
+.fp-experiment-meta { display:block; color:var(--ink-2); font-size:14px; margin-top:10px; }
+.fp-experiment-link { display:block; color:var(--accent); font-size:14px; margin-top:12px; }
+.fp-experiment-open:hover .fp-title { color:var(--accent); }
+
+.fp-news-image { display:block; width:100%; aspect-ratio:16 / 9; object-fit:cover; border-radius:12px; margin:12px 0; background:#eef1f5; }
+.fp-news-source { display:inline-block; margin-top:10px; font-size:13px; color:var(--blue, #0780ff); text-decoration:none; }
+
+.fp-experiment-archive { margin-left:auto; padding:5px 9px; border:0; border-radius:7px; background:var(--surface-2, #f1f2f4); color:var(--ink-2); font:inherit; font-size:12px; cursor:pointer; }
+.fp-experiment-archive:hover { color:var(--ink); background:#e5e7eb; }
+.fp-archive-notice { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 14px; font-size:13px; }
+.fp-archive-notice button { border:0; background:none; color:var(--accent); font:inherit; cursor:pointer; }

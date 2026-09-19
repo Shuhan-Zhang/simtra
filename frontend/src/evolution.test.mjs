@@ -4,15 +4,16 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 const source=readFileSync(new URL('./evolution.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace(/^export /gm,'');
 const flush=()=>new Promise(setImmediate);
-function element(){return {hidden:false,value:'2400',dataset:{},children:new Map(),listeners:{},setAttribute(){},focus(){},append(){},querySelector(s){if(!this.children.has(s))this.children.set(s,element());return this.children.get(s);},querySelectorAll(){return[];},addEventListener(n,f){this.listeners[n]=f;},fire(n='click',e={}){return this.listeners[n]?.(e);}};}
+function classList(){const values=new Set();return {add(...names){names.forEach(n=>values.add(n));},remove(...names){names.forEach(n=>values.delete(n));},contains(name){return values.has(name);},toggle(name,force){const selected=force??!values.has(name);if(selected)values.add(name);else values.delete(name);return selected;}};}
+function element(){return {classList:classList(),replaceChildren(...nodes){this.nodes=nodes;},hidden:false,value:'2400',dataset:{},children:new Map(),listeners:{},setAttribute(){},focus(){},append(){},querySelector(s){if(!this.children.has(s))this.children.set(s,element());return this.children.get(s);},querySelectorAll(){return[];},addEventListener(n,f){this.listeners[n]=f;},fire(n='click',e={}){return this.listeners[n]?.(e);}};}
 function fixture(){
  return {id:'run',branch:'main',scenario:'Restaurant prices rise 20%',population:10000,max_ticks:14,groups:[{id:0,members:[1],weight:1}],outcomes:[{id:'same',label:'Keep routine',changed:false},{id:'switch',label:'Switch restaurants',changed:true}],frames:[frame(0)]};
 }
 const frame=tick=>({tick,day:tick,changed_count:tick?4000:0,changed_share:tick?.4:0,behaviors:[{group:0,outcome:tick?'switch':'same'}],totals:[{id:'same',share:tick?.6:1,count:tick?6000:10000},{id:'switch',share:tick?.4:0,count:tick?4000:0}]});
 function harness(){
  const els=[],pending=[],saved=new Map(),map={setEvolution(v){this.evolution=v;}};
- const document={body:{append(e){els.push(e)},classList:{add(){},remove(){}}},createElement:element,addEventListener(){}};
- const ctx=vm.createContext({document,console,AbortController,BASE:'',workspaceHeaders:()=>({'X-Simtra-Workspace':'test'}),sessionStorage:{getItem:k=>saved.get(k),setItem:(k,v)=>saved.set(k,v),removeItem:k=>saved.delete(k)},setTimeout:()=>1,clearTimeout(){},setInterval(){},fetch:(url,options)=>new Promise(resolve=>pending.push({url,body:JSON.parse(options.body||'null'),resolve:data=>resolve({ok:!data.error,json:async()=>data})}))});
+ const document={body:{append(...nodes){for(const node of nodes)if(!els.includes(node))els.push(node);},classList:classList()},createElement:element,addEventListener(){}};
+ const ctx=vm.createContext({document,console,AbortController,DOMException,structuredClone,BASE:'',workspaceHeaders:()=>({'X-Simtra-Workspace':'test'}),sessionStorage:{getItem:k=>saved.get(k),setItem:(k,v)=>saved.set(k,v),removeItem:k=>saved.delete(k)},setTimeout:()=>1,clearTimeout(){},setInterval(){},fetch:(url,options)=>new Promise(resolve=>pending.push({url,body:JSON.parse(options.body||'null'),resolve:data=>resolve({ok:!data.error,json:async()=>data})}))});
  vm.runInContext(source+'\nglobalThis.init=initEvolution;',ctx);
  const controller=ctx.init({map,getBranch:()=> 'main',getCity:()=> 'sf',isReady:()=>true});
  const [root,transport]=els,q=s=>root.querySelector(s),t=s=>transport.querySelector(s);
@@ -21,7 +22,7 @@ function harness(){
 }
 test('reset during pending step retains baseline and records result for exact replay',async()=>{
  const h=harness();await h.start();h.t('[data-reset]').fire();h.resolveStep(1);await flush();
- assert.equal(h.map.evolution.frame.tick,0);assert.equal(h.t('[data-scrub]').max,1);
+ assert.equal(h.map.evolution.frame.tick,0);assert.equal(h.t('[data-scrub]').max,14);
  h.t('[data-step-forward]').fire();await flush();assert.equal(h.map.evolution.frame.tick,1);assert.equal(h.pending.length,0);
 });
 test('closing during inference never restores the overlay or schedules further calls',async()=>{
@@ -31,7 +32,7 @@ test('closing during inference never restores the overlay or schedules further c
 });
 test('duplicate step clicks create only one request and pause preserves the viewed frame',async()=>{
  const h=harness();await h.start();h.t('[data-step-forward]').fire();assert.equal(h.pending.length,1);
- h.resolveStep(1);await flush();assert.equal(h.t('[data-scrub]').max,1);
+ h.resolveStep(1);await flush();assert.equal(h.t('[data-scrub]').max,14);
 });
 test('failure preserves timeline and next step retries the same position',async()=>{
  const h=harness();await h.start();const pending=h.pending.shift();pending.resolve({error:'bad'});await flush();
@@ -86,3 +87,5 @@ test('failed timeline question retains the draft and recorded frame',async()=>{
  assert.equal(h.q('#evo-message').value,'Why would residents change?');
  assert.equal(h.map.evolution.frame.tick,1);assert.equal(h.pending.length,0);
 });
+
+test('future timeline positions keep the full horizon and start calculating instead of showing nonexistent frames',async()=>{const h=harness();await h.start();h.resolveStep(1);await flush();const slider=h.t('[data-scrub]');slider.value='14';slider.fire('input',{target:slider});await flush();assert.equal(slider.max,14);assert.equal(h.map.evolution.frame.tick,1);assert.equal(h.pending.length,1);h.resolveStep(2);await flush();assert.equal(h.map.evolution.frame.tick,2);});

@@ -14,7 +14,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { BASE, today } from "./config.js";
-import { workspaceHeaders, shareUrl, startNewWorkspace } from "./workspace.js?v=2";
+import { WORKSPACE, workspaceHeaders, shareUrl, startNewWorkspace } from "./workspace.js?v=2";
 import { detectKind } from "./detect-kind.js";
 import { buildEvidenceChartModel } from "./evidence-chart.js";
 import { createPersonaChart } from "./persona-chart.js?v=5";
@@ -28,6 +28,12 @@ const PREVIEW_POSTS = 5;   // event posts near the top fetch their comment previ
 const PREVIEW_N = 3;
 const COLLAPSE_KEY = "simtra.feed.collapsed";
 const VIEW_KEY = "simtra.feed.view";
+const ARCHIVE_KEY = `simtra.feed.archived-experiments.${WORKSPACE}`;
+const archivedExperiments = (() => {
+  try { const ids=JSON.parse(localStorage.getItem(ARCHIVE_KEY) || "[]"); return new Set(Array.isArray(ids)?ids:[]); }
+  catch { return new Set(); }
+})();
+let lastArchivedExperiment = null;
 const VIEWS = [["all", "All"], ["news", "News"]];
 const VIEW_TITLES = { all: "Show everything", news: "Only posted news and events", asks: "Only surveys you ran", data: "Only verified Census data queries" };
 const TEST_KINDS = {
@@ -156,6 +162,8 @@ const state = {
   getPopulationKey: () => null,
   openPastResult: null,
   chart: null,          // the one open timeline chart: { id, host, dispose, close }
+  experiments: [],
+  openExperiment: () => {},
   items: [],            // lineage items (events, tests, data queries), newest first
   posts: new Map(),     // item id -> post element
   memoryOff: false,
@@ -214,7 +222,7 @@ function build(root) {
       </div>
     </div>
     <div id="fp-body" class="fp-body">
-      <div class="fp-views" role="tablist" aria-label="Show">
+      <div class="fp-views" hidden>
         ${VIEWS.map(([v, label]) => `<button type="button" role="tab" class="fp-view" data-view="${v}" aria-selected="${v === "all"}" title="${VIEW_TITLES[v]}">${label}<span class="fp-view-n"></span></button>`).join("")}
       </div>
       <div class="fp-composer">
@@ -299,6 +307,16 @@ function syncViews() {
 // lineage items as last loaded (newest first); the app reads these to build the
 // "over time" history of a question without a second fetch
 export function lineageItems() { return state.items; }
+export function setTimelineExperiments(runs, openRun) {
+  state.experiments = runs;
+  state.openExperiment = openRun;
+  if(state.el.thread) renderThread();
+}
+export function showCityTimeline() {
+  state.collapsed=false;state.autoCollapsed=false;state.view="all";
+  if(state.root) {applyCollapsed();renderThread();state.el.thread.scrollTop=0;}
+}
+
 
 export function initFeedPanel({
   getCity, getBranch, getCityDisplay, getResidents, getNews, onScenario,
@@ -330,7 +348,7 @@ export function initFeedPanel({
   build(root);
 
   state.collapsed = false; // always expanded on load; the caret folds it for this session only
-  try { const v = localStorage.getItem(VIEW_KEY); if (VIEWS.some(([k]) => k === v)) state.view = v; } catch { /* private mode */ }
+  state.view = "all"; // One chronological timeline for news and saved experiments.
   applyCollapsed();
   for (const b of root.querySelectorAll(".fp-collapse")) b.addEventListener("click", () => {
     state.autoCollapsed = false;
@@ -563,8 +581,26 @@ function renderThread() {
   const seen = new Set();
   const frag = document.createDocumentFragment();
   syncViews();
-  for (const item of state.items) {
-    if (!inView(item)) continue;
+  if(lastArchivedExperiment){
+    const notice=document.createElement("div");
+    notice.className="fp-archive-notice";notice.setAttribute("role","status");
+    notice.innerHTML='Experiment archived <button type="button">Undo</button>';
+    notice.querySelector("button").addEventListener("click",()=>{
+      archivedExperiments.delete(lastArchivedExperiment);lastArchivedExperiment=null;
+      try{localStorage.setItem(ARCHIVE_KEY,JSON.stringify([...archivedExperiments]));}catch{}
+      renderThread();
+    });
+    frag.appendChild(notice);
+  }
+  const timestamp = item => Date.parse(item.created_at || item.as_of_date || item.date || "") || 0;
+  const entries = [
+    ...state.items,
+    ...state.experiments.filter(run=>run.city===state.getCity()&&!archivedExperiments.has(run.id)).map(run=>({type:"experiment",id:`experiment:${run.id}`,created_at:run.createdAt,run})),
+    ...(state.getNews() || []).map((article,index)=>({type:"headline",id:`headline:${index}`,date:article.date,article})),
+  ].sort((a,b)=>timestamp(b)-timestamp(a));
+  for (const item of entries) {
+    if(item.type==="headline") {frag.appendChild(newsPost(item.article));continue;}
+    if(item.type==="experiment") {frag.appendChild(experimentPost(item.run));continue;}
     seen.add(item.id);
     let post = state.posts.get(item.id);
     if (!post) {
@@ -573,7 +609,6 @@ function renderThread() {
         : eventPost(item);
       state.posts.set(item.id, post);
     } else if (post.dataset.busy !== "true") {
-      // refresh the parts that can change between loads
       if (item.type === "test") fillTest(post, item);
       else if (item.type === "data_query") fillDataQuery(post, item);
       else fillEvent(post, item);
@@ -581,9 +616,6 @@ function renderThread() {
     frag.appendChild(post);
   }
   for (const id of [...state.posts.keys()]) if (!seen.has(id)) state.posts.delete(id);
-  // the city's baseline headlines: what residents already know, as plain posts
-  const news = state.view === "all" || state.view === "news" ? (state.getNews() || []) : [];
-  for (const a of news.slice(0, 6)) frag.appendChild(newsPost(a));
   const stillWaking = !state.getBranch() && !state.memoryOff;
   if (!frag.childElementCount && (!state.loaded || stillWaking) && !state.memoryOff) {
     // still fetching (or seeding a fresh workspace): skeleton rows, not an empty state
@@ -992,6 +1024,25 @@ function fillDataQuery(post, item) {
   renderChartLink(post, item, "View chart");
 }
 
+function experimentPost(run) {
+  const post=document.createElement("article");
+  post.className="fp-post fp-post-experiment";
+  post.dataset.run=run.id;
+  post.innerHTML=`${postHead({avatar:"↗",source:"Experiment",date:fmtDate(run.createdAt)})}<button type="button" class="fp-experiment-open"><span class="fp-title">${esc(run.experiment.decision)}</span><span class="fp-experiment-meta">${run.scenarios.length} combinations · ${run.residents.length.toLocaleString()} residents${run.researchPanel?.sources?.length?` · ${run.researchPanel.sources.length} sources`:""}</span><span class="fp-experiment-link">View research and results →</span></button>`;
+  post.querySelector(".fp-experiment-open").addEventListener("click",()=>state.openExperiment(run.id));
+  const archive=document.createElement("button");
+  archive.type="button";archive.className="fp-experiment-archive";archive.textContent="Archive";
+  archive.setAttribute("aria-label",`Archive experiment: ${run.experiment.decision}`);
+  archive.title="Remove from timeline";
+  archive.addEventListener("click",()=>{
+    archivedExperiments.add(run.id);lastArchivedExperiment=run.id;
+    try{localStorage.setItem(ARCHIVE_KEY,JSON.stringify([...archivedExperiments]));}catch{}
+    renderThread();
+  });
+  post.querySelector(".fp-post-head").appendChild(archive);
+  return post;
+}
+
 // ── baseline headlines ─────────────────────────────────────────────────────
 function newsPost(a) {
   const post = document.createElement("article");
@@ -1002,6 +1053,14 @@ function newsPost(a) {
     <div class="fp-sum"></div>`;
   post.querySelector(".fp-title").textContent = a.headline || "";
   post.querySelector(".fp-sum").textContent = a.summary || "";
+  const safeUrl=value=>{try{const u=new URL(value);return ['https:','http:'].includes(u.protocol)?u.href:null;}catch{return null;}};
+  const source=safeUrl(a.url), image=safeUrl(a.image_url);
+  if(image){
+    const img=document.createElement('img');img.className='fp-news-image';img.src=image;img.alt='';img.loading='lazy';img.decoding='async';
+    img.addEventListener('error',()=>img.remove(),{once:true});post.querySelector('.fp-title').before(img);
+  }
+  if(source){const link=document.createElement('a');link.className='fp-news-source';link.href=source;link.target='_blank';link.rel='noopener noreferrer';link.textContent=`${new URL(source).hostname.replace(/^www\./,'')} ↗`;post.append(link);}
+
   return post;
 }
 

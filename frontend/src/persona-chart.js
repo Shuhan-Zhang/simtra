@@ -22,7 +22,6 @@ const CHART_TITLES = { bar: "Share by group", histogram: "How support is spread 
 const NUMERIC_DIMENSIONS = new Set(["age", "income"]);
 const ORDERED_DIMENSIONS = new Set(["age", "income", "education"]);
 const HEAD_CAP = 12;
-const PEOPLE_PAGE = 20;
 const SCATTER_CAP = 1500;
 const HIST_BINS = 10;
 
@@ -99,7 +98,7 @@ export function sampleResidents(rows, cap = SCATTER_CAP) {
 
 // residents of a segment; cross-tab keys are `left|right`
 export function residentsIn(residents, dimension, key) {
-  return residents.filter((r) => r?.segments && r.segments[dimension] === key);
+  return dimension === "all" ? residents : residents.filter((r) => r?.segments && r.segments[dimension] === key);
 }
 
 // ── main ───────────────────────────────────────────────────────────────────
@@ -208,7 +207,7 @@ export function createPersonaChart(host, opts) {
 
   // ── people list (the residents behind a statistic) ──
   function openPeople({ title, subtitle, rows, segments }) {
-    st.people = { title, subtitle, rows: byStrength(rows), shown: PEOPLE_PAGE, seq: (st.people?.seq || 0) + 1 };
+    st.people = { title, subtitle, rows: byStrength(rows), shown: 3, seq: (st.people?.seq || 0) + 1 };
     o.onGroupSelect(segments || null);
     renderPeople();
     el.people.classList.remove("hidden");
@@ -255,11 +254,11 @@ export function createPersonaChart(host, opts) {
       </div>
       ${!p.rows.length ? `<p class="pc-empty">No residents in this group in the current simulation.</p>` : ""}
       <ul class="pc-list">${rows.map((r) => personRow(r)).join("")}</ul>
-      ${p.rows.length > p.shown ? `<button type="button" class="pc-link pc-people-more">Show ${Math.min(PEOPLE_PAGE, p.rows.length - p.shown)} more</button>` : ""}`;
+      ${p.rows.length > p.shown ? `<button type="button" class="pc-link pc-people-more">Show all ${p.rows.length} residents</button>` : ""}`;
     paintHeads(el.people);
     for (const c of el.people.querySelectorAll(".pc-person-portrait")) o.drawHead(c, Number(c.dataset.agent));
     el.people.querySelector(".pc-people-back").addEventListener("click", () => { clearSelection(); render(); });
-    el.people.querySelector(".pc-people-more")?.addEventListener("click", () => { p.shown += PEOPLE_PAGE; renderPeople(); askPersonal(); });
+    el.people.querySelector(".pc-people-more")?.addEventListener("click", () => { p.shown = p.rows.length; renderPeople(); askPersonal(); });
     for (const li of el.people.querySelectorAll(".pc-person")) {
       li.addEventListener("click", () => {
         const row = p.rows.find((r) => r.resident.id === Number(li.dataset.agent));
@@ -324,6 +323,7 @@ export function createPersonaChart(host, opts) {
       t.addEventListener("mouseenter", showHeads);
       t.addEventListener("focus", showHeads);
       t.addEventListener("click", () => {
+        if(st.selected?.dimension===g.dimension && st.selected?.key===g.key){clearSelection();render();return;}
         const share = groupShare(g);
         openPeople({
           title: groupTitle(g),
@@ -468,7 +468,7 @@ export function createPersonaChart(host, opts) {
       const { g, rows } = stats[Number(t.dataset.group)];
       const show = () => { hover.innerHTML = `<span class="pc-hover-label">${esc(groupTitle(g))} · ${fmtInt(rows.length)} residents</span>${headsHtml(byStrength(rows))}`; paintHeads(hover); };
       t.addEventListener("mouseenter", show); t.addEventListener("focus", show);
-      const open = () => { st.selected = { dimension: g.dimension, key: g.key }; openPeople({ title: groupTitle(g), subtitle: `${fmtInt(rows.length)} residents · median ${rows.length ? pct(weightedQuantiles(rows.map((r) => r.support), rows.map((r) => weightOf(r.resident)), [0.5])[0]) : "—"}`, rows, segments: [{ dimension: g.dimension, key: g.key }] }); render(); };
+      const open = () => { if(st.selected?.dimension===g.dimension && st.selected?.key===g.key){clearSelection();render();return;} st.selected = { dimension: g.dimension, key: g.key }; openPeople({ title: groupTitle(g), subtitle: `${fmtInt(rows.length)} residents · median ${rows.length ? pct(weightedQuantiles(rows.map((r) => r.support), rows.map((r) => weightOf(r.resident)), [0.5])[0]) : "—"}`, rows, segments: [{ dimension: g.dimension, key: g.key }] }); render(); };
       t.addEventListener("click", open);
       t.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); } });
     }

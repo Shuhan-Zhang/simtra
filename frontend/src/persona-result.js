@@ -15,7 +15,6 @@ export function personaResultHtml(run, id, selected = 0) {
   const metric = experiment.metric || 'Response';
   const hasPrice = Number.isFinite(scenario.change ?? scenario.price);
   const series = hasPrice ? priceSeries(run, selected) : [];
-  const shownSeries = series.length <= 8 ? series : series.filter((row,i)=>i % Math.ceil((series.length-1)/5) === 0 || i === series.length-1 || row.index === selected);
   const baseline = series.find(row => row.scenario.change === 0) || series[0];
   const baselineValue = baseline ? share(baseline.index) : null;
   const delta = value == null || baselineValue == null ? null : (value - baselineValue) * 100;
@@ -24,10 +23,14 @@ export function personaResultHtml(run, id, selected = 0) {
   const chips = hasPrice ? [scenario.location, price(scenario), scenario.format] : [scenario.label];
   const comparison = baseline && baseline.index !== selected && delta != null
     ? `<div class="pr-comparison"><span>${pct(baselineValue)}<small>${baseline.scenario.change === 0 ? 'At current price' : `At ${esc(price(baseline.scenario))}`}</small></span><span aria-hidden="true">→</span><span>${pct(value)}<small>Selected scenario</small></span><strong>${delta > 0 ? '+' : ''}${delta.toFixed(1)}<small>percentage points</small></strong></div>` : '';
-  const chart = series.length > 1 ? `<section class="pr-price-compare" aria-label="Profile response by price"><h4>How price changes this group's response</h4><p class="pr-context">${esc(scenario.location)} · ${esc(scenario.format)} held fixed</p><div class="pr-price-bars">${shownSeries.map(row => {
-    const v = share(row.index);
-    return `<button type="button" class="pr-price-point" data-scenario="${row.index}" aria-pressed="${row.index === selected}" aria-label="${esc(price(row.scenario))}: ${esc(pct(v))}"><span>${esc(price(row.scenario))}</span><span class="pr-bar-track" aria-hidden="true"><span style="width:${v == null ? 0 : Math.max(0, Math.min(100, v * 100))}%"></span></span><strong>${esc(pct(v))}</strong></button>`;
-  }).join('')}</div></section>` : '';
+  const points = series.map(row => ({...row,value:share(row.index)}));
+  const min = Math.min(...series.map(row=>row.scenario.change ?? row.scenario.price));
+  const max = Math.max(...series.map(row=>row.scenario.change ?? row.scenario.price));
+  const x = row => 48 + ((row.scenario.change ?? row.scenario.price)-min)/(max-min || 1)*310;
+  const y = row => 164-Math.max(0,Math.min(1,row.value))*130;
+  let path = '', connected = false;
+  points.forEach(row=>{if(row.value==null){connected=false;return;}path+=`${connected?'L':'M'}${x(row)},${y(row)} `;connected=true;});
+  const chart = series.length > 1 ? `<section class="pr-price-compare" aria-label="Profile response by price"><h4>Response by price</h4><p class="pr-context">${esc(scenario.location)} · ${esc(scenario.format)}</p><div class="pr-line-axis">${esc(metric)} (%)</div><svg class="pr-price-line" viewBox="0 0 390 210" aria-label="${esc(metric)} by price" role="group">${[0,.5,1].map(v=>`<line x1="48" x2="358" y1="${164-v*130}" y2="${164-v*130}" stroke="#d8dee8" stroke-dasharray="3 4"/><text x="40" y="${169-v*130}" text-anchor="end">${v*100}%</text>`).join('')}<path d="${path}" fill="none" stroke="#087fff" stroke-width="3"/>${points.map((row,i)=>`<g class="pr-price-point" data-scenario="${row.index}" aria-pressed="${row.index===selected}" role="button" tabindex="0" aria-label="${esc(price(row.scenario))}: ${esc(pct(row.value))}"><title>${esc(price(row.scenario))}: ${esc(pct(row.value))}</title>${row.value==null?'':`<circle cx="${x(row)}" cy="${y(row)}" r="9" fill="transparent"/><circle cx="${x(row)}" cy="${y(row)}" r="${row.index===selected?5:3}" fill="${row.index===selected?'#087fff':'white'}" stroke="#087fff" stroke-width="2"/>`}${i===0||i===points.length-1||i===Math.floor(points.length/2)?`<text x="${x(row)}" y="186" text-anchor="middle">${esc(price(row.scenario))}</text>`:''}</g>`).join('')}<text x="203" y="207" text-anchor="middle">${experiment.priceMode==='absolute'?'Price':'Price change'}</text></svg></section>` : '';
   return `<div class="ex-person-head"><canvas width="40" height="40"></canvas><div><strong>${esc(resident.name)}</strong><small>${esc([resident.age, resident.occupation, resident.neighborhood].filter(v => v != null && v !== '').join(' · '))}</small></div><button class="ex-close" data-action="close-person" aria-label="Close persona">×</button></div>
     <p class="ex-person-story">Synthetic persona · ${esc((resident.educ || 'education not recorded').replaceAll('_', ' '))}</p>
     <div class="pr-scenario-chips" aria-label="Selected scenario">${chips.filter(Boolean).map(text => `<span>${esc(text)}</span>`).join('')}</div>

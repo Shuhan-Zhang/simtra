@@ -51,3 +51,6 @@ data/*.aux.xml
 /data/locations/
 /tools/__pycache__/
 .vercel
+
+.local-memory/
+.env*

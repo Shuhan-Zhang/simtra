@@ -27,19 +27,23 @@ async function request(path,body){
   const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),90000);
   try{
     const res=await fetch(BASE+path,{method:body===undefined?'GET':'POST',headers:{...workspaceHeaders(),'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body),signal:ctrl.signal});
-    const data=await res.json();if(!res.ok)throw new Error(data.error||'Could not complete this step.');return data;
+    const data=await res.json();if(!res.ok){const error=new Error(data.error||'Could not complete this step.');error.status=res.status;error.serverMessage=data.error||'';
+      // This endpoint names a missing branch in user-facing language. Keep the
+      // recovery contract narrow: never retry other failures or ambiguous inference.
+      if(res.status===404&&/^\/branches\/[^/]+\/evolution$/.test(path)&&error.serverMessage==='City population is no longer available. Reload the city.')error.serverMessage='branch not found';
+      throw error;}return data;
   }catch(e){if(e.name==='AbortError')throw new Error('This step timed out. Retry to recover the recorded result.');throw e;}
   finally{clearTimeout(timer);}
 }
 
-export function initEvolution({map,getBranch,getCity,isReady}){
+export function initEvolution({map,getBranch,getCity,isReady,onFrame=()=>{},withCurrentSimulation=run=>run()}){
   const root=document.createElement('section');root.id='evolution';root.hidden=true;root.setAttribute('aria-label','City behavior simulation');
-  root.innerHTML=`<div class="evo-heading"><div><span class="evo-eyebrow">CITY SIMULATION</span><h2>What changes across the city?</h2></div><button data-close aria-label="Close city simulation">×</button></div>
+  root.innerHTML=`<div class="evo-heading"><div><span class="evo-eyebrow">CITY SIMULATION</span><h2>Response over 14 days</h2></div><button data-close aria-label="Close city simulation">×</button></div>
     <div data-setup class="evo-setup"><label for="evo-scenario">What happens?</label><textarea id="evo-scenario" maxlength="2000" rows="3" placeholder="Chipotle raises menu prices by 20% in San Francisco."></textarea><div class="evo-examples"><button data-example="Chipotle raises menu prices by 20% in this city.">Restaurant prices +20%</button><button data-example="A serious public safety incident occurs downtown. How do residents change their outings?">Safety incident</button><button data-example="Public transit fares increase by 50% across this city.">Transit fares +50%</button></div><p class="evo-empty">Watch how everyday choices change over 14 simulated days.</p></div>
-    <div data-results hidden class="evo-results"><p class="evo-scenario-text" data-scenario></p>
-      <div class="evo-overview"><div><span class="evo-eyebrow">CHANGED THEIR ROUTINE</span><div class="evo-headline"><strong data-count>0</strong><span data-share>0%</span></div><p data-denominator></p></div><span class="evo-delta" data-delta></span></div>
+    <div data-results hidden class="evo-results"><p class="evo-scenario-text" data-scenario></p><details class="evo-method"><summary>Scenario details</summary><p data-scenario-details></p></details>
+      <div class="evo-overview"><div><span class="evo-eyebrow">MODELED RESPONSE</span><div class="evo-headline"><strong data-count>0</strong><span data-share>0%</span></div><p data-denominator></p></div><span class="evo-delta" data-delta></span></div>
       <div class="pc evo-chart"><div class="pc-head"><h3 class="pc-title">What people do</h3><span class="pc-caption" data-chart-caption></span></div><div class="pc-rows" data-bars></div></div>
-      <div class="pc evo-trend"><div class="pc-head"><h3 class="pc-title" data-trend-title>Changed routines over time</h3><button class="pc-dim" data-all hidden>Show all changes</button></div><div data-trend></div></div>
+      <div class="pc evo-trend"><div class="pc-head"><h3 class="pc-title" data-trend-title>Modeled changes over time</h3><button class="pc-dim" data-all hidden>Show all changes</button></div><div data-trend></div></div>
       <p class="pc-note">Census-weighted model estimates, not observed behavior. Counts are scaled to the simulated population.</p>
       <div class="evo-updates" data-updates aria-live="polite"></div>
       <details class="evo-method"><summary>How this is estimated</summary><p data-method></p></details>
@@ -52,7 +56,7 @@ export function initEvolution({map,getBranch,getCity,isReady}){
     <div class="evo-track-note">Drag back to compare earlier days. Replay uses the same recorded results.</div>`;
   document.body.append(transport);
   const q=s=>root.querySelector(s),t=s=>transport.querySelector(s);
-  let run=null,index=0,playing=false,busy=false,opened=false,timer=null,context='',generation=0,initializing=false,viewRevision=0,metric='changed',researchPanel=null,messageBusy=false,pinnedNews=null;
+  let run=null,index=0,playing=false,busy=false,opened=false,timer=null,context='',generation=0,initializing=false,viewRevision=0,metric='changed',researchPanel=null,messageBusy=false,pinnedNews=null,startController=null,startCity=null,inlineHost=null,scenarioKey=null,scenarioCity=null;
   const storageKey=()=>`simtra.behavior.v2:${workspaceHeaders()['X-Simtra-Workspace']||'public'}:${getCity()}`;
   const contextKey=()=>`${getCity()}:${getBranch()}`;
   function save(){if(run)try{sessionStorage.setItem(storageKey(),JSON.stringify(run));}catch{}}
@@ -64,10 +68,10 @@ export function initEvolution({map,getBranch,getCity,isReady}){
     t('[data-step-forward]').disabled=busy||initializing||index>=limit;
     t('[data-new]').disabled=busy||initializing||messageBusy;
     t('[data-reset]').disabled=!run;t('[data-latest]').disabled=!run||index===max;
-    t('[data-scrub]').disabled=!run||max===0;t('[data-scrub]').max=max;t('[data-scrub]').value=index;
+    t('[data-scrub]').disabled=!run||max===0;t('[data-scrub]').max=limit;t('[data-scrub]').value=index;
     t('[data-clock]').textContent=day(index);t('[data-step]').textContent=`${index} / ${limit} days`;
     t('[data-mode]').textContent=index<max?'REPLAY':busy?'UPDATING':playing?'RUNNING':run?'PAUSED':'READY';
-    t('[data-latency]').textContent=busy?'Updating city choices…':'';
+    t('[data-latency]').textContent=busy?'Calculating next day…':run&&max<limit?`Calculated through day ${max}`:'';
     q('#evo-scenario').disabled=initializing||busy;
     q('[data-composer]').hidden=!run;
     q('[data-composer] button').disabled=busy||initializing||messageBusy;
@@ -77,7 +81,8 @@ export function initEvolution({map,getBranch,getCity,isReady}){
     renderControls();if(!opened)return;
     q('[data-setup]').hidden=!!run;q('[data-results]').hidden=!run;if(!run)return;
     const f=frameAt(run,index),prev=frameAt(run,Math.max(0,index-1));
-    q('[data-scenario]').textContent=run.scenario;
+    q('[data-scenario]').textContent=run.scenario.split('Selected experiment scenario:')[0].trim();
+    q('[data-scenario-details]').textContent=run.scenario;
     q('[data-count]').textContent=number(f.changed_count);q('[data-share]').textContent=percent(f.changed_share);
     q('[data-denominator]').textContent=`of ${number(run.population)} simulated residents`;
     const delta=(f.changed_share-prev.changed_share)*100;
@@ -88,22 +93,28 @@ export function initEvolution({map,getBranch,getCity,isReady}){
       return `<button class="evo-bar pc-row" data-outcome="${esc(o.id)}" aria-pressed="${metric===o.id}" aria-label="${esc(o.label)}: ${number(total?.count)} people, ${percent(share)}"><span class="evo-bar-head"><span>${esc(o.label)}</span><span><b>${number(total?.count)}</b><small>${percent(share)}</small></span></span><span class="evo-bar-track"><span style="width:${share*100}%;background:${COLORS[o.id]||'#007aff'}"></span></span></button>`;
     }).join('');
     const chosen=run.outcomes.find(o=>o.id===metric);
-    q('[data-trend-title]').textContent=chosen?`${chosen.label} over time`:'Changed routines over time';
+    q('[data-trend-title]').textContent=chosen?`${chosen.label} over time`:'Modeled changes over time';
     q('[data-all]').hidden=!chosen;q('[data-trend]').innerHTML=trendSvg(run.frames,index,metric);
     q('[data-method]').textContent=`${run.groups.length} demographic cohorts represent all ${number(run.population)} simulated residents. Choice probabilities are weighted by Census person weights. Dots are a stable illustration sampled from cohort probabilities; weighted totals can differ from raw dot counts. The reference starts with no changes caused by the scenario. Jev reevaluates choices each day using prior choices, time to adapt, and the previous citywide behavior mix. Only updates you add are assumed, from the next uncomputed day. Questions estimate agreement at the viewed day without changing recorded behavior. These estimates have not been calibrated to real-world outcomes.`;
     q('[data-updates]').innerHTML=[...(run.events||[]).map(e=>`<article><small>Hypothetical update · Day ${e.effective_day}${e.effective_day>index?' · scheduled':''}</small><p>${esc(e.text)}</p></article>`),...(run.questions||[]).filter(a=>a.tick<=index).map(a=>`<article><small>Day ${a.tick} · modeled agreement</small><p>${esc(a.question)}</p><b>${percent(a.shares.yes)} yes · ${percent(a.shares.no)} no · ${percent(a.shares.unsure)} unsure</b></article>`)].join('');
-    map.setEvolution({frame:f,groups:run.groups,colors:COLORS,activeAction:metric==='changed'?null:metric});
+    map.setEvolution({frame:f,groups:run.groups,outcomes:run.outcomes,colors:COLORS,activeAction:metric==='changed'?null:metric});onFrame(f);
   }
   async function ensureRun(){
     if(run)return;
     const scenario=q('#evo-scenario').value.trim();if(!scenario)throw new Error('Enter a scenario or choose an example.');
     if(!isReady())throw new Error('Wait for the city population to finish loading.');
-    initializing=true;renderControls();const gen=generation,branch=getBranch();
+    initializing=true;renderControls();const gen=generation,city=getCity();
+    const controller=new AbortController();startController=controller;startCity=city;
     try{
-      const data=await request(`/branches/${encodeURIComponent(branch)}/evolution`,{scenario,...(pinnedNews?{pinned_news:pinnedNews.newsContext,as_of_date:pinnedNews.asOf}:{}),...(researchPanel?{research_panel:{id:researchPanel.id,version:researchPanel.version,content_hash:researchPanel.content_hash}}:{})});
-      if(gen!==generation||branch!==getBranch()||!opened)return;
+      const payload={scenario,...(pinnedNews?{pinned_news:pinnedNews.newsContext,as_of_date:pinnedNews.asOf}:{}),...(researchPanel?{research_panel:{id:researchPanel.id,version:researchPanel.version,content_hash:researchPanel.content_hash}}:{})};
+      const data=await withCurrentSimulation(()=>{
+        if(gen!==generation||city!==getCity()||!opened||controller.signal.aborted)throw new DOMException('Request cancelled','AbortError');
+        return request(`/branches/${encodeURIComponent(getBranch())}/evolution`,payload);
+      },controller.signal);
+      if(gen!==generation||city!==getCity()||!opened)return;
+      context=contextKey();
       run=data;index=0;metric='changed';save();render();
-    }finally{initializing=false;renderControls();}
+    }finally{startController=null;startCity=null;initializing=false;renderControls();}
   }
   async function advance(){
     if(busy||initializing||messageBusy)return;
@@ -119,13 +130,13 @@ export function initEvolution({map,getBranch,getCity,isReady}){
     }catch(e){if(gen===generation){pause();q('[data-error]').textContent=e.message;}}
     finally{busy=false;renderControls();if(playing&&opened){if(index>=(run?.max_ticks||14))pause();else timer=setTimeout(advance,Number(t('[data-speed]').value));}}
   }
-  function close(){pause();opened=false;root.hidden=true;transport.hidden=true;document.body.classList.remove('evolution-open');map.setEvolution(null);document.getElementById?.('ask-input')?.focus();}
+  function close(){startController?.abort();pause();opened=false;root.hidden=true;transport.hidden=true;document.body.classList.remove('evolution-open');map.setEvolution(null);document.getElementById?.('ask-input')?.focus();}
   function open(){
     if(!isReady())return;
     if(context!==contextKey()){generation++;run=null;researchPanel=null;pinnedNews=null;index=0;context=contextKey();}
-    opened=true;root.hidden=false;transport.hidden=false;document.body.classList.add('evolution-open');q('[data-error]').textContent='';
+    opened=true;root.hidden=false;transport.hidden=false;document.body.classList.toggle('evolution-open',!inlineHost);q('[data-error]').textContent='';
     if(!run)try{const saved=JSON.parse(sessionStorage.getItem(storageKey())||'null');if(saved?.branch===getBranch()&&saved.outcomes&&saved.frames?.length){run=saved;}}catch{}
-    render();if(run)t('[data-play]').focus();else q('#evo-scenario').focus();
+    render();if(!inlineHost){if(run)t('[data-play]').focus();else q('#evo-scenario').focus();}
   }
   q('#evo-message').addEventListener('focus',pause);
   q('[data-composer]').addEventListener('submit',async e=>{
@@ -154,18 +165,27 @@ export function initEvolution({map,getBranch,getCity,isReady}){
   t('[data-new]').addEventListener('click',()=>{pause();generation++;researchPanel=null;pinnedNews=null;if(run)q('#evo-scenario').value=run.scenario;run=null;index=0;metric='changed';try{sessionStorage.removeItem(storageKey());}catch{}map.setEvolution(null);q('[data-error]').textContent='';render();q('#evo-scenario').focus();});
   t('[data-reset]').addEventListener('click',()=>{pause();index=0;render();});
   t('[data-latest]').addEventListener('click',()=>{pause();index=(run?.frames.length||1)-1;render();});
-  t('[data-scrub]').addEventListener('input',e=>{const nextIndex=Number(e.target.value);pause();index=nextIndex;render();});
+  t('[data-scrub]').addEventListener('input',e=>{const requested=Number(e.target.value);pause();index=Math.min(requested,(run?.frames.length||1)-1);render();if(requested>index){playing=true;renderControls();void advance();}});
   root.addEventListener('click',e=>{const ex=e.target.closest('[data-example]');if(ex)q('#evo-scenario').value=ex.dataset.example;const bar=e.target.closest('[data-outcome]');if(bar){metric=metric===bar.dataset.outcome?'changed':bar.dataset.outcome;render();}});
   q('[data-all]').addEventListener('click',()=>{metric='changed';render();});
   q('#evo-scenario').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();playing=true;void advance();}});
   for(const el of [root,transport])for(const event of ['pointerdown','wheel','keydown'])el.addEventListener(event,e=>e.stopPropagation());
   document.addEventListener('keydown',e=>{if(opened&&e.key==='Escape'){e.preventDefault();close();}},true);
   document.addEventListener('visibilitychange',()=>{if(document.hidden)pause();});
-  setInterval(()=>{if(opened&&context!==contextKey()){close();generation++;run=null;index=0;}},500);
+  setInterval(()=>{if(opened&&context!==contextKey()&&!(initializing&&startCity===getCity())){close();generation++;run=null;index=0;}},500);
   renderControls();
-  return { open, start(scenario,panel=null,news=null) {
+  function mountInto(host){
+    inlineHost=host||null;
+    root.classList.toggle('evo-inline',!!host);transport.classList.toggle('evo-inline',!!host);
+    if(host){host.replaceChildren(transport,root);}else{document.body.append(root,transport);}
+  }
+  return { open, suspend(){if(inlineHost){pause();opened=false;root.hidden=true;transport.hidden=true;map.setEvolution(null);}}, getLog:()=>run?structuredClone({scenario:run.scenario,events:run.events||[],questions:run.questions||[]}):null, start(scenario,panel=null,news=null,options={}) {
+    if(options.key&&scenarioKey===options.key&&scenarioCity===getCity()&&(run||initializing||busy)){
+      mountInto(options.host);opened=true;root.hidden=false;transport.hidden=false;
+      document.body.classList.toggle('evolution-open',!inlineHost);render();return true;
+    }
     if (!isReady() || busy || initializing || messageBusy) throw new Error('Wait for the current city update to finish.');
-    open(); researchPanel=panel; pinnedNews=news; pause(); generation++; run=null; index=0; metric='changed';
+    mountInto(options.host);scenarioKey=options.key||null;scenarioCity=getCity();open(); researchPanel=panel; pinnedNews=news; pause(); generation++; run=null; index=0; metric='changed';
     q('#evo-scenario').value=scenario;
     playing=true; render(); void advance();return true;
   }};

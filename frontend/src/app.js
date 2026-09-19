@@ -543,9 +543,9 @@ function openPastResult(item) {
 function setBoot(p) { els.bootFill.style.width = `${Math.round(Math.max(0, Math.min(1, p)) * 100)}%`; }
 
 async function boot() {
-  map.onZoomChange = (zoomedIn) => { zoomedIn ? show(els.returnBtn) : hide(els.returnBtn); };
+  map.onZoomChange = (zoomedIn) => { positionContext(); zoomedIn ? show(els.returnBtn) : hide(els.returnBtn); };
   map.start();
-  evolution = initEvolution({map, getBranch:()=>state.mainBranch, getCity:citySlug, isReady:()=>!!state.mainBranch && !state.switching && !api.isDemo && !isBusy() && state.phase!=="booting"});
+  evolution = initEvolution({map, onFrame:()=>research?.refreshInspection?.(), withCurrentSimulation, getBranch:()=>state.mainBranch, getCity:citySlug, isReady:()=>!!state.mainBranch && !state.switching && !api.isDemo && !isBusy() && state.phase!=="booting"});
   initFeedPanel({
     onScenario: text => evolution.start(text),
     getCity: citySlug,
@@ -722,11 +722,19 @@ function setIdleStatus() {
   show(els.status);
 }
 
-// The audience can wrap to several lines. Keep news below it at every viewport.
+// The title/sample count can wrap. Anchor map controls to its measured bounds.
 function positionContext() {
-  $("ui").style.setProperty("--context-bottom", `${Math.ceil(els.status.getBoundingClientRect().bottom) + 10}px`);
+  const ui = $("ui");
+  const title = els.titleSelect.getBoundingClientRect();
+  const origin = ui.getBoundingClientRect();
+  document.body.style.setProperty("--experiment-mobile-top", `${Math.ceil(title.bottom)+12}px`);
+  ui.style.setProperty("--context-bottom", `${Math.ceil(title.bottom - origin.top) + 10}px`);
+  els.returnBtn.style.top = `${Math.ceil(title.bottom - origin.top) + 10}px`;
+  els.returnBtn.style.left = `${Math.round(title.left - origin.left)}px`;
+  els.returnBtn.style.right = "auto";
 }
-new ResizeObserver(positionContext).observe(els.status);
+new ResizeObserver(positionContext).observe(els.titleSelect);
+new MutationObserver(positionContext).observe(document.body, { attributes: true, attributeFilter: ["class"] });
 
 function fmtDate(iso) {
   const d = new Date(iso);
@@ -2395,10 +2403,25 @@ async function showAbDemo() {
 
 research = createResearchWorkspace({
   map,
-  startTimeline: async (run, selected) => {
+  getSimulationLog: run => {const log=evolution?.getLog();return log?.scenario.startsWith(run.experiment.decision)?log:null;},
+  showScenarioLocation: locations => {
+    const location=Array.isArray(locations)?locations.join(" + "):locations;
+    let badge=document.getElementById("scenario-map-location");
+    if(!badge){badge=document.createElement("div");badge.id="scenario-map-location";els.titleSelect.append(badge);}
+    badge.hidden=!location;badge.textContent=location ? `Scenario · ${location}` : '';
+    badge.dataset.location=location || '';
+    if(location){
+      const residents=map.agents.filter(a=>Array.isArray(locations)?locations.includes(a.hood):a.hood===location);
+      const keys=[...new Set(residents.map(a=>a.segments?.geography).filter(Boolean))];
+      map.setSegmentSelection(keys.length?{operator:'or',clauses:keys.map(key=>({dimension:'geography',key}))}:null);
+    } else map.clearSegmentSelection();
+    positionContext();
+  },
+  suspendTimeline: () => evolution?.suspend(),
+  startTimeline: async (run, selected, host) => {
     if(api.isDemo) throw new Error("Timeline simulation requires the live backend. Offline results are illustrative.");
     const offer=run.experiment.scenarios[selected];
-    evolution.start(`${run.experiment.decision}\nSelected experiment scenario: ${offer.description}`, run.researchPanel, { newsContext:run.newsContext, asOf:run.asOf });
+    evolution.start(`${run.experiment.decision}\nSelected experiment scenario: ${offer.description}`, run.researchPanel, { newsContext:run.newsContext, asOf:run.asOf }, {host,key:`${run.id}:${selected}`});
   },
   compareScenarios: (_branch, payload, signal, onProgress) => withCurrentSimulation(
     () => api.compareScenarios(state.mainBranch, payload, signal, onProgress), signal),
