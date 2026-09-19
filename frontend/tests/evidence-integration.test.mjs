@@ -15,13 +15,13 @@ test('every PollResult dimension can select the same canonical resident on the m
 });
 
 import { SFMap } from '../src/map.js';
-test('reduced motion stops resident time, snaps camera and completes reveal', () => {
+test('residents keep moving with reduced motion while camera and reveal effects stay simplified', () => {
   const map = Object.create(SFMap.prototype);
   let dt, finished=0;
   Object.assign(map,{reducedMotion:true,ctx:{setTransform(){},fillRect(){}},dpr:1,cssW:100,cssH:100,baseReady:false,lastT:0,cam:{x:0,y:0,zoom:1},camTarget:{x:10,y:20,zoom:2},mode:'reveal',agents:[],revealCount:0,revealT0:100,revealDur:10000,
     _drawSprites(now,elapsed){dt=elapsed;},_updateBubbles(){},_drawBubbles(){},onRevealComplete(){finished++;}});
   map._draw(200);
-  assert.equal(dt,0,'resident animation time must freeze');
+  assert.equal(dt,0.05,'resident animation must advance with a capped frame interval');
   assert.deepEqual(map.cam,map.camTarget,'camera must not animate');
   assert.equal(finished,1,'reveal must finish without waiting for animation');
 });

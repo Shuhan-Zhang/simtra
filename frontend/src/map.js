@@ -703,7 +703,8 @@ export class SFMap {
 
   _draw(now) {
     const ctx = this.ctx;
-    const dt = this.reducedMotion ? 0 : Math.min(0.05, (now - this.lastT) / 1000);
+    // City residents keep walking; reduced motion still simplifies camera and reveal effects.
+    const dt = Math.min(0.05, (now - this.lastT) / 1000);
     this.lastT = now;
 
     // animate camera toward target (snappy critically-damped-ish lerp)
