@@ -706,21 +706,9 @@ function setStatusLoading(text) {
 
 function setIdleStatus() {
   els.status.classList.remove("is-loading");
-  const n = state.residents.toLocaleString();
-  const display = (state.city?.display || "san francisco").toLowerCase();
-  const kd = state.city?.knowledge_date;
-  const audience = describeAudience(currentAudience());
-  els.status.classList.toggle("status--audience", !!audience.filterCount);
-  if (audience.filterCount) {
-    els.status.innerHTML = `<span class="status-audience-label">Current audience · ${audience.filterCount} filters</span>
-      <strong class="status-persona">${escapeHtml(audience.title)}</strong>
-      ${audience.qualification ? `<span class="status-persona-detail">${escapeHtml(audience.qualification)}</span>` : ""}
-      <span class="status-persona-detail">${escapeHtml(audience.location)}</span>
-      <span class="status-sample">${n} simulated residents in this audience</span>`;
-  } else {
-    const clock = kd ? `<span class="status-clock">residents know the news up to ${escapeHtml(fmtDate(kd))}</span>` : "";
-    els.status.innerHTML = `${escapeHtml(display)} · ${n} simulated residents${clock}`;
-  }
+  const audience=describeAudience(currentAudience());
+  els.status.textContent=`${state.residents.toLocaleString()} simulated residents`;
+  els.status.title=audience.filterCount ? `${audience.title} · filtered audience` : "City-wide synthetic sample";
   show(els.status);
 }
 

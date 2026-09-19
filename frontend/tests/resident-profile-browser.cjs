@@ -7,6 +7,9 @@ const assert=require('node:assert/strict');
  await page.goto((process.env.SIMTRA_TEST_BASE||'http://127.0.0.1:5198')+'/?demo=1');
  await page.evaluate(async()=>{window.profileTestApp=await import(document.querySelector('script[type=module]').src);});
  await page.waitForFunction(()=>profileTestApp.state.mainBranch&&profileTestApp.state.rawResidents.length>0);
+ assert.equal(await page.locator('#title-select #status').count(),1);
+ assert.match(await page.locator('#status').innerText(),/10,000 simulated residents/);
+ assert.equal(await page.locator('.status').count(),0);
  const hit=await page.evaluate(()=>{
   const {map,state}=profileTestApp;
   const a=map.agents[Math.floor(map.agents.length/2)];

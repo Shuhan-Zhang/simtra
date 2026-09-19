@@ -501,7 +501,8 @@ function placeBelowStatus() {
   if (!status || !state.root) return;
   const r = status.getBoundingClientRect();
   const hidden = status.classList.contains("hidden") || r.height === 0;
-  const top = hidden ? 92 : Math.round(r.bottom + 12);
+  const title = document.getElementById("title-select").getBoundingClientRect();
+  const top = window.innerWidth > 700 ? Math.round(title.top) : hidden ? 92 : Math.round(title.bottom + 12);
   state.root.style.top = `${top}px`;
 }
 function watchStatus() {
