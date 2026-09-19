@@ -9,6 +9,7 @@
 //        the "whole city" button returns to the overview.
 // ─────────────────────────────────────────────────────────────────────────
 
+import { initEvolution } from "./evolution.js?v=3";
 import { SIM, PREDICT, TIMING, MAP, BASE, BACKEND_SETUP_MESSAGE } from "./config.js";
 import { rationaleLabel, estimateLabel } from "./model-display.js";
 import { SFMap } from "./map.js";
@@ -530,7 +531,9 @@ function setBoot(p) { els.bootFill.style.width = `${Math.round(Math.max(0, Math.
 async function boot() {
   map.onZoomChange = (zoomedIn) => { zoomedIn ? show(els.returnBtn) : hide(els.returnBtn); };
   map.start();
+  const evolution = initEvolution({map, getBranch:()=>state.mainBranch, getCity:citySlug, isReady:()=>!!state.mainBranch && !state.switching && !api.isDemo && !isBusy() && state.phase!=="booting"});
   initFeedPanel({
+    onScenario: text => evolution.start(text),
     getCity: citySlug,
     getBranch: () => state.mainBranch,
     getCityDisplay: () => state.city?.display || "San Francisco",

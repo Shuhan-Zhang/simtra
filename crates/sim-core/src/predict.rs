@@ -164,9 +164,9 @@ pub fn turnout_propensity(a: &Agent, income_q: usize) -> f64 {
     p.clamp(0.20, 0.98)
 }
 
-struct Cluster {
-    rep_idx: usize,
-    member_idx: Vec<usize>,
+pub(crate) struct Cluster {
+    pub(crate) rep_idx: usize,
+    pub(crate) member_idx: Vec<usize>,
 }
 
 /// Cluster agents into archetypes, coarsening the key until under `max_clusters`.
@@ -179,7 +179,7 @@ pub fn distinct_records(pop: &Population) -> usize {
     seen.len()
 }
 
-fn cluster_agents(pop: &Population, max_clusters: usize) -> Vec<Cluster> {
+pub(crate) fn cluster_agents(pop: &Population, max_clusters: usize) -> Vec<Cluster> {
     let cutoffs = pop.income_cutoffs;
     // A narrowly filtered audience can rest on a few dozen Census records cloned into
     // thousands of residents. Bucketing those clones into demographic archetypes throws
@@ -1107,6 +1107,17 @@ impl Engine {
     /// Residents react to a news event on a local social feed: one short first-person
     /// post plus a sentiment each, in a single batched call. Best-effort; a failed
     /// call returns no reactions. Returns (agent_id, text, sentiment).
+    pub async fn try_react_to_event(&self, pop: &Population, event_text: &str, as_of_date: &str, ids: &[u32]) -> Result<Vec<(u32,String,String)>> {
+        if default_live_model().is_jev() {
+            let people:Vec<_>=ids.iter().filter_map(|&id|pop.agents.get(id as usize).map(|a|(id,a.persona.as_str()))).collect();
+            return tokio::time::timeout(std::time::Duration::from_secs(12),
+                crate::jev::voices(&self.client,default_live_model(),&people,&pop.profile.prompt_name,Some((event_text,as_of_date))))
+                .await.map_err(|_| anyhow!("Reaction update timed out"))?;
+        }
+        let result=self.react_to_event(pop,event_text,as_of_date,ids).await;
+        if result.is_empty(){return Err(anyhow!("Reaction update failed"));} Ok(result)
+    }
+
     pub async fn react_to_event(
         &self,
         pop: &Population,

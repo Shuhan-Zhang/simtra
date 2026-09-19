@@ -61,6 +61,7 @@ pub struct AppState {
     pub store: Arc<Store>,
     pub sims: Arc<Mutex<HashMap<String, Arc<SimContext>>>>,
     pub model_ok: Arc<Mutex<Option<bool>>>,
+    pub evolution: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<crate::evolution::Run>>>>>,
 }
 
 pub struct SimContext {
@@ -90,6 +91,9 @@ pub fn router(state: AppState) -> Router {
         .allow_headers(Any);
     Router::new()
         .route("/health", get(health))
+        .route("/branches/:bid/evolution", post(start_evolution))
+        .route("/evolution/:id", get(get_evolution))
+        .route("/evolution/:id/step", post(step_evolution))
         .route("/workspace", get(workspace_info))
         .route("/workspace/seed", post(workspace_seed))
         .route("/", get(root))
@@ -2130,17 +2134,22 @@ async fn react_to_event(
     let n = req.n.unwrap_or(12).clamp(1, 24);
     let pop = &ctx.population;
     let ids = crate::predict::diverse_sample(pop, n);
-    let raw = st
-        .engine
-        .react_to_event(pop, &event.text, &event.as_of_date, &ids)
-        .await;
-    if raw.is_empty() {
-        return (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({"error":"reaction model request failed"})),
-        )
-            .into_response();
+    if !st.engine.client.has_typesafe_key() {
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({
+            "error": "News is saved. Configure TYPESAFE_API_KEY to update resident reactions.",
+            "code": "typesafe_not_configured"
+        }))).into_response();
     }
+    let raw = match st.engine.try_react_to_event(pop, &event.text, &event.as_of_date, &ids).await {
+        Ok(reactions) => reactions,
+        Err(e) => {
+            tracing::warn!("Jev event reactions failed: {e:#}");
+            return (StatusCode::BAD_GATEWAY, Json(json!({
+                "error": "News is saved, but resident updates failed. Retry the update.",
+                "code": "reaction_update_failed"
+            }))).into_response();
+        }
+    };
     let at = crate::memory::now_iso();
     let cutoffs = pop.income_cutoffs;
     let reactions: Vec<crate::memory::Reaction> = raw
@@ -2160,14 +2169,15 @@ async fn react_to_event(
             })
         })
         .collect();
-    let pop_key = crate::memory::population_key_in(&ws, &pop);
-    if let Err(e) = mem.ensure_population(&ws, &pop).await {
-        tracing::warn!("persona memory: population registration failed: {e:#}");
-    }
-    if let Err(e) = mem.record_reactions(&pop_key, &event_id, &reactions).await {
+    if let Err(e) = mem.record_reactions(&ws, pop, &event_id, &reactions).await {
         tracing::warn!("persona memory: reactions write failed: {e:#}");
+        return (StatusCode::BAD_GATEWAY, Json(json!({
+            "error": "News is saved, but resident updates could not be saved. Retry the update.",
+            "code": "reaction_save_failed"
+        }))).into_response();
     }
-    Json(json!({"event_id": event_id, "reactions": reactions})).into_response()
+    Json(json!({"event_id": event_id, "reactions": reactions, "model": Model::default_live().id()})).into_response()
+
 }
 
 /// What one resident remembers: city events, stimuli shown, tests answered.
@@ -2535,6 +2545,7 @@ pub fn build_state(
     }
 
     Ok(AppState {
+        evolution: Arc::new(Mutex::new(HashMap::new())),
         client,
         engine,
         hydra,
@@ -2734,3 +2745,52 @@ mod tests {
 use crate::state as _state;
 #[allow(dead_code)]
 fn _touch(_: AgentState, _: SimState) {}
+
+
+#[derive(Deserialize)]
+struct EvolutionStart { scenario: String }
+async fn start_evolution(State(st): State<AppState>, headers: HeaderMap, Path(bid): Path<String>, Json(req): Json<EvolutionStart>) -> axum::response::Response {
+    let scenario=req.scenario.trim().to_string();
+    if scenario.is_empty() || scenario.chars().count()>2000 {
+        return (StatusCode::BAD_REQUEST,Json(json!({"error":"Describe a scenario in 1–2,000 characters."}))).into_response();
+    }
+    let Some((ctx, _)) = find_branch(&st, &bid) else {
+        return (StatusCode::NOT_FOUND, Json(json!({"error":"City population is no longer available. Reload the city."}))).into_response();
+    };
+    if !st.client.has_typesafe_key() {
+        return (StatusCode::SERVICE_UNAVAILABLE,Json(json!({"error":"Configure TYPESAFE_API_KEY to run a city scenario."}))).into_response();
+    }
+    static SERIAL: std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(0);
+    let id=format!("evo-{}-{}",chrono::Utc::now().timestamp_millis(),SERIAL.fetch_add(1,std::sync::atomic::Ordering::Relaxed));
+    let run=match crate::evolution::Run::new(id.clone(),workspace_of(&headers),bid,&ctx.population,scenario,&st.client).await {
+        Ok(run)=>run,
+        Err(e)=>{tracing::warn!("scenario setup failed: {e:#}");return (StatusCode::BAD_GATEWAY,Json(json!({"error":"Could not prepare this scenario. Please retry."}))).into_response();}
+    };
+    let view=run.view();
+    let mut runs=st.evolution.lock().unwrap();
+    runs.retain(|_,r|r.try_lock().map(|r|r.created.elapsed()<Duration::from_secs(3600)).unwrap_or(true));
+    if runs.len()>=32 {return (StatusCode::TOO_MANY_REQUESTS,Json(json!({"error":"Simulation capacity reached. Try again later."}))).into_response();}
+    runs.insert(id,Arc::new(tokio::sync::Mutex::new(run)));
+    (StatusCode::CREATED,Json(view)).into_response()
+}
+async fn get_evolution(State(st): State<AppState>, headers: HeaderMap, Path(id): Path<String>) -> axum::response::Response {
+    let run=st.evolution.lock().unwrap().get(&id).cloned();
+    if let Some(run)=run {
+        let run=run.lock().await;
+        if run.workspace==workspace_of(&headers) {return Json(run.view()).into_response();}
+    }
+    (StatusCode::NOT_FOUND,Json(json!({"error":"Simulation expired. Start a new run."}))).into_response()
+}
+#[derive(Deserialize)]
+struct EvolutionStep { expected_tick: usize }
+async fn step_evolution(State(st): State<AppState>, headers: HeaderMap, Path(id): Path<String>, Json(req): Json<EvolutionStep>) -> axum::response::Response {
+    let Some(run)=st.evolution.lock().unwrap().get(&id).cloned() else {
+        return (StatusCode::NOT_FOUND,Json(json!({"error":"Simulation expired. Start a new run."}))).into_response();
+    };
+    let mut run=match run.try_lock(){Ok(r)=>r,Err(_)=>return (StatusCode::CONFLICT,Json(json!({"error":"A step is already running. Please retry."}))).into_response()};
+    if run.workspace!=workspace_of(&headers){return (StatusCode::NOT_FOUND,Json(json!({"error":"Simulation not found"}))).into_response();}
+    match run.step(&st.client,req.expected_tick).await {
+        Ok(frame)=>Json(json!({"frame":frame})).into_response(),
+        Err(e)=>{tracing::warn!("evolution step failed: {e:#}");(StatusCode::BAD_GATEWAY,Json(json!({"error":"This step could not complete. Your timeline is unchanged; retry Step or Play."}))).into_response()}
+    }
+}

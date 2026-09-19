@@ -230,6 +230,24 @@ impl ModelClient {
         })
     }
 
+    pub fn has_typesafe_key(&self) -> bool { !self.jev_key.trim().is_empty() }
+
+    /// Bounded convenience adapter for batched behavior and event choices.
+    /// Uses the repository's native typed Jev transport and validation.
+    pub async fn jev_choices(&self, state: &str, questions: Value) -> Result<Value> {
+        let questions = serde_json::from_value(questions)?;
+        let result = tokio::time::timeout(Duration::from_secs(12),
+            self.evaluate(Model::default_live(), Value::String(state.into()), questions))
+            .await.map_err(|_| anyhow!("Jev timed out after 12 seconds"))??;
+        Ok(serde_json::to_value(result)?)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn evolution_test_client(url: String) -> Self {
+        let mut client=Self::from_env(None).unwrap();
+        client.jev_url=url;client.jev_key="local-test".into();client.offline=false;client
+    }
+
     pub fn has_key(&self) -> bool {
         !self.jev_key.is_empty()
     }
