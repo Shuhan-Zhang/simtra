@@ -295,3 +295,7 @@ body.reviewing-experiment .ex-resident-panel { bottom:20px; }
 .ex-factor-impact:hover { background:#edf5ff; }
 
 @media(max-width:900px) { .experiment-card, body.offline-demo .experiment-card { top:var(--experiment-mobile-top,190px); } }
+
+.ex-series-legend { display:flex; flex-wrap:wrap; gap:6px 14px; margin:10px 0; font-size:13px; line-height:1.4; }
+.ex-series-legend button { border:0; background:transparent; padding:4px 0; font:inherit; color:inherit; cursor:pointer; display:flex; align-items:center; gap:6px; }
+.ex-series-legend i { width:18px; height:3px; flex:none; border-radius:2px; }

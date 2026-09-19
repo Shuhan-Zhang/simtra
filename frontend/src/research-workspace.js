@@ -50,7 +50,7 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
   const store = createRunStore(`${api.isDemo ? "simtra-research-demo-v1" : "simtra-research-v1"}:${workspaceHeaders()["X-Simtra-Workspace"] || "public"}`);
   let runs = [], plan = null, active = null, parentId = null, view = "proposal", busy = false, visible = false;
   let error = "", saveNote = "", selected = 0, person = null, chart = null, demographicDimension = null, abort = null, generation = 0, personGeneration = 0, planCity = null, areasOpen = false, allRanks = false;
-  let mapColorBy = "response";
+  let mapColorBy = "response", curveFilters=null;
   let researchPanel = null, researchProgress = "Checking saved research…";
   let executionLog = [], planningLog = [], control = null;
   const controlWriter = createControlWriter(api.isDemo);
@@ -221,6 +221,12 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
   function metric(label,value) { return `<div><strong>${value}</strong><span>${label}</span></div>`; }
   function curveHtml(run, expanded = false) {
   const exp=run.experiment, series=priceSeries(run,selected), ref=exp.scenarios[selected];
+  if(!curveFilters)curveFilters={location:new Set([ref.location]),format:new Set([ref.format])};
+  const colors=['#087fff','#a44ac2','#168b6b','#e28520','#db4667','#6670bd'];
+  const combinations=exp.scenarios.map((scenario,index)=>({scenario,index})).filter(({scenario})=>curveFilters.location.has(scenario.location)&&curveFilters.format.has(scenario.format));
+  const keys=[...new Set(combinations.map(({scenario})=>JSON.stringify([scenario.location,scenario.format])))];
+  const curves=keys.map((key,i)=>{const first=combinations.find(({scenario})=>JSON.stringify([scenario.location,scenario.format])===key);return {index:first.index,color:colors[i%colors.length],label:[first.scenario.location,first.scenario.format].filter(Boolean).join(' · '),rows:priceSeries(run,first.index)};});
+  const multiple=curves.length>1;
   const values=series.map(r=>r.scenario.change??r.scenario.price), min=Math.min(...values),max=Math.max(...values);
   const mode=exp.priceMode || (ref.change!=null?"relative":"absolute");
   const X=x=>80+(x-min)/(max-min||1)*400,Y=y=>190-y*130;
@@ -229,16 +235,17 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
   const points=series.map(r=>({...r,x:X(r.scenario.change??r.scenario.price),share:scenarioShare(r.result,exp.indices)}));
   const yLabel = /buy/i.test(exp.metric) ? "Estimated audience who would buy (%)" : `Estimated audience · ${exp.metric} (%)`;
   return `<div class="ex-chart-heading"><div class="ex-chart-label">${esc(exp.metric)} by ${esc((exp.priceAxis||"price").toLowerCase())}</div></div>
-    ${ref.location?`<div class="ex-curve-controls">${["location","format"].map(key=>`<div class="ex-quick-filter"><span>${key==="location"?"Location":esc(exp.factors?.find(f=>f.id==="format")?.label||"Service format")}</span><div class="ex-filter-pills" role="group" aria-label="${key==="location"?"Location":"Service format"}">${[...new Set(exp.scenarios.map(s=>s[key]))].map(value=>`<button type="button" data-curve="${key}" data-value="${esc(value)}" aria-pressed="${value===ref[key]}">${esc(value)}</button>`).join("")}</div></div>`).join("")}</div>`:""}
+    ${ref.location?`<div class="ex-curve-controls">${["location","format"].map(key=>`<div class="ex-quick-filter"><span>${key==="location"?"Location":esc(exp.factors?.find(f=>f.id==="format")?.label||"Service format")}</span><div class="ex-filter-pills" role="group" aria-label="${key==="location"?"Location":"Service format"}">${[...new Set(exp.scenarios.map(s=>s[key]))].map(value=>`<button type="button" data-curve="${key}" data-value="${esc(value)}" aria-pressed="${curveFilters[key].has(value)}">${esc(value)}</button>`).join("")}</div></div>`).join("")}</div>`:""}
     <div class="ex-plot-heading"><p class="ex-y-label">↑ ${esc(yLabel)}</p></div>
     <div class="ex-plot-wrap">${expanded?"":'<button type="button" class="ex-expand-chart" data-action="expand-chart" aria-label="Expand price chart" title="Expand chart"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M14 4h6v6M20 4l-8 8M10 5H5a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1v-5"/></svg></button>'}
     <svg class="ex-curve pc-svg ${dense?"ex-curve-dense":""}" ${expanded?"":'data-expand-plot="true"'} viewBox="0 0 560 262" role="group" aria-label="${esc(yLabel)} by ${esc(exp.priceAxis||"price")}">
     ${[0,.5,1].map(v=>`<line class="pc-grid" x1="80" x2="480" y1="${Y(v)}" y2="${Y(v)}"/><text class="pc-axis" x="64" y="${Y(v)+4}" text-anchor="end">${Math.round(v*100)}%</text>`).join("")}
-    <polyline class="pc-line" points="${points.map(p=>`${p.x},${Y(p.share)}`).join(" ")}"/>
-    ${points.map((p,i)=>`<g class="pc-lpt ${selected===p.index?"sel":""}" role="button" tabindex="0" data-scenario="${p.index}" aria-pressed="${selected===p.index}" aria-label="${esc(p.scenario.label)}: ${pct(p.share)}"><title>${esc(priceLabel(p.scenario.change??p.scenario.price,mode))}: ${pct(p.share)}</title><circle class="ex-price-point" cx="${p.x}" cy="${Y(p.share)}" r="${dense?(selected===p.index?5:3):6}"/><circle class="ex-hit" cx="${p.x}" cy="${Y(p.share)}" r="${dense?9:18}"/>${!dense||selected===p.index?`<text class="pc-axis ex-point-value" x="${p.x}" y="${Y(p.share)-18}" text-anchor="${i===0?"start":i===points.length-1?"end":"middle"}">${pct(p.share)}</text>`:""}${!dense||i%tickStep===0||i===points.length-1?`<text class="pc-axis ex-price-tick ${i!==0&&i!==points.length-1&&(dense?Math.round(i/tickStep):i)%2?"ex-minor-tick":""}" x="${p.x}" y="218" text-anchor="middle">${esc(priceLabel(p.scenario.change??p.scenario.price,mode))}</text>`:""}</g>`).join("")}
+    ${curves.map(curve=>{const ps=curve.rows.map(r=>({...r,x:X(r.scenario.change??r.scenario.price),share:scenarioShare(r.result,exp.indices)}));return `<polyline class="pc-line" style="stroke:${curve.color}" points="${ps.map(p=>`${p.x},${Y(p.share)}`).join(' ')}"/>${ps.map((p,i)=>`<g class="pc-lpt ${selected===p.index?'sel':''}" role="button" tabindex="0" data-scenario="${p.index}" aria-pressed="${selected===p.index}" aria-label="${esc(p.scenario.label)}: ${pct(p.share)}"><title>${esc(curve.label)} · ${esc(priceLabel(p.scenario.change??p.scenario.price,mode))}: ${pct(p.share)}</title><circle class="ex-hit" cx="${p.x}" cy="${Y(p.share)}" r="${multiple?6:dense?9:18}"/><circle class="ex-price-point" style="stroke:${curve.color};fill:${selected===p.index?curve.color:'white'}" cx="${p.x}" cy="${Y(p.share)}" r="${selected===p.index?6:multiple||dense?3:6}"/>${selected===p.index||(!multiple&&!dense)?`<text class="pc-axis ex-point-value" x="${p.x}" y="${Y(p.share)-18}" text-anchor="${i===0?'start':i===ps.length-1?'end':'middle'}">${pct(p.share)}</text>`:''}</g>`).join('')}`;}).join('')}
+    ${points.map((p,i)=>!dense||i%tickStep===0||i===points.length-1?`<text class="pc-axis ex-price-tick ${i!==0&&i!==points.length-1&&(dense?Math.round(i/tickStep):i)%2?'ex-minor-tick':''}" x="${p.x}" y="218" text-anchor="middle">${esc(priceLabel(p.scenario.change??p.scenario.price,mode))}</text>`:'').join('')}
     <text class="pc-axis" x="280" y="253" text-anchor="middle">${esc(exp.priceAxis||"Price")} →</text></svg></div>
+    ${multiple?`<div class="ex-series-legend">${curves.map(c=>`<button type="button" data-curve-series="${c.index}" aria-label="Show ${esc(c.label)} on map"><i style="background:${c.color}"></i>${esc(c.label)}</button>`).join('')}</div>`:''}
     <div class="ex-curve-legend"><span>${dense?`${points.length} tested prices · select the line to inspect`:'<i></i>Tested price'}</span><span><i class="selected"></i>Selected price</span></div>
-    <p class="ex-foot">Percentages are modeled shares of the simulated audience, not sales or profit. Location and format stay fixed. Lines connect tested prices; values between them have not been tested. ${mode==="absolute"?"Prices are experimental assumptions.":""}</p>`;
+    <p class="ex-foot">Percentages are modeled shares of the simulated audience, not sales or profit. Each line holds location and format fixed. Select a point to update the map. Lines connect tested prices. ${mode==="absolute"?"Prices are experimental assumptions.":""}</p>`;
 }
   function mountPeople() {
     const run = active, scenario = run.scenarios[selected], exp = run.experiment;
@@ -285,7 +292,7 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
   let lastQuestion = "";
   async function openDecision(question) {
     if(busy || !ctx().ready) return;
-    reviewingSaved=false;resultSection="overview";
+    reviewingSaved=false;resultSection="overview";curveFilters=null;
     lastQuestion=question; researchPanel=null; researchProgress="Checking saved research…"; parentId=null; plan=null; error=""; areasOpen=false; allRanks=false; resetSelection(); prepare(); liveMap();
     planningLog=[]; executionLog=[{kind:"client.plan_requested",phase:"Plan",message:api.isDemo?"Demo recipe selected locally. No model will be called.":"Requesting a proposal from the backend; waiting for execution evidence."}];
     control={id:crypto.randomUUID(),createdAt:new Date().toISOString(),question,city:ctx().city,model:PREDICT.model,population:ctx().residents.length,fixture:api.isDemo};syncControl("planning");
@@ -340,7 +347,7 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
   function openRun(id) {
     if(busy) return;
     const run=localRuns().find(r=>r.id===id); if(!run) return;
-    reviewingSaved=true;resultSection="overview";
+    reviewingSaved=true;resultSection="overview";curveFilters=null;
     prepare();resetSelection();active=run;selected=run.experiment.priceMode==="relative" ? Math.max(0,run.experiment.scenarios.findIndex(s=>s.change===Number(Number(run.draft?.percent).toFixed(2)))) : rankScenarios(run)[0].index;view="results";
     map.setAgents(run.residents);map.clearVerdicts();visibility(true);root.scrollTop=0;render();
   }
@@ -371,9 +378,12 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
     if(d.section) {resultSection=d.section;root.scrollTop=0;render();root.querySelector(`[data-section="${resultSection}"]`)?.focus({preventScroll:true});return;}
     if(d.action==="close-chart")return closeChart();
     if(d.action==="expand-chart") {renderExpandedChart();chartDialog.showModal();return;}
+    if(d.curveSeries!=null && active){const ref=active.experiment.scenarios[selected],target=active.experiment.scenarios[Number(d.curveSeries)];const index=active.experiment.scenarios.findIndex(s=>s.location===target.location&&s.format===target.format&&(s.change??s.price)===(ref.change??ref.price));if(index>=0){selected=index;render();}return;}
     if(d.curve && active && !busy) {
       const ref=active.experiment.scenarios[selected], key=d.curve, other=key==="location"?"format":"location";
-      const index=active.experiment.scenarios.findIndex(s=>s[key]===d.value&&s[other]===ref[other]&&(s.change??s.price)===(ref.change??ref.price));
+      const values=curveFilters[key];
+      if(values.has(d.value)){if(values.size===1)return;values.delete(d.value);}else values.add(d.value);
+      const index=active.experiment.scenarios.findIndex(s=>curveFilters.location.has(s.location)&&curveFilters.format.has(s.format)&&s[other]===ref[other]&&s[key]===(values.has(d.value)?d.value:[...values][0])&&(s.change??s.price)===(ref.change??ref.price));
       if(index>=0){selected=index;render();} return;
     }
     if(d.action==="cancel") return cancel();
@@ -390,7 +400,7 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
     if(d.run) return openRun(d.run);
     if(d.person) return inspect(d.person);
     if(d.action==="close-person") {residentPanel.hidden=true;person=null;personGeneration++;render();return;}
-    if(d.scenario!=null) {selected=Number(d.scenario);render();return;}
+    if(d.scenario!=null) {selected=Number(d.scenario);if(!b.matches("g[data-scenario]"))curveFilters=null;render();return;}
     if(!plan || view!=="proposal") return;
     error="";
     if(d.location!=null) {const location=plan.availableLocations[Number(d.location)];if(!plan.locations.includes(location)) plan.locations=[plan.locations[1],location];}
