@@ -101,6 +101,10 @@ fn explicit_options(raw: &str) -> Vec<String> {
         && options.iter().enumerate().all(|(i,s)| !options[..i].contains(s)) { options } else { vec![] }
 }
 
+/// Fixed answer set for open-ended "what do you think of…" questions (Jev cannot
+/// invent labels, and asking the user to rephrase kills the demo flow).
+pub const REACTION_OPTIONS: [&str; 4] = ["Excited about it", "Fine with it", "Indifferent", "Against it"];
+
 async fn parse_with_jev(client: &ModelClient, city: &str, raw: &str, model: Model) -> anyhow::Result<ParsedQuestion> {
     use crate::jev::Question;
     use std::collections::BTreeMap;
@@ -116,17 +120,20 @@ async fn parse_with_jev(client: &ModelClient, city: &str, raw: &str, model: Mode
     let result = client.evaluate(model, serde_json::json!({"city":city, "question":raw,
         "candidate_options":candidates}), questions).await?;
     let route = result.answer("route")?.selected()?;
+    let few_candidates = candidates.len() < 2;
     let (framing, options) = match route {
         "vote" => ("vote", vec![]),
         "belief" => ("belief", vec![]),
         "explicit_options" if candidates.len() >= 2 => ("options", candidates),
         "purchase_response" => ("options", ["Buy more often", "Keep buying as usual", "Buy less often", "Stop buying"].map(str::to_string).to_vec()),
-        "needs_options" | "explicit_options" => return Ok(ParsedQuestion::unsupported(
-            "Please list the answer choices after a colon, separated by commas or 'or'.", vec![format!("Which would {city} residents prefer: cooking at home, eating out, or ordering delivery?")])),
-        _ => return Ok(ParsedQuestion::unsupported("This asks for something a resident opinion panel cannot determine.", default_examples(city))),
+        // Never bounce the user back to rephrase: an open-ended opinion question gets a
+        // fixed reaction scale, and anything else is answered as support / oppose.
+        "needs_options" | "explicit_options" => ("options", REACTION_OPTIONS.map(str::to_string).to_vec()),
+        _ => ("vote", vec![]),
     };
     Ok(ParsedQuestion { supported:true, framing:framing.into(), question:raw.trim().into(),
         description:if route == "purchase_response" { "Resident buying behavior under the stated scenario; fixed response categories.".into() }
+            else if route == "needs_options" || (route == "explicit_options" && few_candidates) { "Resident reaction to the question as supplied; fixed reaction categories.".into() }
             else { "Resident panel evaluation of the question as supplied.".into() },
         options, reason:String::new(), examples:vec![] })
 }
