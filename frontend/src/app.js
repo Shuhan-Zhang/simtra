@@ -2465,6 +2465,8 @@ async function showAbDemo() {
 
 research = createResearchWorkspace({
   map,
+  compareScenarios: (_branch, payload, signal, onProgress) => withCurrentSimulation(
+    () => api.compareScenarios(state.mainBranch, payload, signal, onProgress), signal),
   getContext: () => ({ city: citySlug(), simId: state.simId, branch: state.mainBranch,
     residents: state.rawResidents, audience: currentAudience(),
     ready: !!state.mainBranch && !state.switching && !["booting", "error"].includes(state.phase),

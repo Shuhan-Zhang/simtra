@@ -13,7 +13,7 @@ const pp = n => n == null ? "—" : `${n > 0 ? "+" : ""}${(n * 100).toFixed(1)} 
 const money = n => `$${n.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
 const dimLabels = { income: "Income", age: "Age", education: "Education", gender: "Sex recorded in Census", race: "Race / ethnicity", geography: "Area", tenure: "Housing tenure" };
 
-export function createResearchWorkspace({ map, getContext, openFilters, labelGroup, prepare, setBusy, getPersona, restoreAudience }) {
+export function createResearchWorkspace({ map, getContext, openFilters, labelGroup, prepare, setBusy, getPersona, restoreAudience, compareScenarios = api.compareScenarios }) {
   const root = document.getElementById("research-workspace"), launcher = document.getElementById("research-launch");
   const store = createRunStore(api.isDemo ? "simtra-research-demo-v1" : "simtra-research-v1");
   let runs = [], plan = null, active = null, parentId = null, view = "proposal", busy = false, visible = false;
@@ -184,10 +184,10 @@ export function createResearchWorkspace({ map, getContext, openFilters, labelGro
     syncControl("running",{experiment,population:residents.length});
     const seq=++generation; abort=new AbortController(); busy=true;setBusy(true);render();
     try {
-      const response=await api.compareScenarios(context.branch,{question:experiment.question,assumptions:experiment.assumptions,options:experiment.options,scenarios:experiment.scenarios,as_of_date:PREDICT.as_of_date},abort.signal,event=>{if(seq===generation)addLog(event);});
+      const response=await compareScenarios(context.branch,{question:experiment.question,assumptions:experiment.assumptions,options:experiment.options,scenarios:experiment.scenarios,as_of_date:PREDICT.as_of_date},abort.signal,event=>{if(seq===generation)addLog(event);});
       if(seq!==generation) return;
       if(response.scenarios?.length!==experiment.scenarios.length || response.scenarios.some(s=>s.result?.p_distribution?.length!==experiment.options.length || scenarioShare(s,experiment.indices)==null || !s.response_groups?.length)) throw new Error("The comparison was incomplete. No results were saved. Please retry.");
-      const run={id:crypto.randomUUID(),controlId:control.id,createdAt:new Date().toISOString(),city:context.city,simId:context.simId,audience,residents,draft,experiment,scenarios:response.scenarios,parentId:parent,model:PREDICT.model,asOf:PREDICT.as_of_date,fixture:api.isDemo||response.fixture_mode===true,executionLog:structuredClone(executionLog),trace:response.trace,saved:true};
+      const run={id:crypto.randomUUID(),controlId:control.id,createdAt:new Date().toISOString(),city:context.city,simId:ctx().simId,audience,residents,draft,experiment,scenarios:response.scenarios,parentId:parent,model:PREDICT.model,asOf:PREDICT.as_of_date,fixture:api.isDemo||response.fixture_mode===true,executionLog:structuredClone(executionLog),trace:response.trace,saved:true};
       try {await store.save(run);} catch {run.saved=false;saveNote="Browser storage is unavailable. Keep this tab open to retain the experiment.";}
       if(seq!==generation) return;
       controlWriter.write(controlRecordFromRun(run));controlWriter.flush().catch(()=>{});control.status="completed";
