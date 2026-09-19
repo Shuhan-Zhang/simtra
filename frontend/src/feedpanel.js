@@ -185,6 +185,7 @@ const initials = (name) => {
 };
 
 function build(root) {
+  const experiments = document.getElementById("research-launch");
   root.innerHTML = `
     <div class="fp-head">
       <div class="fp-head-row">
@@ -250,6 +251,7 @@ function build(root) {
     notice: q(".fp-notice"),
     thread: q(".fp-thread"),
   };
+  if (experiments) root.querySelector(".fp-menu-wrap").before(experiments);
   state.el.formPost.elements.as_of_date.value = today();
   const text = state.el.formPost.elements.text;
   text.addEventListener("input", () => {

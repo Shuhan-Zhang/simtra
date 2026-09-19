@@ -97,7 +97,8 @@
 .ex-person-result strong { font-weight: 500; white-space: nowrap; }
 .ex-next { border-top: var(--hair) solid var(--sep); display: flex; gap: 14px; flex-wrap: wrap; padding-top: 12px; font-size: 12px; }
 .ex-parent { font-size: 11px !important; margin-top: 10px; }
-.experiment-reopen { pointer-events: auto; border: var(--hair) solid var(--sep); border-radius: var(--r-full); background: var(--card); color: var(--accent); font: 12px var(--font); padding: 8px 14px; box-shadow: var(--sh-1); cursor: pointer; }
+.experiment-reopen { flex: none; border: 0; background: transparent; color: var(--accent); font: 14px var(--font); padding: 8px 4px; cursor: pointer; }
+.experiment-reopen:hover { text-decoration: underline; text-underline-offset: 3px; }
 @keyframes ex-pulse { 50% { opacity: .3; } }
 @media (max-width: 600px) {
   .experiment-card { padding: 17px; max-height: calc(100dvh - 315px); width: min(556px, 94vw); }

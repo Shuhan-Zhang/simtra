@@ -53,7 +53,9 @@
     <div id="news-bubble" class="news-bubble hidden" aria-live="polite"></div>
 
     <!-- the city feed: events, how residents took them, and what was asked -->
-    <section id="feed-panel" class="feed-panel hidden" aria-label="City feed"></section>
+    <section id="feed-panel" class="feed-panel hidden" aria-label="City feed">
+      <button id="research-launch" class="experiment-reopen" type="button" aria-controls="research-workspace" aria-expanded="false" hidden>Experiments</button>
+    </section>
 
     <!-- boot progress: a thin line that fills while the city wakes -->
     <div id="boot" class="boot hidden" aria-hidden="true">
@@ -71,7 +73,6 @@
 
     <!-- bottom-center dock: query progress · result card · composer row (ask + info) -->
     <div id="dock" class="dock">
-      <button id="research-launch" class="experiment-reopen" type="button" aria-controls="research-workspace" aria-expanded="false" hidden>Experiments</button>
       <section id="research-workspace" class="experiment-card" aria-label="Experiment" hidden></section>
       <!-- query summary + response progress (loading state, bottom-center) -->
       <div id="summary" class="summary hidden" aria-live="polite">
