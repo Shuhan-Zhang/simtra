@@ -46,10 +46,12 @@ const reaction = { agent_id: 7, sentiment: 'worried', text: 'Simulated reaction:
 test('news appears before persistence and composer unlocks before one reaction batch completes', async () => {
   const h = harness(), save = deferred(), update = deferred();
   let calls = 0;
+  const scenarios = []; h.state.onScenario = text => scenarios.push(text);
   h.api.postEvent = () => save.promise;
   h.api.react = (branch, id, n) => { calls++; assert.equal(n, 12); return update.promise; };
   const posting = h.postEvent(submit);
   assert.equal(h.state.items[0].saving, true);
+  assert.deepEqual(scenarios, []);
   assert.equal(h.button.disabled, true);
   await h.postEvent(submit); // duplicate submission must not create a second event
   save.resolve({event: {id: 'event-1', text: 'Transit fares rise'}});
@@ -57,6 +59,7 @@ test('news appears before persistence and composer unlocks before one reaction b
   assert.equal(h.button.disabled, false);
   assert.equal(calls, 1);
   assert.equal(h.state.items[0].id, 'event-1');
+  assert.deepEqual(scenarios, ['Transit fares rise']);
   assert.equal(h.state.busy, 1);
   update.resolve({ reactions: [reaction, reaction] });
   await new Promise(setImmediate);

@@ -2794,4 +2794,3 @@ async fn step_evolution(State(st): State<AppState>, headers: HeaderMap, Path(id)
         Err(e)=>{tracing::warn!("evolution step failed: {e:#}");(StatusCode::BAD_GATEWAY,Json(json!({"error":"This step could not complete. Your timeline is unchanged; retry Step or Play."}))).into_response()}
     }
 }
-
