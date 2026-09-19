@@ -32,6 +32,7 @@ pub mod rocketride;
 pub mod rubric;
 pub mod sim;
 pub mod state;
+pub mod stimulus;
 pub mod store;
 
 pub mod api;

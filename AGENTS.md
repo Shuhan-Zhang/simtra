@@ -93,6 +93,8 @@ Three SQLite roles are distinct:
 
 ### Persona memory layer (Neo4j)
 
+Memory is partitioned per **workspace** (header `X-Simtra-Workspace`, `?ws=` in the frontend; missing = `public`). City nodes are keyed `"{ws}:{slug}"` and population keys are prefixed with the workspace, so events, tests, answers and data queries never leak between browsers. See INTEGRATION.md "Workspaces".
+
 `crates/sim-core/src/memory.rs` gives every synthetic resident a durable memory of
 events thrown into the world, the tests it took part in, and the stimuli it was shown.
 It is opt-in (set `NEO4J_URI`) and best-effort: a missing or unreachable Neo4j never
@@ -101,9 +103,9 @@ turns a successful prediction into a failure.
 Graph shape:
 
 ```text
-(:City {slug})
+(:City {key, slug, workspace})   key = slug for the public workspace, "{ws}:{slug}" otherwise
 (:Population {key, city, seed, n})-[:IN_CITY]->(:City)
-(:Persona {key, agent_id, name, ...})-[:MEMBER_OF]->(:Population)
+(:Persona {key, agent_id, name, ...})-[:MEMBER_OF]->(:Population)   shared by every workspace; Test.workspace / Event.workspace scope memory
 (:Event {id, kind, text, as_of_date})-[:HAPPENED_IN]->(:City)     city-wide news
 (:Persona)-[:EXPOSED_TO {at}]->(:Event)                            targeted exposure / stimulus
 (:Test {id, kind, question, framing, as_of_date, model, p_yes, ...})-[:RAN_ON]->(:Population)

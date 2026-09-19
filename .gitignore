@@ -50,3 +50,4 @@ data/*.aux.xml
 # Public location ingestion cache and generated snapshot
 /data/locations/
 /tools/__pycache__/
+.vercel

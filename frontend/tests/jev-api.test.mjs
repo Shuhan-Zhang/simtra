@@ -19,7 +19,9 @@ test('every prediction request uses the selected Jev model without credentials',
     for (const request of requests) {
       assert.match(request.url,/^http:\/\/localhost:8080\//);
       assert.equal(JSON.parse(request.body).model,'jev-1.13.0');
-      assert.deepEqual(request.headers,{'content-type':'application/json'});
+      assert.equal(request.headers['content-type'],'application/json');
+      // workspace/ngrok headers are fine; credentials never leave the server
+      for (const h of Object.keys(request.headers)) assert.doesNotMatch(h,/authorization|api-key|x-api/i);
     }
   } finally { globalThis.fetch = original; }
 });

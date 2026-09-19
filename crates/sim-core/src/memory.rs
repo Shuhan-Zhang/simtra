@@ -10,7 +10,10 @@
 //! Graph shape:
 //!
 //! ```text
-//! (:City {slug})
+//! (:City {key, slug, workspace})   key = slug for the public workspace, "{ws}:{slug}" otherwise
+//! Personas and Populations are SHARED by every workspace (one copy of each city's
+//! residents). Workspace privacy lives on Test.workspace / Event.workspace and the
+//! workspace's City node, so a new visitor costs a handful of nodes, not 10,000.
 //! (:Population {key, city, seed, n})-[:IN_CITY]->(:City)
 //! (:Persona {key, agent_id, name, ...})-[:MEMBER_OF]->(:Population)
 //! (:Event {id, kind, text, as_of_date})-[:HAPPENED_IN]->(:City)     city-wide news
@@ -110,6 +113,12 @@ pub struct TestRecord {
     /// evidence chart can be rebuilt from the timeline later. Empty when too large.
     #[serde(default)]
     pub breakdowns_json: String,
+    /// Memory workspace the test belongs to (`public` = shared demo data).
+    #[serde(default)]
+    pub workspace: String,
+    /// City slug the population was sampled from.
+    #[serde(default)]
+    pub city: String,
 }
 
 /// Largest breakdown payload stored on a Test node (bytes).
@@ -323,6 +332,8 @@ pub struct TestTag {
     pub simulation_id: String,
     pub branch_id: String,
     pub stimuli: Vec<StimulusRecord>,
+    /// Memory workspace the run reads from and writes to (empty = public).
+    pub workspace: String,
 }
 
 impl TestTag {
@@ -336,6 +347,14 @@ impl TestTag {
         self.simulation_id = simulation_id.to_string();
         self.branch_id = branch_id.to_string();
         self
+    }
+    pub fn in_workspace(mut self, workspace: &str) -> Self {
+        self.workspace = workspace.to_string();
+        self
+    }
+    /// The effective workspace: `public` unless one was set.
+    pub fn workspace(&self) -> String {
+        normalize_workspace(if self.workspace.is_empty() { None } else { Some(&self.workspace) })
     }
 }
 
@@ -386,6 +405,50 @@ pub fn population_key_of(pop: &Population) -> String {
     }
 }
 
+/// The workspace that holds all memory written before workspaces existed, and
+/// the one used when a request carries no (valid) `X-Simtra-Workspace` header.
+pub const PUBLIC_WORKSPACE: &str = "public";
+
+/// Validate a workspace id from a header or query string; anything else is `public`.
+pub fn normalize_workspace(raw: Option<&str>) -> String {
+    match raw.map(str::trim) {
+        Some(id)
+            if !id.is_empty()
+                && id.len() <= 32
+                && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') =>
+        {
+            id.to_string()
+        }
+        _ => PUBLIC_WORKSPACE.to_string(),
+    }
+}
+
+/// Key of the City node a workspace sees: the bare slug for `public` (existing data),
+/// `"{workspace}:{slug}"` otherwise. Slugs never contain ':'.
+pub fn city_key(workspace: &str, slug: &str) -> String {
+    if workspace == PUBLIC_WORKSPACE {
+        slug.to_string()
+    } else {
+        format!("{workspace}:{slug}")
+    }
+}
+
+/// Inverse of [`city_key`]: (workspace, slug).
+pub fn split_city_key(key: &str) -> (String, String) {
+    match key.split_once(':') {
+        Some((ws, slug)) => (ws.to_string(), slug.to_string()),
+        None => (PUBLIC_WORKSPACE.to_string(), key.to_string()),
+    }
+}
+
+/// Population identity as seen from a workspace. Personas and populations are SHARED
+/// across workspaces (one copy of the 10,000 residents, whatever the workspace), so
+/// this is always the bare [`population_key_of`]. Workspace privacy lives on the
+/// memory nodes instead: `Test.workspace`, `Event.workspace`, and the workspace's City.
+pub fn population_key_in(_workspace: &str, pop: &Population) -> String {
+    population_key_of(pop)
+}
+
 pub fn persona_key(population_key: &str, agent_id: u32) -> String {
     format!("{population_key}:{agent_id}")
 }
@@ -407,6 +470,28 @@ fn http_base(uri: &str) -> Option<String> {
 
 pub fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// Surveys every fresh workspace starts with (question prefix, copies to take). The
+/// order is the order judges see them; a missing item falls back to the newest polls.
+pub const SEED_SURVEYS: &[(&str, usize)] = &[
+    ("Should San Francisco provide free Muni transit", 1),
+    ("Would you keep buying Chipotle bowls if they raised prices", 1),
+    ("Would you vote yes on a $1 billion bond to build new public housing", 1),
+    ("How do you feel about fast-casual restaurant prices", 1),
+];
+
+/// News events every fresh workspace starts with (text prefix).
+pub const SEED_EVENTS: &[&str] = &[
+    "A magnitude 6.1 earthquake struck San Francisco",
+    "SFUSD announced all San Francisco public schools",
+    "Obama got shot",
+];
+
+/// Id of a node copied into a workspace by seeding: stable for (source, workspace),
+/// so re-seeding never duplicates and two workspaces never collide.
+pub fn seeded_id(prefix: &str, source_id: &str, workspace: &str) -> String {
+    short_id(prefix, &["seed", source_id, workspace])
 }
 
 fn short_id(prefix: &str, parts: &[&str]) -> String {
@@ -616,7 +701,20 @@ impl MemoryClient {
     /// Uniqueness constraints (idempotent). Called once at startup, best-effort.
     pub async fn ensure_schema(&self) -> Result<()> {
         let stmts = [
-            "CREATE CONSTRAINT city_slug IF NOT EXISTS FOR (c:City) REQUIRE c.slug IS UNIQUE",
+            // Cities are keyed per workspace; nodes from before workspaces get key = slug.
+            "MATCH (c:City) WHERE c.key IS NULL SET c.key = c.slug, c.workspace = 'public'",
+            "CREATE INDEX test_workspace IF NOT EXISTS FOR (t:Test) ON (t.workspace)",
+            "CREATE INDEX event_workspace IF NOT EXISTS FOR (e:Event) ON (e.workspace)",
+            // Tests/events written before workspace tags: derive the tag from the City
+            // they hang off (population -> city for tests).
+            "MATCH (t:Test) WHERE t.workspace IS NULL \
+             OPTIONAL MATCH (t)-[:RAN_ON]->(p:Population)-[:IN_CITY]->(c:City) \
+             SET t.workspace = coalesce(c.workspace, 'public'), t.city = coalesce(c.slug, split(p.key, ':')[0])",
+            "MATCH (e:Event) WHERE e.workspace IS NULL \
+             OPTIONAL MATCH (e)-[:HAPPENED_IN]->(c:City) \
+             SET e.workspace = coalesce(c.workspace, 'public')",
+            "DROP CONSTRAINT city_slug IF EXISTS",
+            "CREATE CONSTRAINT city_key IF NOT EXISTS FOR (c:City) REQUIRE c.key IS UNIQUE",
             "CREATE CONSTRAINT population_key IF NOT EXISTS FOR (p:Population) REQUIRE p.key IS UNIQUE",
             "CREATE CONSTRAINT persona_key IF NOT EXISTS FOR (p:Persona) REQUIRE p.key IS UNIQUE",
             "CREATE CONSTRAINT event_id IF NOT EXISTS FOR (e:Event) REQUIRE e.id IS UNIQUE",
@@ -635,15 +733,38 @@ impl MemoryClient {
     }
 
     /// Register every persona of a population (idempotent MERGE, batched).
-    pub async fn ensure_population(&self, pop: &Population) -> Result<()> {
-        let city = pop.profile.slug.clone();
-        let key = population_key_of(pop);
+    pub async fn ensure_population(&self, workspace: &str, pop: &Population) -> Result<()> {
+        let city = city_key(workspace, &pop.profile.slug);
+        let key = population_key_in(workspace, pop);
+        // Cheap early exit once every persona has been written: callers on the hot
+        // path (reactions, tests) can invoke this to close the race where a fresh
+        // workspace reacts before its background registration finished.
+        let done = self
+            .run(&[(
+                "MATCH (p:Population {key: $key}) RETURN p.registered",
+                json!({"key": key}),
+            )])
+            .await?;
+        if done
+            .first()
+            .and_then(|rows| rows.first())
+            .and_then(|r| r.first())
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+        // The population (and its personas) is shared, so it hangs off the public City;
+        // the workspace's own City node is created here too so events have a home.
+        let public_city = city_key(PUBLIC_WORKSPACE, &pop.profile.slug);
         self.run(&[(
-            "MERGE (c:City {slug: $city}) \
+            "MERGE (c:City {key: $city}) ON CREATE SET c.slug = $slug, c.workspace = $ws \
+             MERGE (pc:City {key: $public_city}) ON CREATE SET pc.slug = $slug, pc.workspace = 'public' \
              MERGE (p:Population {key: $key}) \
-             ON CREATE SET p.city = $city, p.seed = $seed, p.n = $n, p.created_at = $now \
-             MERGE (p)-[:IN_CITY]->(c)",
-            json!({"city": city, "key": key, "seed": pop.seed as i64, "n": pop.n as i64, "now": now_iso()}),
+             ON CREATE SET p.city = $public_city, p.seed = $seed, p.n = $n, p.created_at = $now \
+             MERGE (p)-[:IN_CITY]->(pc)",
+            json!({"city": city, "public_city": public_city, "slug": pop.profile.slug, "ws": workspace,
+                   "key": key, "seed": pop.seed as i64, "n": pop.n as i64, "now": now_iso()}),
         )])
         .await?;
         let cutoffs = pop.income_cutoffs;
@@ -676,6 +797,11 @@ impl MemoryClient {
             )])
             .await?;
         }
+        self.run(&[(
+            "MATCH (p:Population {key: $key}) SET p.registered = true",
+            json!({"key": key}),
+        )])
+        .await?;
         Ok(())
     }
 
@@ -696,13 +822,15 @@ impl MemoryClient {
             as_of_date: as_of_date.to_string(),
             created_at: now_iso(),
         };
+        let (ws, slug) = split_city_key(city);
         self.run(&[(
-            "MERGE (c:City {slug: $city}) \
+            "MERGE (c:City {key: $city}) ON CREATE SET c.slug = $slug, c.workspace = $ws \
              MERGE (e:Event {id: $id}) \
              ON CREATE SET e.kind = $kind, e.text = $text, e.as_of_date = $date, \
-               e.city = $city, e.created_at = $now \
+               e.city = $city, e.created_at = $now, e.workspace = $ws \
              MERGE (e)-[:HAPPENED_IN]->(c)",
-            json!({"city": city, "id": ev.id, "kind": kind, "text": text, "date": as_of_date, "now": ev.created_at}),
+            json!({"city": city, "slug": slug, "ws": ws, "id": ev.id, "kind": kind, "text": text,
+                   "date": as_of_date, "now": ev.created_at}),
         )])
         .await?;
         Ok(ev)
@@ -729,6 +857,7 @@ impl MemoryClient {
     /// Create a stimulus-kind event (not city-wide) and expose the given personas to it.
     pub async fn add_stimulus_event(
         &self,
+        workspace: &str,
         population_key: &str,
         city: &str,
         text: &str,
@@ -736,7 +865,7 @@ impl MemoryClient {
         agent_ids: &[u32],
     ) -> Result<MemoryEvent> {
         let ev = MemoryEvent {
-            id: short_id("stim", &[population_key, text, as_of_date]),
+            id: short_id("stim", &[workspace, population_key, text, as_of_date]),
             city: city.to_string(),
             kind: "stimulus".into(),
             text: text.to_string(),
@@ -746,8 +875,9 @@ impl MemoryClient {
         self.run(&[(
             "MERGE (e:Event {id: $id}) \
              ON CREATE SET e.kind = 'stimulus', e.text = $text, e.as_of_date = $date, \
-               e.city = $city, e.created_at = $now",
-            json!({"id": ev.id, "text": text, "date": as_of_date, "city": city, "now": ev.created_at}),
+               e.city = $city, e.created_at = $now, e.workspace = $ws",
+            json!({"id": ev.id, "text": text, "date": as_of_date, "city": city, "now": ev.created_at,
+                   "ws": workspace}),
         )])
         .await?;
         self.expose(population_key, agent_ids, &ev.id).await?;
@@ -769,9 +899,12 @@ impl MemoryClient {
                t.framing = $framing, t.as_of_date = $date, t.model = $model, t.p_yes = $p_yes, \
                t.options = $options, t.p_distribution = $dist, t.n_agents = $n_agents, \
                t.n_archetypes = $n_archetypes, t.simulation_id = $sim, t.branch_id = $branch, \
-               t.created_at = $now, t.breakdowns_json = $breakdowns \
+               t.created_at = $now, t.breakdowns_json = $breakdowns, \
+               t.workspace = $ws, t.city = $slug \
              MERGE (t)-[:RAN_ON]->(p)",
             json!({
+                "ws": if test.workspace.is_empty() { PUBLIC_WORKSPACE } else { test.workspace.as_str() },
+                "slug": test.city,
                 "pop": population_key, "id": test.id, "kind": test.kind, "question": test.question,
                 "description": test.description, "framing": test.framing, "date": test.as_of_date,
                 "model": test.model, "p_yes": test.p_yes, "options": test.options,
@@ -838,22 +971,27 @@ impl MemoryClient {
     /// capped per persona and ordered deterministically.
     pub async fn recall(
         &self,
+        workspace: &str,
+        city_slug: &str,
         population_key: &str,
         agent_ids: &[u32],
         as_of_date: &str,
     ) -> Result<HashMap<u32, PersonaMemory>> {
         let keys: Vec<String> = agent_ids.iter().map(|id| persona_key(population_key, *id)).collect();
         let params = json!({
-            "keys": keys, "date": as_of_date,
+            "keys": keys, "date": as_of_date, "ws": workspace, "city": city_key(workspace, city_slug),
             "n_events": RECALL_EVENTS as i64, "n_tests": RECALL_TESTS as i64,
         });
+        // Personas are shared across workspaces, so the workspace's own City (news) and
+        // the workspace tag on stimuli/tests decide what this workspace remembers.
         let events_q = "UNWIND $keys AS k \
             MATCH (a:Persona {key: k}) \
             CALL { WITH a \
-              MATCH (a)-[:MEMBER_OF]->(:Population)-[:IN_CITY]->(:City)<-[:HAPPENED_IN]-(e:Event) \
+              MATCH (e:Event)-[:HAPPENED_IN]->(:City {key: $city}) \
               WHERE e.as_of_date <= $date RETURN e \
               UNION \
-              WITH a MATCH (a)-[:EXPOSED_TO]->(e:Event) WHERE e.as_of_date <= $date RETURN e } \
+              WITH a MATCH (a)-[:EXPOSED_TO]->(e:Event) \
+              WHERE e.as_of_date <= $date AND coalesce(e.workspace, 'public') = $ws RETURN e } \
             WITH a, e ORDER BY e.as_of_date DESC, e.created_at DESC, e.id ASC \
             WITH a, collect(e)[0..$n_events] AS evs \
             UNWIND evs AS e \
@@ -861,7 +999,7 @@ impl MemoryClient {
             ORDER BY a.agent_id, e.as_of_date, e.id";
         let tests_q = "UNWIND $keys AS k \
             MATCH (a:Persona {key: k})-[x:ANSWERED]->(t:Test) \
-            WHERE t.as_of_date <= $date \
+            WHERE t.as_of_date <= $date AND coalesce(t.workspace, 'public') = $ws \
             WITH a, x, t ORDER BY t.created_at DESC, t.id ASC \
             WITH a, collect({t: t, x: x})[0..$n_tests] AS rows \
             UNWIND rows AS r \
@@ -902,8 +1040,15 @@ impl MemoryClient {
     }
 
     /// Full memory view of one persona (for the API), newest first, uncapped-ish.
-    pub async fn persona_view(&self, population_key: &str, agent_id: u32) -> Result<Value> {
+    pub async fn persona_view(
+        &self,
+        workspace: &str,
+        city_slug: &str,
+        population_key: &str,
+        agent_id: u32,
+    ) -> Result<Value> {
         let key = persona_key(population_key, agent_id);
+        let city = city_key(workspace, city_slug);
         let res = self
             .run(&[
                 (
@@ -914,13 +1059,14 @@ impl MemoryClient {
                 (
                     "MATCH (a:Persona {key: $key}) \
                      CALL { WITH a \
-                       MATCH (a)-[:MEMBER_OF]->(:Population)-[:IN_CITY]->(:City)<-[:HAPPENED_IN]-(e:Event) RETURN e, 'city' AS via \
-                       UNION WITH a MATCH (a)-[:EXPOSED_TO]->(e:Event) RETURN e, 'exposed' AS via } \
+                       MATCH (e:Event)-[:HAPPENED_IN]->(:City {key: $city}) RETURN e, 'city' AS via \
+                       UNION WITH a MATCH (a)-[:EXPOSED_TO]->(e:Event) WHERE coalesce(e.workspace, 'public') = $ws RETURN e, 'exposed' AS via } \
                      RETURN e.id, e.kind, e.text, e.as_of_date, via ORDER BY e.as_of_date DESC, e.id LIMIT 50",
-                    json!({"key": key}),
+                    json!({"key": key, "city": city, "ws": workspace}),
                 ),
                 (
                     "MATCH (a:Persona {key: $key})-[x:ANSWERED]->(t:Test) \
+                     WHERE coalesce(t.workspace, 'public') = $ws \
                      OPTIONAL MATCH (t)-[:USED_STIMULUS]->(s:Stimulus) \
                      OPTIONAL MATCH (t)-[:UNDER_EVENT]->(ev:Event) \
                      WITH t, x, collect(DISTINCT {label: s.label, text: s.text}) AS stimuli, ev \
@@ -928,7 +1074,7 @@ impl MemoryClient {
                             x.p_yes, x.dist, x.why, t.options, t.created_at, \
                             [s IN stimuli WHERE s.label IS NOT NULL], ev.text \
                      ORDER BY t.created_at DESC LIMIT 50",
-                    json!({"key": key}),
+                    json!({"key": key, "ws": workspace}),
                 ),
             ])
             .await?;
@@ -976,7 +1122,7 @@ impl MemoryClient {
     pub async fn list_city_events(&self, city: &str, limit: usize) -> Result<Vec<EventFeedItem>> {
         let res = self
             .run(&[(
-                "MATCH (e:Event)-[:HAPPENED_IN]->(:City {slug: $city}) \
+                "MATCH (e:Event)-[:HAPPENED_IN]->(:City {key: $city}) \
                  OPTIONAL MATCH (a:Persona)-[r:REACTED_TO]->(e) \
                  WITH e, r, a ORDER BY r.at DESC, a.agent_id ASC \
                  WITH e, [x IN collect(CASE WHEN r IS NULL THEN null ELSE {agent_id: a.agent_id, \
@@ -1022,15 +1168,22 @@ impl MemoryClient {
 
     /// A city's lineage: news events and tests in the order they were created, oldest
     /// first. `limit` keeps the most recent items (still returned ascending).
-    pub async fn lineage(&self, city: &str, limit: usize) -> Result<Vec<LineageItem>> {
-        let params = json!({"city": city});
-        let events_q = "MATCH (e:Event)-[:HAPPENED_IN]->(:City {slug: $city}) \
+    pub async fn lineage(&self, workspace: &str, city_slug: &str, limit: usize) -> Result<Vec<LineageItem>> {
+        let city = city_key(workspace, city_slug);
+        let params = json!({"city": city, "ws": workspace, "slug": city_slug});
+        let events_q = "MATCH (e:Event)-[:HAPPENED_IN]->(:City {key: $city}) \
             OPTIONAL MATCH (:Persona)-[r:REACTED_TO]->(e) \
             WITH e, [x IN collect(r.sentiment) WHERE x IS NOT NULL] AS sentiments \
             RETURN e.id, e.kind, e.text, e.as_of_date, e.created_at, sentiments \
             ORDER BY e.created_at ASC, e.id ASC";
-        let tests_q = test_row_query("MATCH (t:Test)-[:RAN_ON]->(p:Population)-[:IN_CITY]->(c:City {slug: $city})");
-        let queries_q = "MATCH (d:DataQuery)-[:ASKED_IN]->(:City {slug: $city}) \
+        // Tests are scoped by their workspace tag (populations are shared); the City is
+        // only needed to count the events the residents knew at the time.
+        let tests_q = test_row_query(
+            "MATCH (c:City {key: $city}) \
+             MATCH (t:Test)-[:RAN_ON]->(p:Population) \
+             WHERE coalesce(t.workspace, 'public') = $ws AND coalesce(t.city, split(p.key, ':')[0]) = $slug",
+        );
+        let queries_q = "MATCH (d:DataQuery)-[:ASKED_IN]->(:City {key: $city}) \
             RETURN d.id, d.question, d.answer, d.status, d.created_at, d.response_json \
             ORDER BY d.created_at ASC, d.id ASC";
         let res = self
@@ -1082,7 +1235,11 @@ impl MemoryClient {
     /// One recorded test by id, in the lineage item shape (with stored breakdowns).
     /// `Ok(None)` when no such test exists.
     pub async fn test_detail(&self, test_id: &str) -> Result<Option<LineageItem>> {
-        let q = test_row_query("MATCH (t:Test {id: $id})-[:RAN_ON]->(p:Population)-[:IN_CITY]->(c:City)");
+        let q = test_row_query(
+            "MATCH (t:Test {id: $id})-[:RAN_ON]->(p:Population) \
+             WITH t, p, coalesce(t.city, split(p.key, ':')[0]) AS slug, coalesce(t.workspace, 'public') AS ws \
+             OPTIONAL MATCH (c:City {key: CASE WHEN ws = 'public' THEN slug ELSE ws + ':' + slug END})",
+        );
         let res = self.run(&[(q.as_str(), json!({"id": test_id}))]).await?;
         Ok(res.first().and_then(|rows| rows.first()).map(|r| test_item_from_row(r)))
     }
@@ -1217,17 +1374,190 @@ impl MemoryClient {
         if response_json.len() > MAX_BREAKDOWNS_BYTES {
             response_json = String::new();
         }
+        let (ws, slug) = split_city_key(city);
         self.run(&[(
-            "MERGE (c:City {slug: $city}) \
+            "MERGE (c:City {key: $city}) ON CREATE SET c.slug = $slug, c.workspace = $ws \
              MERGE (d:DataQuery {id: $id}) \
              ON CREATE SET d.city = $city, d.question = $question, d.answer = $answer, \
                d.status = $status, d.response_json = $response, d.created_at = $now \
              MERGE (d)-[:ASKED_IN]->(c)",
-            json!({"city": city, "id": rec.id, "question": rec.question, "answer": rec.answer,
-                   "status": rec.status, "response": response_json, "now": rec.created_at}),
+            json!({"city": city, "slug": slug, "ws": ws, "id": rec.id, "question": rec.question,
+                   "answer": rec.answer, "status": rec.status, "response": response_json, "now": rec.created_at}),
         )])
         .await?;
         Ok(rec)
+    }
+
+    /// Counts of what a workspace remembers across all cities: (events, tests, data queries).
+    pub async fn workspace_summary(&self, workspace: &str) -> Result<(usize, usize, usize)> {
+        let params = json!({"ws": workspace});
+        let res = self
+            .run(&[
+                ("MATCH (e:Event)-[:HAPPENED_IN]->(c:City {workspace: $ws}) RETURN count(e)", params.clone()),
+                ("MATCH (t:Test) WHERE coalesce(t.workspace, 'public') = $ws RETURN count(t)", params.clone()),
+                ("MATCH (d:DataQuery)-[:ASKED_IN]->(c:City {workspace: $ws}) RETURN count(d)", params),
+            ])
+            .await?;
+        let n = |i: usize| -> usize {
+            res.get(i)
+                .and_then(|rows| rows.first())
+                .and_then(|r| r.first())
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize
+        };
+        Ok((n(0), n(1), n(2)))
+    }
+
+    /// Give a fresh workspace something to look at: copy a curated set of surveys and
+    /// news events from `from_workspace` (falling back to the newest ones when a
+    /// curated item is missing). Personas are shared, so ANSWERED / REACTED_TO edges
+    /// attach the same residents to the copies. No-op for the public workspace or
+    /// once the workspace has any test or event. Returns (tests copied, events copied).
+    pub async fn seed_workspace(
+        &self,
+        workspace: &str,
+        from_workspace: &str,
+        pop: &Population,
+        take: usize,
+    ) -> Result<(usize, usize)> {
+        if workspace == PUBLIC_WORKSPACE || workspace == from_workspace {
+            return Ok((0, 0));
+        }
+        let (events, tests, _) = self.workspace_summary(workspace).await?;
+        if events > 0 || tests > 0 {
+            return Ok((0, 0));
+        }
+        self.ensure_population(workspace, pop).await?;
+        let slug = pop.profile.slug.clone();
+        let src_city = city_key(from_workspace, &slug);
+        let city = city_key(workspace, &slug);
+        let ids = |rows: &Vec<Vec<Value>>| -> Vec<String> {
+            rows.iter().filter_map(|r| r.first().and_then(|v| v.as_str()).map(String::from)).collect()
+        };
+
+        // Curated surveys: judge-ready sources with stored breakdowns, matched by
+        // question prefix so they survive id changes; `max` copies per entry (the
+        // five-day-week pair shows a before/after delta).
+        let mut test_ids: Vec<String> = Vec::new();
+        for (prefix, max) in SEED_SURVEYS {
+            let rows = self
+                .run(&[(
+                    "MATCH (t:Test)-[:RAN_ON]->(p:Population) \
+                     WHERE coalesce(t.workspace, 'public') = $from AND t.kind = 'poll' \
+                       AND t.breakdowns_json IS NOT NULL AND t.breakdowns_json <> '' \
+                       AND coalesce(t.city, split(p.key, ':')[0]) = $slug \
+                       AND toLower(t.question) STARTS WITH toLower($prefix) \
+                       AND EXISTS { (:Persona)-[:ANSWERED]->(t) } \
+                     RETURN t.id ORDER BY t.created_at DESC LIMIT $max",
+                    json!({"from": from_workspace, "slug": slug, "prefix": prefix, "max": *max as i64}),
+                )])
+                .await?;
+            for id in rows.first().map(ids).unwrap_or_default() {
+                if !test_ids.contains(&id) {
+                    test_ids.push(id);
+                }
+            }
+        }
+        if test_ids.len() < take {
+            let rows = self
+                .run(&[(
+                    "MATCH (t:Test)-[:RAN_ON]->(p:Population) \
+                     WHERE coalesce(t.workspace, 'public') = $from AND t.kind = 'poll' \
+                       AND t.breakdowns_json IS NOT NULL AND t.breakdowns_json <> '' \
+                       AND coalesce(t.city, split(p.key, ':')[0]) = $slug \
+                     RETURN t.id ORDER BY t.created_at DESC LIMIT $take",
+                    json!({"from": from_workspace, "slug": slug, "take": take as i64}),
+                )])
+                .await?;
+            for id in rows.first().map(ids).unwrap_or_default() {
+                if test_ids.len() >= take {
+                    break;
+                }
+                if !test_ids.contains(&id) {
+                    test_ids.push(id);
+                }
+            }
+        }
+
+        let mut event_ids: Vec<String> = Vec::new();
+        for prefix in SEED_EVENTS {
+            let rows = self
+                .run(&[(
+                    "MATCH (e:Event)-[:HAPPENED_IN]->(:City {key: $src}) \
+                     WHERE coalesce(e.kind, 'news') <> 'stimulus' \
+                       AND toLower(e.text) STARTS WITH toLower($prefix) \
+                     RETURN e.id ORDER BY e.created_at DESC LIMIT 1",
+                    json!({"src": src_city, "prefix": prefix}),
+                )])
+                .await?;
+            for id in rows.first().map(ids).unwrap_or_default() {
+                if !event_ids.contains(&id) {
+                    event_ids.push(id);
+                }
+            }
+        }
+        if event_ids.len() < take {
+            let rows = self
+                .run(&[(
+                    "MATCH (e:Event)-[:HAPPENED_IN]->(:City {key: $src}) \
+                     WHERE coalesce(e.kind, 'news') <> 'stimulus' \
+                     RETURN e.id ORDER BY e.created_at DESC LIMIT $take",
+                    json!({"src": src_city, "take": take as i64}),
+                )])
+                .await?;
+            for id in rows.first().map(ids).unwrap_or_default() {
+                if event_ids.len() >= take {
+                    break;
+                }
+                if !event_ids.contains(&id) {
+                    event_ids.push(id);
+                }
+            }
+        }
+
+        let mut n_tests = 0;
+        for src in &test_ids {
+            let new_id = seeded_id("test", src, workspace);
+            self.run(&[(
+                "MATCH (t:Test {id: $src})-[:RAN_ON]->(p:Population) \
+                 MERGE (nt:Test {id: $new}) \
+                 ON CREATE SET nt = t {.*, id: $new, seeded: true, simulation_id: 'seed', branch_id: 'seed', \
+                   workspace: $ws, city: coalesce(t.city, split(p.key, ':')[0])} \
+                 MERGE (nt)-[:RAN_ON]->(p)",
+                json!({"src": src, "new": new_id, "ws": workspace}),
+            )])
+            .await?;
+            self.run(&[(
+                "MATCH (a:Persona)-[x:ANSWERED]->(t:Test {id: $src}) \
+                 MATCH (nt:Test {id: $new}) \
+                 MERGE (a)-[nx:ANSWERED]->(nt) ON CREATE SET nx = properties(x)",
+                json!({"src": src, "new": new_id}),
+            )])
+            .await?;
+            n_tests += 1;
+        }
+        let mut n_events = 0;
+        for src in &event_ids {
+            let new_id = seeded_id("evt", src, workspace);
+            self.run(&[(
+                "MATCH (e:Event {id: $src}) \
+                 MERGE (c:City {key: $city}) ON CREATE SET c.slug = $slug, c.workspace = $ws \
+                 MERGE (ne:Event {id: $new}) \
+                 ON CREATE SET ne = e {.*, id: $new, seeded: true, workspace: $ws} \
+                 MERGE (ne)-[:HAPPENED_IN]->(c)",
+                json!({"src": src, "new": new_id, "city": city, "slug": slug, "ws": workspace}),
+            )])
+            .await?;
+            self.run(&[(
+                "MATCH (a:Persona)-[r:REACTED_TO]->(e:Event {id: $src}) \
+                 MATCH (ne:Event {id: $new}) \
+                 MERGE (a)-[nr:REACTED_TO]->(ne) ON CREATE SET nr = properties(r)",
+                json!({"src": src, "new": new_id}),
+            )])
+            .await?;
+            n_events += 1;
+        }
+        Ok((n_tests, n_events))
     }
 
     /// Store residents' reactions to an event. Re-reacting overwrites the old reaction.
@@ -1268,7 +1598,7 @@ impl MemoryClient {
     ) -> Result<Option<(MemoryEvent, Vec<Reaction>)>> {
         let res = self
             .run(&[(
-                "MATCH (e:Event {id: $id})-[:HAPPENED_IN]->(:City {slug: $city}) \
+                "MATCH (e:Event {id: $id})-[:HAPPENED_IN]->(:City {key: $city}) \
                  OPTIONAL MATCH (a:Persona)-[r:REACTED_TO]->(e) \
                  WITH e, r, a ORDER BY r.at DESC, a.agent_id ASC \
                  WITH e, [x IN collect(CASE WHEN r IS NULL THEN null ELSE {agent_id: a.agent_id, \
@@ -1297,13 +1627,16 @@ impl MemoryClient {
 }
 
 /// Build the Test node payload from a finished poll.
-pub fn test_record(pop_key: &str, poll: &Poll, result: &PollResult, tag: &TestTag) -> TestRecord {
+pub fn test_record(pop_key: &str, city: &str, poll: &Poll, result: &PollResult, tag: &TestTag) -> TestRecord {
     let created_at = now_iso();
+    let workspace = tag.workspace();
     TestRecord {
         id: short_id(
             "test",
-            &[pop_key, &tag.kind, &poll.question, &poll.as_of_date, &result.model, &created_at, &tag.branch_id],
+            &[pop_key, &workspace, &tag.kind, &poll.question, &poll.as_of_date, &result.model, &created_at, &tag.branch_id],
         ),
+        workspace,
+        city: city.to_string(),
         kind: tag.kind.clone(),
         question: poll.question.clone(),
         description: poll.description.clone(),
@@ -1426,6 +1759,7 @@ mod tests {
         let poll = Poll {
             question: "Q?".into(), description: String::new(), framing: Framing::Vote,
             as_of_date: "2026-09-12".into(), model: None, population: None, event: None, options: vec![],
+            stimulus: None,
         };
         let mut breakdowns = HashMap::new();
         breakdowns.insert("age".to_string(), vec![DemoBreak { key: "25-34".into(), yes_share: 0.7, weight: 100.0, n: 12 }]);
@@ -1436,7 +1770,7 @@ mod tests {
             option_breakdowns: vec![], option_ci: None, hydra: HydraEvidence::default(),
             memory_test_id: None,
         };
-        let rec = test_record("sf:1:10", &poll, &result, &TestTag::poll());
+        let rec = test_record("sf:1:10", "sf", &poll, &result, &TestTag::poll());
         let v: Value = serde_json::from_str(&rec.breakdowns_json).unwrap();
         assert_eq!(v["breakdowns"]["age"][0]["key"], "25-34");
         assert_eq!(v["breakdowns"]["age"][0]["yes_share"], 0.7);
@@ -1581,6 +1915,24 @@ mod population_key_tests {
     }
 
     #[test]
+    fn workspace_keys_are_scoped_and_public_is_bare() {
+        assert_eq!(normalize_workspace(None), "public");
+        assert_eq!(normalize_workspace(Some("  ")), "public");
+        assert_eq!(normalize_workspace(Some("bad id!")), "public");
+        assert_eq!(normalize_workspace(Some("Ab_c-9")), "Ab_c-9");
+        assert_eq!(normalize_workspace(Some(&"x".repeat(33))), "public");
+        assert_eq!(city_key("public", "sf"), "sf");
+        assert_eq!(city_key("w1", "sf"), "w1:sf");
+        assert_eq!(split_city_key("w1:sf"), ("w1".to_string(), "sf".to_string()));
+        assert_eq!(split_city_key("sf"), ("public".to_string(), "sf".to_string()));
+        assert_eq!(population_key_in("public", &pop("")), "sf:42:100");
+        // personas are shared across workspaces: the key never carries the workspace
+        assert_eq!(population_key_in("w1", &pop("")), "sf:42:100");
+        assert_eq!(TestTag::poll().workspace(), "public");
+        assert_eq!(TestTag::poll().in_workspace("w1").workspace(), "w1");
+    }
+
+    #[test]
     fn filtered_populations_get_distinct_keys() {
         assert_eq!(population_key_of(&pop("")), "sf:42:100");
         let a = population_key_of(&pop(r#"{"sex":"female"}"#));
@@ -1588,5 +1940,19 @@ mod population_key_tests {
         assert!(a.starts_with("sf:42:100:f"));
         assert_ne!(a, b);
         assert_eq!(a, population_key_of(&pop(r#"{"sex":"female"}"#)));
+    }
+}
+
+#[cfg(test)]
+mod seeded_id_tests {
+    use super::seeded_id;
+    #[test]
+    fn seeded_ids_are_stable_and_workspace_specific() {
+        let a = seeded_id("test", "test-abc", "ws1");
+        assert_eq!(a, seeded_id("test", "test-abc", "ws1"));
+        assert!(a.starts_with("test-"));
+        assert_ne!(a, seeded_id("test", "test-abc", "ws2"));
+        assert_ne!(a, seeded_id("test", "test-abd", "ws1"));
+        assert_ne!(seeded_id("evt", "x", "ws1"), seeded_id("test", "x", "ws1"));
     }
 }

@@ -28,6 +28,7 @@ async fn features(client: ModelClient, live: bool) {
         population: None,
         event: None,
         options: vec![],
+        stimulus: None,
     };
     let first = engine.run_poll(&pop, &poll).await.unwrap();
     assert_eq!(first.model, "jev-1.13.0");
