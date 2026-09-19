@@ -28,6 +28,7 @@ test('residents keep moving with reduced motion while camera and reveal effects 
 
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { gunzipSync } from 'node:zlib';
 const fixture = JSON.parse(readFileSync(new URL('../fixtures/evidence-demo.json',import.meta.url)));
 test('offline fixture hashes match committed snapshots and every bar matches exact resident PWGTP', () => {
   assert.equal(fixture.cities.length,5);
@@ -54,17 +55,41 @@ test('combined groups across dimensions count each resident once', () => {
   assert.equal(result.summary.weightedPumsCount,expected.reduce((s,a)=>s+a.pums_weight,0));
 });
 
+test('every served demo city has 10,000 sampled residents and matching weighted breakdowns', () => {
+  const manifest=JSON.parse(readFileSync(new URL('../fixtures/population-demo/manifest.json',import.meta.url)));
+  assert.equal(manifest.generator.n,10000);assert.equal(manifest.generator.seed,42);
+  assert.equal(manifest.cities.length,5);
+  for(const entry of manifest.cities) {
+    const row=JSON.parse(gunzipSync(readFileSync(new URL('../fixtures/population-demo/'+entry.file,import.meta.url))));
+    assert.equal(entry.n_agents,10000);assert.equal(row.agents.length,10000);
+    assert.equal(new Set(row.agents.map(a=>a.id)).size,10000);
+    const source=readFileSync(new URL('../../'+row.binary.evidence.population_source.local_snapshot,import.meta.url));
+    assert.equal(createHash('sha256').update(source).digest('hex'),row.snapshot_sha256);
+    assert.equal(row.snapshot_sha256,entry.snapshot_sha256);
+    const index=createSegmentIndex(row.agents);
+    for(const result of [row.binary,row.options]) {
+      assert.equal(result.n_agents,10000);assert.equal(result.fixture_mode,true);
+      for(const breakdown of result.option_breakdowns) for(const group of breakdown.groups) {
+        const selected=selectSegments(index,{clauses:[{dimension:breakdown.dimension,key:group.key}],operator:'or'});
+        assert.equal(selected.summary.rawMatchingAgents,group.n,`${entry.city.slug} ${breakdown.dimension} ${group.key}`);
+        assert.equal(selected.summary.weightedPumsCount,group.weight);
+      }
+    }
+  }
+});
+
 test('offline API exercises all result transports without calling external services', async () => {
   const previousFetch=globalThis.fetch, previousLocation=globalThis.location;
   const requests=[];
   globalThis.location=new URL('http://localhost:5173/?demo=1');
-  globalThis.fetch=async (url)=>{requests.push(String(url));return {ok:true,json:async()=>structuredClone(fixture)};};
+  globalThis.fetch=async (url)=>{requests.push(String(url));return new Response(readFileSync(url));};
   try {
     const api=await import('../src/api.js?offline-contract-test');
     assert.equal(api.isDemo,true);
     const sim=await api.createSimulation({city:'sf'});
     const agents=await api.getAllAgents(sim.main_branch);
-    assert.equal(agents.length,256);
+    assert.equal(agents.length,10000);
+    assert.equal(new Set(agents.map(a=>a.id)).size,10000);
     const branch=await api.createBranch(sim.simulation_id);
     const binary=await api.poll(branch.branch_id,{framing:'vote'});
     assert.equal(binary.fixture_mode,true);
@@ -74,10 +99,20 @@ test('offline API exercises all result transports without calling external servi
     assert.equal(ab.breakdowns[0].groups[0].a_share,binary.option_breakdowns[0].groups[0].shares[0]);
     const cf=await api.counterfactual(branch.branch_id,{});
     assert.deepEqual(cf.baseline,cf.exposed);assert.equal(cf.delta,0);
+    const experiment=await api.compareScenarios(sim.main_branch,{question:'Fixture experiment',options:['Buy','Not buy'],scenarios:[{label:'Current',description:'Current price'},{label:'Change',description:'Higher price'}]});
+    assert.equal(experiment.n_agents,10000);
+    for(const s of experiment.scenarios) {
+      assert.equal(s.result.n_agents,10000);
+      assert.deepEqual(s.response_groups[0].agent_ids,agents.map(a=>a.id));
+    }
     const abort=new AbortController();abort.abort();
     await assert.rejects(api.poll(branch.branch_id,{},abort.signal));
     await api.deleteBranch(branch.branch_id);
-    assert.equal(requests.length,1);
-    assert.ok(requests[0].endsWith('/frontend/fixtures/evidence-demo.json'));
+    assert.equal(requests.length,2,'load only the manifest and the selected city, once each');
+    assert.ok(requests[0].endsWith('/frontend/fixtures/population-demo/manifest.json'));
+    assert.ok(requests[1].endsWith('/frontend/fixtures/population-demo/sf.json.gz'));
+    const other=await api.createSimulation({city:'neu_york'});
+    assert.equal((await api.getAllAgents(other.main_branch)).length,10000);
+    assert.equal(requests.length,3,'city switching lazily loads one more population');
   } finally {globalThis.fetch=previousFetch;globalThis.location=previousLocation;}
 });

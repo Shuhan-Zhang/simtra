@@ -101,6 +101,7 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(root))
         .route("/cities", get(list_cities))
         .route("/cities/:city/parse", post(parse_question_handler))
+        .route("/cities/:city/experiment-plan", post(experiment_plan_handler))
         .route("/cities/:city/stimulus", post(describe_stimulus_handler))
         .route("/cities/:city/news", get(city_news))
         .route("/cities/:city/locations", get(crate::locations::city_locations))
@@ -127,6 +128,8 @@ pub fn router(state: AppState) -> Router {
         .route("/prediction-results", get(prediction_results))
         .route("/branches/:bid/counterfactual", post(branch_counterfactual))
         .route("/branches/:bid/ab-test", post(branch_ab_test))
+        .route("/branches/:bid/research", post(branch_research))
+        .route("/branches/:bid/research/stream", post(branch_research_stream))
         .route("/branches/:bid/predict-market", post(predict_market))
         .route("/branches/:bid/stream", get(branch_stream))
         // Verified PUMS data queries. Same contract as `data_query::router`, plus the
@@ -924,6 +927,65 @@ async fn branch_chatter(
         .map(|(id, t)| (id.to_string(), Value::String(t)))
         .collect();
     Json(json!({ "chatter": map })).into_response()
+}
+
+async fn branch_research(
+    State(st): State<AppState>, Path(bid): Path<String>,
+    Json(req): Json<crate::research::ResearchRequest>,
+) -> axum::response::Response {
+    if let Err(message) = req.validate() {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error":message}))).into_response();
+    }
+    let Some((ctx, _)) = find_branch(&st, &bid) else {
+        return (StatusCode::NOT_FOUND, Json(json!({"error":"branch not found"}))).into_response();
+    };
+    let trace = crate::execution::Trace::new(None);
+    match research_execution(&st, &ctx, &req, &trace).await {
+        Ok(result) => Json(result).into_response(),
+        Err(error) => (StatusCode::BAD_GATEWAY, Json(error)).into_response(),
+    }
+}
+
+async fn research_execution(st: &AppState, ctx: &SimContext, req: &crate::research::ResearchRequest, trace: &crate::execution::Trace) -> Result<Value, Value> {
+    trace.scope(async {
+        let fixture = std::env::var("MODEL_FIXTURE").as_deref() == Ok("1");
+        trace.record("execution.mode", if fixture { "Local mock provider. These are test fixtures, not live predictions." } else { "Backend model pipeline. Cache hits and fresh provider requests are logged separately." }, json!({"fixture":fixture}));
+        match crate::research::compare(&st.engine, &ctx.population, req).await {
+            Ok(scenarios) => {
+                trace.record("research.completed", "All scenarios completed with full coverage. Ready to compare.", json!({"scenarios":scenarios.len()}));
+                Ok(json!({"scenarios":scenarios,"context_policy":"explicit_assumptions_only","n_agents":ctx.population.agents.len(),"fixture_mode":fixture,"trace":trace.snapshot()}))
+            }
+            Err(error) => {
+                let message = crate::execution::failure_message(&error);
+                trace.record("research.failed", message, json!({"partial_result_saved":false}));
+                Err(json!({"error":message,"trace":trace.snapshot()}))
+            }
+        }
+    }).await
+}
+
+/// NDJSON allows POST approval + real progress without storing public job logs.
+/// Dropping the response cancels the task; in-flight provider work may still finish.
+async fn branch_research_stream(
+    State(st): State<AppState>, Path(bid): Path<String>, Json(req): Json<crate::research::ResearchRequest>,
+) -> axum::response::Response {
+    use futures::StreamExt;
+    if let Err(message) = req.validate() { return (StatusCode::BAD_REQUEST, Json(json!({"error":message}))).into_response(); }
+    let Some((ctx, _)) = find_branch(&st, &bid) else { return (StatusCode::NOT_FOUND, Json(json!({"error":"branch not found"}))).into_response(); };
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel::<Value>();
+    let trace = crate::execution::Trace::new(Some(sender.clone()));
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = sender.closed() => { trace.record("research.cancelled", "Client disconnected; no further scenarios will be started.", json!({})); }
+            result = research_execution(&st, &ctx, &req, &trace) => {
+                let event = match result { Ok(data) => json!({"type":"result","data":data}), Err(data) => json!({"type":"error","error":data["error"],"trace":data["trace"]}) };
+                let _ = sender.send(event);
+            }
+        }
+    });
+    let stream = tokio_stream::wrappers::UnboundedReceiverStream::new(receiver)
+        .map(|event| Ok::<_, Infallible>(format!("{}\n", event)));
+    ([(axum::http::header::CONTENT_TYPE, "application/x-ndjson"), (axum::http::header::CACHE_CONTROL, "no-store")], axum::body::Body::from_stream(stream)).into_response()
 }
 
 async fn branch_poll(
@@ -1836,6 +1898,37 @@ async fn describe_stimulus_handler(
 
 /// Parse a free-text question into a pollable spec (framing + options), or return a
 /// "not supported" reason with example phrasings. One LLM call.
+async fn experiment_plan_handler(
+    State(st): State<AppState>,
+    Path(city): Path<String>,
+    Json(req): Json<Value>,
+) -> impl IntoResponse {
+    let question = req.get("question").and_then(Value::as_str).unwrap_or("").trim();
+    if question.is_empty() || question.len() > 2000 {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error":"Use a decision of 1 to 2,000 characters"}))).into_response();
+    }
+    let Some(runtime) = st.cities.get(&city) else {
+        return (StatusCode::NOT_FOUND, Json(json!({"error":"Unknown city"}))).into_response();
+    };
+    let trace = crate::execution::Trace::new(None);
+    if std::env::var("MODEL_FIXTURE").as_deref() == Ok("1") {
+        trace.record("execution.mode", "Local mock planner, not a live model proposal.", json!({"fixture":true}));
+    }
+    trace.record("plan.started", "Selecting an experiment recipe. No residents are being polled.", json!({"city":city}));
+    match trace.scope(crate::research::propose(&st.client, &runtime.profile, question)).await {
+        Ok(mut plan) => {
+            trace.record("plan.completed", "Experiment planned; no resident estimates computed yet.", json!({}));
+            plan["trace"] = trace.snapshot();
+            Json(plan).into_response()
+        },
+        Err(error) => {
+            let message = crate::execution::failure_message(&error);
+            trace.record("plan.failed", message, json!({}));
+            (StatusCode::BAD_GATEWAY, Json(json!({"error":message,"trace":trace.snapshot()}))).into_response()
+        }
+    }
+}
+
 async fn parse_question_handler(
     State(st): State<AppState>,
     Path(city): Path<String>,

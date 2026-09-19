@@ -475,7 +475,7 @@ function watchResultCard() {
   const card = document.getElementById("result-card");
   if (!card || typeof MutationObserver === "undefined") return;
   const apply = () => {
-    const visible = !card.classList.contains("hidden");
+    const visible = !card.classList.contains("hidden") || ["research-workspace", "evolution"].some(id => { const el = document.getElementById(id); return el && !el.hidden; });
     // the result card owns the map highlight while it is up
     if (visible) closeChart();
     if (visible && !state.collapsed) {
@@ -488,7 +488,9 @@ function watchResultCard() {
       applyCollapsed();
     }
   };
-  new MutationObserver(apply).observe(card, { attributes: true, attributeFilter: ["class"] });
+  const observer = new MutationObserver(apply);
+  observer.observe(card, { attributes: true, attributeFilter: ["class"] });
+  for (const id of ["research-workspace", "evolution"]) { const el = document.getElementById(id); if (el) observer.observe(el, { attributes: true, attributeFilter: ["hidden"] }); }
   apply();
 }
 

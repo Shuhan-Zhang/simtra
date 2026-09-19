@@ -41,3 +41,21 @@ test('Jev factors and offline results are labeled without mislabeling old result
   assert.equal(estimateLabel({model:'jev-1.13.0'}),'Jev model estimate');
   assert.match(estimateLabel({model:'jev-1.13.0',fixture_mode:true}),/not a live prediction/);
 });
+
+test('streaming comparisons restore a missing branch once and preserve workspace headers', async () => {
+  const {withSimulationRecovery} = await import('../src/simulation-recovery.js');
+  const original = globalThis.fetch, requests=[];
+  let branch='old';
+  globalThis.fetch=async(url,options)=>{
+    requests.push({url,headers:options.headers});
+    if(branch==='old')return new Response('{"error":"branch not found"}',{status:404});
+    return new Response(JSON.stringify({type:'result',data:{scenarios:[]}})+'\n',{headers:{'content-type':'application/x-ndjson'}});
+  };
+  try {
+    const result=await withSimulationRecovery({run:()=>api.compareScenarios(branch,{}),restore:async()=>{branch='restored';}});
+    assert.deepEqual(result,{scenarios:[]});assert.equal(requests.length,2);
+    assert.match(requests[1].url,/branches\/restored\/research\/stream$/);
+    assert.ok(requests[0].headers['X-Simtra-Workspace']);
+    assert.equal(requests[0].headers['X-Simtra-Workspace'],requests[1].headers['X-Simtra-Workspace']);
+  } finally {globalThis.fetch=original;}
+});

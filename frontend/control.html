@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Simtra · Control panel</title><link rel="stylesheet" href="control.css"></head>
+<body><main><header><div><p class="eyebrow">SIMTRA / DEVELOPER</p><h1>Control panel</h1></div><a href="./?pipeline=3">Back to town ↗</a></header>
+<p class="muted">Local diagnostics for this browser. Questions, approved designs and execution evidence—not hidden model reasoning or an administration endpoint.</p>
+<nav><label>Data source <select id="mode"><option value="live">Backend runs</option><option value="demo">Demo runs</option></select></label><button id="refresh">Refresh</button><span id="status" role="status"></span></nav>
+<div class="workspace"><aside id="runs" aria-label="Experiment runs"></aside><section id="detail" aria-label="Experiment diagnostics"><p>Select an experiment.</p></section></div>
+</main><script type="module" src="src/control-panel.js"></script></body></html>

@@ -31,6 +31,7 @@ import { initFeedPanel, refreshFeedPanel, lineageItems } from "./feedpanel.js?v=
 import { startTour } from "./tour.js?v=1";
 import { isFreshWorkspace } from "./workspace.js?v=2";
 import { prepareImage, stimulusText, attributesLine, MAX_STIMULI, esc as escStim } from "./stimulus.js?v=1";
+import { createResearchWorkspace } from "./research-workspace.js";
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -103,7 +104,7 @@ const show = (el) => el.classList.remove("hidden");
 const hide = (el) => el.classList.add("hidden");
 
 export const state = {
-  phase: "booting", queryMode: "simulation", askMode: "predict",
+  phase: "booting", queryMode: "simulation", askMode: "research",
   simId: null, mainBranch: null, branchId: null,
   lastResult: null, lastAbInput: null, lastMarketingInput: null, reqId: 0, abort: null,
   // images attached to the composer: [{thumb, media_type, data, stimulus, loading, filledText}]
@@ -122,6 +123,7 @@ export const state = {
 const SF_FALLBACK = { slug: "sf", display: "San Francisco", bbox: { ...MAP.bbox }, default: true };
 
 const citySlug = () => state.city?.slug || "sf";
+let research = null;
 
 function currentAudience() {
   return snapshotAudience({
@@ -220,9 +222,10 @@ map.onNeedChatter = requestChatter;
 const isBusy = () => state.phase === "waiting" || state.phase === "reveal";
 const inputOpen = () => els.ask.dataset.state === "input";
 
-const ASK_MODE_LABEL = { predict: "ask", ab: "A/B test", marketing: "post test" };
+const ASK_MODE_LABEL = { research: "ask", predict: "ask", ab: "A/B test", marketing: "post test" };
 const ASK_MODE_PLACEHOLDER = {
-  predict: "Would you try a new local service offering $5 off your first order?",
+  research: "What would you like to try?",
+  predict: "Ask a question — for choices, list options: bus, train, or bicycle",
   ab: "Which message makes you more likely to support this proposal?",
   marketing: "Do you support the proposed transit measure?",
 };
@@ -243,7 +246,7 @@ function setAskMode(mode) {
   els.abFields.hidden = mode !== "ab";
   els.marketingFields.hidden = mode !== "marketing";
   els.askInput.placeholder = ASK_MODE_PLACEHOLDER[mode];
-  els.askInput.setAttribute("aria-label", mode === "ab" ? "Evaluation question" : mode === "marketing" ? "Target question" : "Predict anything");
+  els.askInput.setAttribute("aria-label", mode === "research" ? "Decision to research" : mode === "ab" ? "Evaluation question" : mode === "marketing" ? "Target question" : "Predict anything");
   els.askError.textContent = "";
   if (els.ask.dataset.state !== "busy") setAsk(els.ask.dataset.state);
 }
@@ -452,6 +455,7 @@ function censusHint(dimension, key) {
 }
 // Map tap → the resident's group in the chart's active dimension.
 function selectEvidenceResident({ id, segments }) {
+  if (research?.showingResults) { research.inspect(id); return; }
   if (!chart.inst || state.phase !== "results") return;
   const dimension = chart.inst.dimension;
   const key = segments?.[dimension];
@@ -589,6 +593,9 @@ async function boot() {
 // Create (or re-create) the simulation for a city, point the map base/bbox at it,
 // load that city's agents and reset the overview. Shared by boot + the switcher.
 async function loadCity(city, { filters = state.filters, preserveOnError = false } = {}) {
+  const previous = { city: state.city, simId: state.simId, mainBranch: state.mainBranch,
+    rawResidents: state.rawResidents, filters: state.filters, residents: state.residents,
+    filterSourceRecords: state.filterSourceRecords, news: state.news };
   filters = normalizeFilters(filters);
   resetEvidence();
   state.rawResidents = [];
@@ -633,6 +640,7 @@ async function loadCity(city, { filters = state.filters, preserveOnError = false
     state.phase = "idle";
     setIdleStatus();
     syncFilterButton();
+    research?.audienceChanged();
     // let the bar finish, fade it out, then surface the news in its place (no overlap)
     setTimeout(() => { hide(els.boot); loadNews(city.slug); }, 450);
     refreshFeedPanel();              // branch is ready: enable posting
@@ -640,7 +648,9 @@ async function loadCity(city, { filters = state.filters, preserveOnError = false
   } catch (err) {
     console.error(err);
     hide(els.boot);
-    if (preserveOnError && state.simId && state.mainBranch) {
+    if (preserveOnError && previous.simId && previous.mainBranch) {
+      Object.assign(state, previous);
+      map.setAgents(previous.rawResidents);
       state.phase = "idle";
       setIdleStatus();
       syncFilterButton();
@@ -654,6 +664,7 @@ async function loadCity(city, { filters = state.filters, preserveOnError = false
     toast(!BASE ? BACKEND_SETUP_MESSAGE : "Couldn't reach the Jev backend — showing an offline preview.");
     state.phase = "error";
     syncFilterButton();
+    research?.audienceChanged();
     scheduleBackendRetry(city, filters);
     return null;
   }
@@ -936,6 +947,7 @@ async function applyPopulationFilters(filters) {
     setFilterBusy(false);
     syncActiveTitle();
     syncFilterButton();
+    research?.refresh();
   }
 }
 
@@ -978,6 +990,7 @@ els.filterClear.addEventListener("click", () => {
 
 async function onSelectCity(slug) {
   if (state.switching || slug === citySlug()) return;
+  research?.cancel();
   const city = state.cities.find((c) => c.slug === slug);
   if (!city) return;
 
@@ -1007,6 +1020,7 @@ async function onSelectCity(slug) {
     state.switching = false;
     syncActiveTitle();
     syncFilterButton();
+    research?.refresh();
   }
 }
 // keep the status text right-sized across orientation changes
@@ -1045,9 +1059,10 @@ function autoGrow() {
   }
 }
 
-function openInput({ mode = "predict", preserve = false } = {}) {
+function openInput({ mode = "research", preserve = false } = {}) {
   if (isBusy() || state.phase === "booting" || state.switching) return;
   if (state.queryMode !== "verified" && (state.phase === "error" || !state.simId)) { toast("Predictions need the backend — it's currently unreachable."); return; }
+  research?.suspend();
   cleanupBranch();
   map.clearVerdicts();
   closeCharCard();
@@ -1077,7 +1092,7 @@ function closeInput() {
   els.askError.textContent = "";
   setComposerBusy(false);
   clearStimuli();
-  setAskMode("predict");
+  setAskMode("research");
 }
 
 // While an A/B or post test runs, the composer's extra fields stay put but
@@ -1131,6 +1146,7 @@ function dismissResults() {
 }
 
 function cancelPrediction() {
+  if (research?.busy) { research.cancel(); return; }
   state.queryMode = "simulation";
   setComposerBusy(false);
   state.reqId++;
@@ -1268,6 +1284,7 @@ async function runPrediction(question) {
     return runAbTest();
   }
   if (looksLikeVerifiedQuestion(question)) return runVerifiedQuery(question);
+  if (state.askMode === "research" && !state.stimuli.length && /\b(pric\w*|rais\w*|increas\w*|launch\w*|open\w*|compar\w*|versus|vs|offer\w*)\b/i.test(question)) { research.openDecision(question); return; }
   state.queryMode = "simulation";
   if (state.phase === "error" || !state.simId) { toast("Predictions need the backend — it's currently unreachable."); return; }
 
@@ -2316,6 +2333,7 @@ function topIssues(v, n = 2) {
   return Object.keys(ISSUE_LABEL).map((k) => [ISSUE_LABEL[k], v[k] ?? 0]).sort((a, b) => b[1] - a[1]).slice(0, n).map((x) => x[0]);
 }
 function showCharCard(s) {
+  if (research?.showingResults) return;
   els.charCard.setAttribute("aria-label", "Resident details");
   if (!s || !s.name) return;                 // offline-preview agents have no persona
   const v = s.values || {};
@@ -2408,6 +2426,7 @@ document.addEventListener("keydown", (e) => {
   } else if (e.key === "Escape") {
     if (e.defaultPrevented) return;
     if (personaOpen()) { e.preventDefault(); closePersonaModal(); return; }
+    if (!filterOpen() && !aboutOpen() && research?.clearInspection()) { e.preventDefault(); return; }
     if (verified.selection.segments.length) { e.preventDefault(); clearEvidenceSelection(); return; }
     if (chart.inst?.hasSelection()) { e.preventDefault(); clearEvidenceSelection(); return; }
     if (!els.audienceCard.classList.contains("hidden")) { hideAudienceCard(); return; }
@@ -2443,6 +2462,26 @@ async function showAbDemo() {
     toast(`Couldn't load the A/B demo fixture: ${err.message}`);
   }
 }
+
+research = createResearchWorkspace({
+  map,
+  compareScenarios: (_branch, payload, signal, onProgress) => withCurrentSimulation(
+    () => api.compareScenarios(state.mainBranch, payload, signal, onProgress), signal),
+  getContext: () => ({ city: citySlug(), simId: state.simId, branch: state.mainBranch,
+    residents: state.rawResidents, audience: currentAudience(),
+    ready: !!state.mainBranch && !state.switching && !["booting", "error"].includes(state.phase),
+    unavailable: state.phase === "error" ? "The Jev backend is unavailable. Start the local server to run an experiment." : null,
+  }),
+  openFilters,
+  labelGroup: evidenceLabel,
+  prepare: () => { if (isBusy()) cancelPrediction(); cleanupBranch(); closeCharCard(); hide(els.resultCard); hide(els.summary); hideAudienceCard(); if (inputOpen()) closeInput(); },
+  setBusy: busy => { state.phase = busy ? "waiting" : "idle"; setComposerBusy(busy); syncFilterButton(); },
+  getPersona: (run, id) => !api.isDemo && run.simId === state.simId ? api.getAgentDetail(state.mainBranch, id) : null,
+  restoreAudience: async run => {
+    await applyPopulationFilters(run.audience.filters);
+    if (JSON.stringify(normalizeFilters(state.filters)) !== JSON.stringify(normalizeFilters(run.audience.filters))) throw new Error("Audience was not restored");
+  },
+});
 
 boot().then(() => {
   if (new URLSearchParams(location.search).get("abdemo")) showAbDemo();

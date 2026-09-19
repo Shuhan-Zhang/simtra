@@ -1,0 +1,896 @@
+{
+  "fixture_notice": "Seeded synthetic residents sampled from local Census/PUMS records. Outcomes are fixed loopback Jev fixture responses, not observed opinions or live predictions.",
+  "generator": {
+    "seed": 42,
+    "n": 10000,
+    "population": "all",
+    "method": "Unmodified backend sampler, paginated agents and weighted poll aggregation. Model requests only to a loopback mock; no external evaluations."
+  },
+  "cities": [
+    {
+      "city": {
+        "bbox": {
+          "east": -87.52,
+          "north": 42.02,
+          "south": 41.64,
+          "west": -87.85
+        },
+        "default": false,
+        "display": "Chicago",
+        "knowledge_date": "2026-06-15",
+        "n_pums": 38112,
+        "neighborhoods": [
+          {
+            "label": "NW suburbs: Palatine & Barrington",
+            "puma": 3101
+          },
+          {
+            "label": "NW suburbs: Hanover & Schaumburg (NW)",
+            "puma": 3102
+          },
+          {
+            "label": "NW suburbs: Schaumburg Twp (S & E)",
+            "puma": 3103
+          },
+          {
+            "label": "NW suburbs: Elk Grove & Wheeling (SW)",
+            "puma": 3104
+          },
+          {
+            "label": "North suburbs: Wheeling Twp (N & E)",
+            "puma": 3105
+          },
+          {
+            "label": "North Shore: Northfield & New Trier",
+            "puma": 3106
+          },
+          {
+            "label": "Evanston & Niles (East)",
+            "puma": 3107
+          },
+          {
+            "label": "Near NW suburbs: Maine & Niles (West)",
+            "puma": 3108
+          },
+          {
+            "label": "West suburbs: Leyden & Norwood Park Twps",
+            "puma": 3109
+          },
+          {
+            "label": "West suburbs: Proviso (N & W)",
+            "puma": 3110
+          },
+          {
+            "label": "Oak Park, Riverside & River Forest",
+            "puma": 3111
+          },
+          {
+            "label": "Cicero & Berwyn",
+            "puma": 3112
+          },
+          {
+            "label": "SW suburbs: Lyons & Stickney",
+            "puma": 3113
+          },
+          {
+            "label": "South suburbs: Worth & Calumet Twps",
+            "puma": 3114
+          },
+          {
+            "label": "SW suburbs: Palos, Lemont & Orland (N & W)",
+            "puma": 3115
+          },
+          {
+            "label": "South suburbs: Bremen & Orland (East)",
+            "puma": 3116
+          },
+          {
+            "label": "South suburbs: Thornton Twp",
+            "puma": 3117
+          },
+          {
+            "label": "Far south suburbs: Bloom & Rich Twps",
+            "puma": 3118
+          },
+          {
+            "label": "NW Side: Albany Park, Norwood Park & O'Hare",
+            "puma": 3151
+          },
+          {
+            "label": "North Side: West Ridge, Lincoln Square & North Center",
+            "puma": 3152
+          },
+          {
+            "label": "North Side: Uptown, Edgewater & Rogers Park",
+            "puma": 3153
+          },
+          {
+            "label": "Lake View & Lincoln Park",
+            "puma": 3154
+          },
+          {
+            "label": "NW Side: Logan Square, Irving Park & Avondale",
+            "puma": 3155
+          },
+          {
+            "label": "NW Side: Portage Park, Dunning & Jefferson Park",
+            "puma": 3156
+          },
+          {
+            "label": "West Side: Belmont Cragin, Humboldt Park & Hermosa",
+            "puma": 3157
+          },
+          {
+            "label": "West Side: Austin, North Lawndale & Garfield Park",
+            "puma": 3158
+          },
+          {
+            "label": "West Town & Near West Side",
+            "puma": 3159
+          },
+          {
+            "label": "Central: Near North Side, the Loop & Near South Side",
+            "puma": 3160
+          },
+          {
+            "label": "Mid-South: Hyde Park, Kenwood, Woodlawn & Bronzeville",
+            "puma": 3161
+          },
+          {
+            "label": "SW Side: Bridgeport, McKinley Park & Lower West Side",
+            "puma": 3162
+          },
+          {
+            "label": "SW Side: South Lawndale (Little Village), Brighton Park & Gage Park",
+            "puma": 3163
+          },
+          {
+            "label": "SW Side: Ashburn, Garfield Ridge & Clearing",
+            "puma": 3164
+          },
+          {
+            "label": "South Side: Chicago Lawn, Greater Grand Crossing & Englewood",
+            "puma": 3165
+          },
+          {
+            "label": "Far SW Side: Auburn Gresham, Morgan Park & Beverly",
+            "puma": 3166
+          },
+          {
+            "label": "Far South Side: Roseland, Chatham & West Pullman",
+            "puma": 3167
+          },
+          {
+            "label": "SE Side: South Shore, South Chicago & East Side",
+            "puma": 3168
+          }
+        ],
+        "prompt_name": "Chicago",
+        "slug": "cybercago"
+      },
+      "file": "cybercago.json.gz",
+      "n_agents": 10000,
+      "snapshot_sha256": "bf8b659f18d47504f99af8e1df2e3b427c4decd9cb075f5026be40731df516e2"
+    },
+    {
+      "city": {
+        "bbox": {
+          "east": -73.7,
+          "north": 40.92,
+          "south": 40.55,
+          "west": -74.05
+        },
+        "default": false,
+        "display": "New York City",
+        "knowledge_date": "2026-06-15",
+        "n_pums": 66390,
+        "neighborhoods": [
+          {
+            "label": "the Lower East Side / Chinatown",
+            "puma": 4103
+          },
+          {
+            "label": "Chelsea / Hell's Kitchen",
+            "puma": 4104
+          },
+          {
+            "label": "the Upper West Side",
+            "puma": 4107
+          },
+          {
+            "label": "the Upper East Side / Roosevelt Island",
+            "puma": 4108
+          },
+          {
+            "label": "Morningside / Hamilton Heights",
+            "puma": 4109
+          },
+          {
+            "label": "Harlem",
+            "puma": 4110
+          },
+          {
+            "label": "East Harlem",
+            "puma": 4111
+          },
+          {
+            "label": "Washington Heights / Inwood",
+            "puma": 4112
+          },
+          {
+            "label": "the Financial District / Greenwich Village",
+            "puma": 4121
+          },
+          {
+            "label": "Midtown / Flatiron",
+            "puma": 4165
+          },
+          {
+            "label": "Highbridge / Concourse (Bronx)",
+            "puma": 4204
+          },
+          {
+            "label": "Morris Heights / Mount Hope (Bronx)",
+            "puma": 4205
+          },
+          {
+            "label": "Fordham / Bedford Park / Norwood (Bronx)",
+            "puma": 4207
+          },
+          {
+            "label": "Riverdale / Kingsbridge (Bronx)",
+            "puma": 4208
+          },
+          {
+            "label": "Soundview / Parkchester (Bronx)",
+            "puma": 4209
+          },
+          {
+            "label": "Co-op City / Throgs Neck (Bronx)",
+            "puma": 4210
+          },
+          {
+            "label": "Pelham Parkway / Morris Park (Bronx)",
+            "puma": 4211
+          },
+          {
+            "label": "Williamsbridge / Wakefield / Eastchester (Bronx)",
+            "puma": 4212
+          },
+          {
+            "label": "Mott Haven / Hunts Point (Bronx)",
+            "puma": 4221
+          },
+          {
+            "label": "Morrisania / Tremont / Belmont (Bronx)",
+            "puma": 4263
+          },
+          {
+            "label": "Williamsburg / Greenpoint (Brooklyn)",
+            "puma": 4301
+          },
+          {
+            "label": "Brooklyn Heights / Fort Greene",
+            "puma": 4302
+          },
+          {
+            "label": "Bedford-Stuyvesant",
+            "puma": 4303
+          },
+          {
+            "label": "Bushwick",
+            "puma": 4304
+          },
+          {
+            "label": "East New York / Starrett City",
+            "puma": 4305
+          },
+          {
+            "label": "Park Slope / Carroll Gardens",
+            "puma": 4306
+          },
+          {
+            "label": "Sunset Park / Windsor Terrace",
+            "puma": 4307
+          },
+          {
+            "label": "Crown Heights North / Prospect Heights",
+            "puma": 4308
+          },
+          {
+            "label": "Crown Heights South / Wingate",
+            "puma": 4309
+          },
+          {
+            "label": "Bay Ridge / Dyker Heights",
+            "puma": 4310
+          },
+          {
+            "label": "Bensonhurst / Bath Beach",
+            "puma": 4311
+          },
+          {
+            "label": "Borough Park / Kensington",
+            "puma": 4312
+          },
+          {
+            "label": "Coney Island / Brighton Beach",
+            "puma": 4313
+          },
+          {
+            "label": "Flatbush / Midwood",
+            "puma": 4314
+          },
+          {
+            "label": "Sheepshead Bay / Gravesend",
+            "puma": 4315
+          },
+          {
+            "label": "Brownsville / Ocean Hill",
+            "puma": 4316
+          },
+          {
+            "label": "East Flatbush",
+            "puma": 4317
+          },
+          {
+            "label": "Canarsie / Flatlands",
+            "puma": 4318
+          },
+          {
+            "label": "Astoria / Long Island City (Queens)",
+            "puma": 4401
+          },
+          {
+            "label": "Sunnyside / Woodside (Queens)",
+            "puma": 4402
+          },
+          {
+            "label": "Jackson Heights / East Elmhurst (Queens)",
+            "puma": 4403
+          },
+          {
+            "label": "Elmhurst / Corona (Queens)",
+            "puma": 4404
+          },
+          {
+            "label": "Ridgewood / Maspeth / Middle Village (Queens)",
+            "puma": 4405
+          },
+          {
+            "label": "Rego Park / Forest Hills (Queens)",
+            "puma": 4406
+          },
+          {
+            "label": "Flushing / Whitestone (Queens)",
+            "puma": 4407
+          },
+          {
+            "label": "Bayside / Little Neck (Queens)",
+            "puma": 4408
+          },
+          {
+            "label": "Briarwood / Fresh Meadows (Queens)",
+            "puma": 4409
+          },
+          {
+            "label": "Richmond Hill / Woodhaven (Queens)",
+            "puma": 4410
+          },
+          {
+            "label": "Howard Beach / Ozone Park (Queens)",
+            "puma": 4411
+          },
+          {
+            "label": "Jamaica / St. Albans / Hollis (Queens)",
+            "puma": 4412
+          },
+          {
+            "label": "Queens Village / Cambria Heights (Queens)",
+            "puma": 4413
+          },
+          {
+            "label": "the Rockaways / Broad Channel (Queens)",
+            "puma": 4414
+          },
+          {
+            "label": "the North Shore (Staten Island)",
+            "puma": 4501
+          },
+          {
+            "label": "Mid-Island (Staten Island)",
+            "puma": 4502
+          },
+          {
+            "label": "the South Shore (Staten Island)",
+            "puma": 4503
+          }
+        ],
+        "prompt_name": "New York City",
+        "slug": "neu_york"
+      },
+      "file": "neu_york.json.gz",
+      "n_agents": 10000,
+      "snapshot_sha256": "e20dbaa85be6ffe75eb1353a9287143e0e22f2f71e7695f1ce7c7984289fe7f9"
+    },
+    {
+      "city": {
+        "bbox": {
+          "east": -122.3366,
+          "north": 37.8312,
+          "south": 37.6983,
+          "west": -122.5247
+        },
+        "default": true,
+        "display": "San Francisco",
+        "knowledge_date": "2026-06-15",
+        "n_pums": 8485,
+        "neighborhoods": [
+          {
+            "label": "Bayview / Hunters Point",
+            "puma": 7507
+          },
+          {
+            "label": "the Richmond / Presidio",
+            "puma": 7508
+          },
+          {
+            "label": "Chinatown / North Beach / Russian Hill",
+            "puma": 7509
+          },
+          {
+            "label": "SoMa / the Mission",
+            "puma": 7510
+          },
+          {
+            "label": "Bernal Heights / the central city",
+            "puma": 7511
+          },
+          {
+            "label": "the Sunset",
+            "puma": 7512
+          },
+          {
+            "label": "Ingleside / Oceanview",
+            "puma": 7513
+          },
+          {
+            "label": "the Marina / Western Addition",
+            "puma": 7514
+          }
+        ],
+        "prompt_name": "San Francisco",
+        "slug": "sf"
+      },
+      "file": "sf.json.gz",
+      "n_agents": 10000,
+      "snapshot_sha256": "c03001977cb1aa798d78ede9f1a36ed1e27aff1d644d0691870f2f01d2308f02"
+    },
+    {
+      "city": {
+        "bbox": {
+          "east": -80.1,
+          "north": 25.93,
+          "south": 25.62,
+          "west": -80.33
+        },
+        "default": false,
+        "display": "Miami",
+        "knowledge_date": "2026-06-15",
+        "n_pums": 27453,
+        "neighborhoods": [
+          {
+            "label": "Miami Lakes / Country Club (North Central)",
+            "puma": 8601
+          },
+          {
+            "label": "Miami Gardens",
+            "puma": 8602
+          },
+          {
+            "label": "Greater North Miami Beach (West)",
+            "puma": 8603
+          },
+          {
+            "label": "Aventura / Sunny Isles Beach / North Miami Beach (East)",
+            "puma": 8604
+          },
+          {
+            "label": "North Miami / Miami Shores / Biscayne Park",
+            "puma": 8605
+          },
+          {
+            "label": "Opa-locka / West Little River / Brownsville",
+            "puma": 8606
+          },
+          {
+            "label": "Hialeah (North)",
+            "puma": 8607
+          },
+          {
+            "label": "Sweetwater / Fontainebleau",
+            "puma": 8608
+          },
+          {
+            "label": "Hialeah (South)",
+            "puma": 8609
+          },
+          {
+            "label": "MIA Airport / Miami Springs / Doral",
+            "puma": 8610
+          },
+          {
+            "label": "Miami City (North) / Little Haiti / Liberty City",
+            "puma": 8611
+          },
+          {
+            "label": "Miami Beach / Surfside / Bay Harbor Islands",
+            "puma": 8612
+          },
+          {
+            "label": "Downtown Miami / Brickell / Edgewater (CBD)",
+            "puma": 8613
+          },
+          {
+            "label": "Miami City (South) / Coconut Grove / Key Biscayne",
+            "puma": 8614
+          },
+          {
+            "label": "Miami City (West) / Little Havana / Flagami",
+            "puma": 8615
+          },
+          {
+            "label": "Coral Gables / Pinecrest / Kendall (South)",
+            "puma": 8616
+          },
+          {
+            "label": "South Miami / Westchester / Coral Terrace",
+            "puma": 8617
+          },
+          {
+            "label": "Tamiami Trail Region (South) / Tamiami",
+            "puma": 8618
+          },
+          {
+            "label": "Kendale Lakes (SW) / Kendall West (South)",
+            "puma": 8619
+          },
+          {
+            "label": "Kendall (North) / Sunset / Westwood Lakes",
+            "puma": 8620
+          },
+          {
+            "label": "The Hammocks / Richmond West / Country Walk",
+            "puma": 8621
+          },
+          {
+            "label": "South Miami Heights",
+            "puma": 8622
+          },
+          {
+            "label": "Cutler Bay / Palmetto Bay",
+            "puma": 8623
+          },
+          {
+            "label": "Homestead (North) / Florida City (North)",
+            "puma": 8624
+          },
+          {
+            "label": "South Dade rural (outside UDB) / Florida Keys (Monroe)",
+            "puma": 8625
+          }
+        ],
+        "prompt_name": "Miami",
+        "slug": "simami"
+      },
+      "file": "simami.json.gz",
+      "n_agents": 10000,
+      "snapshot_sha256": "92b045b902894802eab5c78296f460d2ce0b0377c694a39ccafb24821bb115d9"
+    },
+    {
+      "city": {
+        "bbox": {
+          "east": -118.16,
+          "north": 34.25,
+          "south": 33.93,
+          "west": -118.62
+        },
+        "default": false,
+        "display": "Los Angeles",
+        "knowledge_date": "2026-06-15",
+        "n_pums": 97674,
+        "neighborhoods": [
+          {
+            "label": "Lancaster (Antelope Valley)",
+            "puma": 3703
+          },
+          {
+            "label": "Palmdale (Antelope Valley)",
+            "puma": 3704
+          },
+          {
+            "label": "Chatsworth / Porter Ranch (NW Valley)",
+            "puma": 3705
+          },
+          {
+            "label": "Granada Hills / Sylmar",
+            "puma": 3706
+          },
+          {
+            "label": "Arleta / Pacoima / San Fernando",
+            "puma": 3707
+          },
+          {
+            "label": "Sunland / Sun Valley / Tujunga",
+            "puma": 3708
+          },
+          {
+            "label": "North San Gabriel Valley",
+            "puma": 3709
+          },
+          {
+            "label": "Baldwin Park / Azusa / Duarte",
+            "puma": 3710
+          },
+          {
+            "label": "Glendora / Claremont / San Dimas",
+            "puma": 3711
+          },
+          {
+            "label": "Pomona",
+            "puma": 3712
+          },
+          {
+            "label": "Covina / Walnut",
+            "puma": 3713
+          },
+          {
+            "label": "Diamond Bar / Rowland Heights",
+            "puma": 3714
+          },
+          {
+            "label": "West Covina",
+            "puma": 3715
+          },
+          {
+            "label": "La Puente / Industry",
+            "puma": 3716
+          },
+          {
+            "label": "Arcadia / San Gabriel / Temple City",
+            "puma": 3717
+          },
+          {
+            "label": "Pasadena",
+            "puma": 3718
+          },
+          {
+            "label": "Glendale",
+            "puma": 3719
+          },
+          {
+            "label": "Burbank",
+            "puma": 3720
+          },
+          {
+            "label": "North Hollywood / Valley Village",
+            "puma": 3721
+          },
+          {
+            "label": "Van Nuys / Sherman Oaks",
+            "puma": 3722
+          },
+          {
+            "label": "Mission Hills / Panorama City",
+            "puma": 3723
+          },
+          {
+            "label": "Encino / Tarzana",
+            "puma": 3724
+          },
+          {
+            "label": "Canoga Park / Woodland Hills",
+            "puma": 3725
+          },
+          {
+            "label": "Santa Monica",
+            "puma": 3728
+          },
+          {
+            "label": "Hancock Park / Mid-Wilshire",
+            "puma": 3730
+          },
+          {
+            "label": "West Hollywood / Beverly Hills",
+            "puma": 3731
+          },
+          {
+            "label": "Hollywood",
+            "puma": 3732
+          },
+          {
+            "label": "Koreatown",
+            "puma": 3733
+          },
+          {
+            "label": "Silver Lake / Echo Park / Westlake",
+            "puma": 3734
+          },
+          {
+            "label": "Highland Park / Mount Washington",
+            "puma": 3735
+          },
+          {
+            "label": "Alhambra / South Pasadena",
+            "puma": 3736
+          },
+          {
+            "label": "Monterey Park / Rosemead",
+            "puma": 3737
+          },
+          {
+            "label": "El Monte / South El Monte",
+            "puma": 3738
+          },
+          {
+            "label": "Whittier / Hacienda Heights",
+            "puma": 3739
+          },
+          {
+            "label": "Pico Rivera / Montebello",
+            "puma": 3740
+          },
+          {
+            "label": "Bell / Maywood / Cudahy / Commerce",
+            "puma": 3741
+          },
+          {
+            "label": "Huntington Park / Florence-Graham",
+            "puma": 3742
+          },
+          {
+            "label": "East Los Angeles",
+            "puma": 3743
+          },
+          {
+            "label": "Downtown / Boyle Heights",
+            "puma": 3744
+          },
+          {
+            "label": "East Vernon (South Central)",
+            "puma": 3745
+          },
+          {
+            "label": "USC / Exposition Park",
+            "puma": 3746
+          },
+          {
+            "label": "West Adams / Baldwin Hills",
+            "puma": 3747
+          },
+          {
+            "label": "Marina del Rey / Westchester / Culver City",
+            "puma": 3748
+          },
+          {
+            "label": "Westmont (South Central)",
+            "puma": 3750
+          },
+          {
+            "label": "Watts (South Central)",
+            "puma": 3751
+          },
+          {
+            "label": "South Gate / Lynwood",
+            "puma": 3752
+          },
+          {
+            "label": "Downey",
+            "puma": 3753
+          },
+          {
+            "label": "La Mirada / Santa Fe Springs",
+            "puma": 3754
+          },
+          {
+            "label": "Compton",
+            "puma": 3757
+          },
+          {
+            "label": "Gardena / Lawndale / West Athens",
+            "puma": 3758
+          },
+          {
+            "label": "Hawthorne",
+            "puma": 3759
+          },
+          {
+            "label": "Redondo / Manhattan / Hermosa Beach",
+            "puma": 3760
+          },
+          {
+            "label": "Torrance",
+            "puma": 3761
+          },
+          {
+            "label": "Carson",
+            "puma": 3762
+          },
+          {
+            "label": "North Long Beach",
+            "puma": 3763
+          },
+          {
+            "label": "Lakewood / Cerritos / Artesia",
+            "puma": 3764
+          },
+          {
+            "label": "SW Long Beach / Port",
+            "puma": 3766
+          },
+          {
+            "label": "San Pedro",
+            "puma": 3767
+          },
+          {
+            "label": "Palos Verdes Peninsula",
+            "puma": 3768
+          },
+          {
+            "label": "West LA / Century City / Palms",
+            "puma": 3770
+          },
+          {
+            "label": "Santa Clarita (South)",
+            "puma": 3771
+          },
+          {
+            "label": "Castaic (North/Unincorporated)",
+            "puma": 3772
+          },
+          {
+            "label": "Santa Clarita (North)",
+            "puma": 3773
+          },
+          {
+            "label": "Calabasas / Agoura Hills / Malibu",
+            "puma": 3774
+          },
+          {
+            "label": "Downtown LA (Central / Financial District)",
+            "puma": 3775
+          },
+          {
+            "label": "Westwood / West Los Angeles",
+            "puma": 3776
+          },
+          {
+            "label": "Inglewood",
+            "puma": 3778
+          },
+          {
+            "label": "East Long Beach",
+            "puma": 3779
+          },
+          {
+            "label": "Central Long Beach / Signal Hill",
+            "puma": 3780
+          },
+          {
+            "label": "Norwalk",
+            "puma": 3781
+          },
+          {
+            "label": "Bellflower / Paramount",
+            "puma": 3782
+          }
+        ],
+        "prompt_name": "Los Angeles",
+        "slug": "synth_la"
+      },
+      "file": "synth_la.json.gz",
+      "n_agents": 10000,
+      "snapshot_sha256": "4f2ba6d7256813a2de6e8eee2430509f3528fe8bf5268f81581555524b2d8537"
+    }
+  ]
+}
