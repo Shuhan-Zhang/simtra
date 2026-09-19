@@ -43,9 +43,9 @@ export function autoPlan(question, route) {
   const budget=/\b(budget|have|spend|fund|capital)\b/i.test(question)?budgetFrom(question):null;
   return {version:3,decision:question.trim(),kind:route.kind,business,
     measure:route.measure==="repeat"&&commercial?"frequency":route.measure==="support"&&!commercial?"support":"intent",
-    priceMode:route.kind==="price" && matched && !explicitRange?"relative":"absolute",priceRange:explicitRange || [10,20],priceSuggested:!explicitRange,percent,
+    priceMode:route.kind==="price" && !explicitRange?"relative":"absolute",priceRange:explicitRange || [10,20],priceSuggested:!explicitRange,percent,
     locations,availableLocations:[...new Set([...(route.available_locations || []),...locations])],
-    context:structuredClone(contexts[business]),budget,alternatives:explicitAlternatives(question)};
+    context:{...structuredClone(contexts[business]),...(/\bbowls?\b/i.test(question)?{item:"one consistent bowl"}:{})},budget,alternatives:explicitAlternatives(question)};
 }
 export function explicitAlternatives(question) {
   const text=question.match(/:\s*(.+?)[?.]?$/)?.[1]; if(!text)return [];
@@ -67,11 +67,11 @@ export function compilePlan(plan) {
     const values=plan.priceMode==="absolute"?sweep(...plan.priceRange):sweep(0,plan.percent);
     exp.priceMode=plan.priceMode;exp.priceAxis=plan.priceMode==="relative"?"Price change":plan.context.price;
     exp.factors=[{id:"location",label:"Location",levels:plan.locations},{id:"price",label:exp.priceAxis,levels:values.map(v=>priceLabel(v,plan.priceMode))},{id:"format",label:plan.context.factor,levels:plan.context.values}];
-    if(plan.business==="restaurant"&&plan.measure==="intent")exp.question="Would you buy a meal from this restaurant at the scenario's price at least once in the next 30 days?";
+    if(plan.business==="restaurant"&&plan.measure==="intent")exp.question=`Would you buy ${plan.context.item.replace("one consistent", "a")} from this restaurant at the scenario's price at least once in the next 30 days?`;
     exp.assumptions+=` ${plan.context.premise} Same brand, selection, portion, quality, competing offers and awareness. Vary only location, price and ${plan.context.factor.toLowerCase()}. Compare ${plan.context.item}. No introductory discounts or incentive caps. `;
     exp.assumptions+=plan.priceMode==="relative"?"Prices are relative to an unknown current price. No absolute menu price is assumed.":`Test price per ${plan.context.item} includes any service/delivery charge, excludes tax, and is an unverified hypothesis, not an existing menu price.`;
     if(plan.budget!=null)exp.assumptions+=` User-stated budget: $${plan.budget}. No budget allocation, redemption capacity, operating costs or feasibility are inferred from it.`;
-    exp.assumptions+=" Locations are coarse areas, not verified premises. All areas use the same city-wide audience, not separate local demand samples. News, retrieved market data and prior experiments are excluded.";
+    exp.assumptions+=" Locations are coarse areas, not verified premises. All areas use the same city-wide audience, not separate local demand samples. Unspecified news and prior experiments are excluded. Any attached research context is held fixed across scenarios.";
     exp.scenarios=plan.locations.flatMap(location=>plan.context.values.flatMap(format=>values.map(value=>({
       label:`${location} · ${priceLabel(value,plan.priceMode)} · ${format}`,location,format,price:plan.priceMode==="absolute"?value:undefined,change:plan.priceMode==="relative"?value:undefined,
       description:`Business exactly as described in the decision. Location: ${location}. ${plan.context.factor}: ${format}. ${plan.priceMode==="relative"?`Price: ${value===0?"unchanged current price":`${Math.abs(value)}% ${value<0?"below":"above"} the current price`}.`:`Price of ${plan.context.item}: $${value}, including any fulfillment charge and before tax.`} Everything other than these three factors remains constant.`

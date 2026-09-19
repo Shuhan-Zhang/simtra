@@ -13,7 +13,7 @@ import { initEvolution } from "./evolution.js?v=3";
 import { SIM, PREDICT, TIMING, MAP, BASE, BACKEND_SETUP_MESSAGE } from "./config.js";
 import { prepareHelpfulAudience, researchReference } from "./automatic-audience.js";
 import { personaResearchUI, renderResearchSummary } from "./persona-research.js";
-import { rationaleLabel, estimateLabel } from "./model-display.js";
+import { rationaleLabel, estimateLabel, factorText } from "./model-display.js";
 import { SFMap } from "./map.js";
 import { assignVerdicts } from "./verdict.js";
 import {
@@ -30,7 +30,7 @@ import { snapshotAudience, describeAudience, audienceHeader, audienceScope } fro
 import { initFeedPanel, refreshFeedPanel, lineageItems } from "./feedpanel.js?v=18";
 import { startTour } from "./tour.js?v=1";
 import { isFreshWorkspace } from "./workspace.js?v=2";
-import { prepareImage, stimulusText, attributesLine, MAX_STIMULI, esc as escStim } from "./stimulus.js?v=1";
+import { attributesLine, esc as escStim } from "./stimulus.js?v=1";
 import { createResearchWorkspace } from "./research-workspace.js";
 
 const $ = (id) => document.getElementById(id);
@@ -62,9 +62,6 @@ const els = {
   askExtra: document.querySelector(".ask-extra"),
   askModes: document.querySelector(".ask-modes"),
   askError: $("ask-error"),
-  askAttach: $("ask-attach"),
-  askFile: $("ask-file"),
-  stimulusStrip: $("stimulus-strip"),
   abFields: $("ab-fields"),
   abA: $("ab-a"),
   abB: $("ab-b"),
@@ -124,6 +121,7 @@ const SF_FALLBACK = { slug: "sf", display: "San Francisco", bbox: { ...MAP.bbox 
 
 const citySlug = () => state.city?.slug || "sf";
 let research = null;
+let evolution = null;
 
 function currentAudience() {
   return snapshotAudience({
@@ -206,18 +204,17 @@ function syncFilterButton() {
   els.returnBtn.setAttribute("aria-label", count ? "Return to the sampled audience overview" : "Return to the whole city");
 }
 
-// fetch LLM chatter for the residents now on screen (sparse, batched, best-effort)
+// Sparse, cached resident voices are returned with exact resident IDs.
 async function requestChatter(ids) {
   if (state.queryMode === "verified" || !state.mainBranch || !ids?.length) return;
-  const branch = state.mainBranch;
+  const branch=state.mainBranch;
   try {
-    const data = await api.getChatter(branch, ids);
-    if (branch !== state.mainBranch) return;            // city swapped mid-flight — drop it
-    const ch = data?.chatter || {};
-    for (const [id, text] of Object.entries(ch)) map.setThought(Number(id), text);
-  } catch { /* best-effort: residents keep their neutral fallback thought */ }
+    const data=await api.getChatter(branch,ids);
+    if(branch!==state.mainBranch)return;
+    for(const [id,text] of Object.entries(data?.chatter || {})) map.setThought(Number(id),text);
+  } catch { /* No invented voice replaces a failed provider response. */ }
 }
-map.onNeedChatter = requestChatter;
+map.onNeedChatter=requestChatter;
 
 const isBusy = () => state.phase === "waiting" || state.phase === "reveal";
 const inputOpen = () => els.ask.dataset.state === "input";
@@ -479,8 +476,9 @@ async function openPersonaModal(resident, answer, ctx = {}) {
       <canvas class="persona-portrait" width="72" height="72"></canvas>
       <div><div class="persona-name">${escapeHtml(resident.name || `Resident ${resident.id}`)}</div><div class="persona-sub">${escapeHtml(sub)}</div></div>
     </div>
-    ${a ? `<div class="persona-answer"><b>${escapeHtml(a.text)}</b>${ctx.question ? ` · ${escapeHtml(ctx.question)}` : ""}${answer?.why ? `<br>“${escapeHtml(answer.why)}”` : ""}<span class="pc-archetype">${ctx.personal ? "their own answer" : "archetype view"}</span></div>` : ""}
-    <div class="persona-section persona-loading">Loading their story…</div>`;
+    ${a ? `<div class="persona-answer"><b>${escapeHtml(a.text)}</b>${ctx.question ? ` · ${escapeHtml(ctx.question)}` : ""}${answer?.why ? `<br>Factor: ${escapeHtml(factorText(answer.why))}` : ""}<span class="pc-archetype">Modeled demographic-group response</span></div>` : ""}
+    ${ctx.thought?`<div class="persona-section"><div class="res-why-label">Current thought</div><p>${escapeHtml(ctx.thought)}</p></div>`:""}
+    <p class="pc-note">Synthetic persona built from Census demographics. Group responses are modeled, not individual interviews.</p><div class="persona-section persona-loading">Loading their profile…</div>`;
   show(personaEls.modal); show(personaEls.scrim);
   map.drawCharTo(personaEls.body.querySelector(".persona-portrait"), map.charOf(resident.id));
   personaEls.close.focus({ preventScroll: true });
@@ -537,7 +535,7 @@ function setBoot(p) { els.bootFill.style.width = `${Math.round(Math.max(0, Math.
 async function boot() {
   map.onZoomChange = (zoomedIn) => { zoomedIn ? show(els.returnBtn) : hide(els.returnBtn); };
   map.start();
-  const evolution = initEvolution({map, getBranch:()=>state.mainBranch, getCity:citySlug, isReady:()=>!!state.mainBranch && !state.switching && !api.isDemo && !isBusy() && state.phase!=="booting"});
+  evolution = initEvolution({map, getBranch:()=>state.mainBranch, getCity:citySlug, isReady:()=>!!state.mainBranch && !state.switching && !api.isDemo && !isBusy() && state.phase!=="booting"});
   initFeedPanel({
     onScenario: text => evolution.start(text),
     getCity: citySlug,
@@ -598,9 +596,11 @@ async function loadCity(city, { filters = state.filters, preserveOnError = false
     filterSourceRecords: state.filterSourceRecords, news: state.news };
   filters = normalizeFilters(filters);
   resetEvidence();
+  state.phase = "booting";
+  setComposerBusy(true);
   state.rawResidents = [];
   state.city = city;
-  void locationContext.load(city.slug);
+  if (!$("location-context").hidden) void locationContext.load(city.slug);
   // Committed local tiles supply dimensions and shoreline masks without a live source call.
   const maskBase = `assets/${city.slug}_tiles.png`;
   if (city.bbox) MAP.bbox = { ...city.bbox };
@@ -638,6 +638,7 @@ async function loadCity(city, { filters = state.filters, preserveOnError = false
     map.setSim(city.slug, state.mainBranch);     // scope ambient chatter to this city + branch
     setBoot(1);
     state.phase = "idle";
+    setComposerBusy(false);
     setIdleStatus();
     syncFilterButton();
     research?.audienceChanged();
@@ -647,6 +648,7 @@ async function loadCity(city, { filters = state.filters, preserveOnError = false
     return sim;
   } catch (err) {
     console.error(err);
+    setComposerBusy(false);
     hide(els.boot);
     if (preserveOnError && previous.simId && previous.mainBranch) {
       Object.assign(state, previous);
@@ -1101,7 +1103,6 @@ function setComposerBusy(busy) {
   els.ask.setAttribute("aria-busy", busy ? "true" : "false");
   for (const f of [els.askInput, els.abA, els.abB, els.marketingCopy]) f.disabled = busy;
   els.askSubmit.disabled = busy;
-  els.askAttach.disabled = busy;
 }
 
 
@@ -1272,7 +1273,7 @@ async function prepareQuestionAudience(question, signal, commercial = false) {
 }
 
 async function runPrediction(question) {
-  if (isBusy() || state.switching) return;
+  if (isBusy() || state.switching || state.phase === "booting") return;
   question = (question || "").trim();
   if (!question) return;
   if (state.askMode === "ab") return runAbTest();
@@ -1353,7 +1354,6 @@ async function runPrediction(question) {
     // p_yes drives the on-map green/red reveal for both paths; for options it is the
     // winning option's share, so the crowd still visualizes the result's strength.
     const verdicts = assignVerdicts(map.agents, result.p_yes, pollQuestion, map.proj.planarSize);
-    map.setRationales(result.sample_rationales);   // labeled factor templates → thought bubbles
     els.progress.classList.remove("indeterminate");
     els.progressLabel.textContent = `0 / ${map.agents.length.toLocaleString()} responses`;
     map.onProgress = onRevealProgress;
@@ -1491,7 +1491,6 @@ async function runMarketingTest() {
     state.lastResult = { ...result, kind: "marketing", framing: parsed.framing, question: pollQuestion, audience, research_panel: researchReference(researchPanel), audience_research: researchPanel };
     const exposed = result.exposed || {};
     const verdicts = assignVerdicts(map.agents, exposed.p_yes, `${pollQuestion}\n${input.marketingText}`, map.proj.planarSize);
-    map.setRationales(exposed.sample_rationales || []);
     els.progress.classList.remove("indeterminate");
     els.progressLabel.textContent = `0 / ${map.agents.length.toLocaleString()} exposed responses`;
     map.onProgress = onRevealProgress;
@@ -1581,7 +1580,6 @@ async function runAbTest() {
     state.lastResult = { ...result, audience, stimuli, research_panel: researchReference(researchPanel), audience_research: researchPanel };
     setTimeout(() => refreshFeedPanel({ quiet: true }), 1500); // the A/B test is now a post in the feed
     const verdicts = assignVerdicts(map.agents, result.a_share, input.question, map.proj.planarSize);
-    map.setRationales(result.sample_rationales || []);
     els.progress.classList.remove("indeterminate");
     els.progressLabel.textContent = `0 / ${map.agents.length.toLocaleString()} responses`;
     map.onProgress = onRevealProgress;
@@ -1678,7 +1676,7 @@ function showMarketingResults(result) {
     ${hydraMeta(exposed)}
     ${renderResearchSummary(result.audience_research)}
     <div class="res-cf-note">Model-based comparison under simulated exposure of every sampled resident to the planned copy—not an estimate of organic reach. Each arm has its own 95% CI; no separate CI was estimated for the delta, so treat small shifts cautiously.</div>
-    ${rationales.length ? `<div class="res-why"><div class="res-why-label">${rationaleLabel(rationales, true)}</div><ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul></div>` : ""}
+    ${rationales.length ? `<div class="res-why"><div class="res-why-label">${rationaleLabel(rationales, true)}</div><ul>${rationales.map((r) => `<li>${escapeHtml(factorText(r))}</li>`).join("")}</ul></div>` : ""}
     <div class="res-actions"><button id="res-edit-marketing" class="btn btn-primary">Edit test</button><button id="res-dismiss" class="btn">Dismiss</button></div>`;
   showResultCard();
   attachEvidence(exposed);
@@ -1746,7 +1744,7 @@ function showResults(result) {
       ${breakdowns.length ? abAdvancedSection({ a_share: yesShare }, segments, breakdowns) : ""}
       ${rationales.length ? `<div class="res-why">
         <div class="res-why-label">${rationaleLabel(rationales)}</div>
-        <ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>
+        <ul>${rationales.map((r) => `<li>${escapeHtml(factorText(r))}</li>`).join("")}</ul>
       </div>` : ""}
       <div class="res-actions">
         <button id="res-again" class="btn btn-primary">Ask another</button>
@@ -1811,7 +1809,7 @@ function showOptionResults(result) {
       ${renderResearchSummary(result.audience_research)}
     ${rationales.length ? `<div class="res-why">
       <div class="res-why-label">${rationaleLabel(rationales)}</div>
-      <ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>
+      <ul>${rationales.map((r) => `<li>${escapeHtml(factorText(r))}</li>`).join("")}</ul>
     </div>` : ""}
     ${RESULT_ACTIONS}
   `;
@@ -2093,7 +2091,7 @@ function showAbResults(result) {
       ${hydraMeta(result)}
       ${renderResearchSummary(result.audience_research)}
       ${breakdowns.length ? abAdvancedSection(result, segments, breakdowns) : ""}
-      ${rationales.length ? `<div class="res-why"><div class="res-why-label">${rationaleLabel(rationales)}</div><ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul></div>` : ""}
+      ${rationales.length ? `<div class="res-why"><div class="res-why-label">${rationaleLabel(rationales)}</div><ul>${rationales.map((r) => `<li>${escapeHtml(factorText(r))}</li>`).join("")}</ul></div>` : ""}
       <p class="ab-note">Simulated, PUMS-weighted preference under full exposure. Segment and cross-tab figures are model estimates with no per-group significance test — read them as direction, not proof. Not causal proof or organic reach.</p>
       <div class="res-actions"><button id="res-edit-ab" class="btn btn-primary">Edit test</button><button id="res-dismiss" class="btn">Dismiss</button></div>`;
     attachEvidence(result, true);
@@ -2191,97 +2189,9 @@ els.ask.addEventListener("keydown", (event) => {
 });
 
 // multiline composer: Enter submits, Shift+Enter inserts a newline
-// ── image stimuli (drop / paste / attach) ───────────────────────────────────
-// Each image becomes editable "what Simtra saw" chips; only the confirmed chips
-// reach residents. One image → predict; two → A/B with the variants prefilled.
-function clearStimuli() {
-  state.stimuli = [];
-  renderStimulusStrip();
-  els.askFile.value = "";
-}
-
-function renderStimulusStrip() {
-  const list = state.stimuli;
-  els.askAttach.dataset.count = String(list.length);
-  els.stimulusStrip.hidden = list.length === 0;
-  els.stimulusStrip.replaceChildren();
-  list.forEach((item, i) => {
-    const card = document.createElement("div");
-    card.className = "stim-card" + (item.loading ? " is-loading" : "");
-    const label = list.length > 1 ? `${"AB"[i]} · ` : "";
-    const head = item.loading ? "reading the image…" : item.error ? `couldn't read it — ${item.error}` : `${label}what Simtra saw`;
-    card.innerHTML = `<img class="stim-thumb" src="${item.thumb}" alt=""><div><div class="stim-head"><span class="stim-kicker">${escStim(head)}</span><button type="button" class="stim-remove" aria-label="Remove image" title="Remove image">×</button></div><div class="stim-summary">${escStim(item.stimulus?.summary || "")}</div><div class="stim-attrs">${escStim(attributesLine(item.stimulus))}</div></div>`;
-    card.querySelector(".stim-remove").addEventListener("click", () => { state.stimuli.splice(i, 1); renderStimulusStrip(); syncStimuliToComposer(); });
-    els.stimulusStrip.appendChild(card);
-  });
-  autoGrow();
-}
-
-// Keep the composer coherent with the attached images: two images switch to A/B
-// with the variants written from the chips (still editable text).
-function syncStimuliToComposer() {
-  if (state.stimuli.length >= 2 && state.askMode !== "ab") setAskMode("ab");
-  fillVariantsFromStimuli();
-}
-function fillVariantsFromStimuli() {
-  [els.abA, els.abB].forEach((field, i) => {
-    const item = state.stimuli[i];
-    if (!item?.stimulus) return;
-    const text = stimulusText(item.stimulus);
-    // don't clobber a variant the user has already hand-edited
-    if (!field.value.trim() || field.value === item.filledText) { field.value = text; item.filledText = text; }
-  });
-}
-
-async function addStimulusFiles(files) {
-  const images = Array.from(files || []).filter((f) => /^image\//.test(f.type));
-  if (!images.length) return;
-  if (state.phase === "error" || !state.simId) { toast("Image questions need the backend — it's currently unreachable."); return; }
-  if (!inputOpen()) openInput({ mode: state.askMode, preserve: true });
-  const room = MAX_STIMULI - state.stimuli.length;
-  if (room <= 0) { els.askError.textContent = `Up to ${MAX_STIMULI} images: one to test, two to compare.`; return; }
-  els.askError.textContent = "";
-  const batch = images.slice(0, room);
-  const items = [];
-  for (const file of batch) {
-    try {
-      const prepared = await prepareImage(file);
-      const item = { ...prepared, stimulus: null, loading: true, error: null };
-      state.stimuli.push(item); items.push(item);
-    } catch (err) { els.askError.textContent = err.message; }
-  }
-  renderStimulusStrip();
-  if (!items.length) return;
-  try {
-    const res = await api.describeStimulus(citySlug(), items.map(({ media_type, data }) => ({ media_type, data })), els.askInput.value.trim());
-    items.forEach((item, i) => { item.stimulus = res.stimuli?.[i] || null; item.loading = false; if (!item.stimulus) item.error = "no description returned"; });
-  } catch (err) {
-    console.error(err);
-    items.forEach((item) => { item.loading = false; item.error = err.status === 503 ? "no vision model on the server" : "vision call failed"; });
-    els.askError.textContent = `Couldn't read the image: ${err.message}`;
-  }
-  renderStimulusStrip();
-  syncStimuliToComposer();
-  els.askInput.focus();
-}
-
-els.askAttach.addEventListener("click", (e) => { e.stopPropagation(); if (!isBusy()) els.askFile.click(); });
-els.askFile.addEventListener("change", () => { addStimulusFiles(els.askFile.files); els.askFile.value = ""; });
-els.askInput.addEventListener("paste", (e) => {
-  const files = Array.from(e.clipboardData?.files || []).filter((f) => /^image\//.test(f.type));
-  if (files.length) { e.preventDefault(); addStimulusFiles(files); }
-});
-for (const ev of ["dragenter", "dragover"]) els.ask.addEventListener(ev, (e) => {
-  if (!Array.from(e.dataTransfer?.types || []).includes("Files")) return;
-  e.preventDefault(); e.dataTransfer.dropEffect = "copy"; els.ask.classList.add("is-dropping");
-});
-els.ask.addEventListener("dragleave", (e) => { if (!els.ask.contains(e.relatedTarget)) els.ask.classList.remove("is-dropping"); });
-els.ask.addEventListener("drop", (e) => {
-  els.ask.classList.remove("is-dropping");
-  if (!e.dataTransfer?.files?.length) return;
-  e.preventDefault(); e.stopPropagation();
-  addStimulusFiles(e.dataTransfer.files);
-});
+// The entry point accepts text only. Historical image results remain readable.
+function clearStimuli() { state.stimuli = []; }
+function fillVariantsFromStimuli() {}
 
 els.askInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); runPrediction(els.askInput.value); }
@@ -2332,72 +2242,13 @@ function topIssues(v, n = 2) {
   if (!v) return [];
   return Object.keys(ISSUE_LABEL).map((k) => [ISSUE_LABEL[k], v[k] ?? 0]).sort((a, b) => b[1] - a[1]).slice(0, n).map((x) => x[0]);
 }
-function showCharCard(s) {
-  if (research?.showingResults) return;
-  els.charCard.setAttribute("aria-label", "Resident details");
-  if (!s || !s.name) return;                 // offline-preview agents have no persona
-  const v = s.values || {};
-  const dem = [
-    s.age != null ? `${s.age}` : null,
-    RACE_LABEL[s.race] || s.race,
-    EDUC_LABEL[s.educ] || s.educ,
-    s.job,
-  ].filter(Boolean).join(" · ");
-  const tags = [leanLabel(v.economic, "economically left", "economically right"), leanLabel(v.social, "socially progressive", "socially conservative")].filter(Boolean);
-  const issues = topIssues(v, 2);
-  const isPoll = s.verdict != null;
-  const label = isPoll ? `leaning ${s.verdict}` : "thinking";
-  const labelClass = isPoll ? (s.verdict === "yes" ? "yes" : "no") : "";
-  const thought = isPoll && s.rationale ? s.rationale : s.thought;
-  const speech = thought || "…";
-  const identity = (extra = "") => `
-    <div class="char-id">
-      <div class="char-name">${escapeHtml(s.name)}</div>
-      <div class="char-sub">${escapeHtml(dem)}${s.hood ? " · " + escapeHtml(s.hood) : ""}</div>
-      ${extra}
-    </div>`;
-  const tagRow = `
-    <div class="char-tags">
-      ${tags.map((t) => `<span class="char-tag">${escapeHtml(t)}</span>`).join("")}
-      ${issues.map((i) => `<span class="char-tag issue">cares about ${escapeHtml(i)}</span>`).join("")}
-    </div>`;
-
-  stopTyping();
-  els.charCard.classList.toggle("char-card--spotlight", isPoll);
-
-  // After a poll the resident is the subject: a big portrait, and the
-  // rationale delivered as speech rather than as a quoted field.
-  els.charCard.innerHTML = isPoll
-    ? `
-      <button id="char-close" class="char-close" aria-label="Close">×</button>
-      <div class="char-speech" role="note" aria-label="${escapeHtml(speech)}">
-        <p class="char-speech-text" aria-hidden="true">
-          <span class="char-speech-ghost">${escapeHtml(speech)}</span>
-          <span class="char-speech-typed"><span id="char-typed"></span><span id="char-caret" class="char-caret"></span></span>
-        </p>
-      </div>
-      <div class="char-head">
-        <canvas id="char-portrait" class="char-portrait" width="96" height="96"></canvas>
-        ${identity(`<span class="char-verdict ${labelClass}">${escapeHtml(label)}</span>`)}
-      </div>
-      ${tagRow}`
-    : `
-      <button id="char-close" class="char-close" aria-label="Close">×</button>
-      <div class="char-head">
-        <canvas id="char-portrait" class="char-portrait" width="46" height="46"></canvas>
-        ${identity()}
-      </div>
-      ${tagRow}
-      <div class="char-think">
-        <div class="char-label ${labelClass}">${label}</div>
-        <div class="char-thought">“${escapeHtml(speech)}”</div>
-      </div>`;
-
-  show(els.charCard);
-  $("char-close").addEventListener("click", closeCharCard);
-  map.drawCharTo($("char-portrait"), s.char);
-  if (isPoll) typeInto($("char-typed"), speech, $("char-caret"));
+function showCharCard(sprite) {
+  if (!sprite) return;
+  if (research?.showingResults) { void research.inspect(sprite.id); return; }
+  const resident=state.rawResidents.find(r=>r.id===sprite.id);
+  if(resident) void openPersonaModal(resident,null,{thought:sprite.thought});
 }
+
 map.onSpriteTap = showCharCard;
 map.onEmptyTap = () => { if (charOpen()) { closeCharCard(); return true; } return false; };
 
@@ -2465,6 +2316,11 @@ async function showAbDemo() {
 
 research = createResearchWorkspace({
   map,
+  startTimeline: async (run, selected) => {
+    if(api.isDemo) throw new Error("Timeline simulation requires the live backend. Offline results are illustrative.");
+    const offer=run.experiment.scenarios[selected];
+    evolution.start(`${run.experiment.decision}\nSelected experiment scenario: ${offer.description}`, run.researchPanel, { newsContext:run.newsContext, asOf:run.asOf });
+  },
   compareScenarios: (_branch, payload, signal, onProgress) => withCurrentSimulation(
     () => api.compareScenarios(state.mainBranch, payload, signal, onProgress), signal),
   getContext: () => ({ city: citySlug(), simId: state.simId, branch: state.mainBranch,

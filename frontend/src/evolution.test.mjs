@@ -12,7 +12,7 @@ const frame=tick=>({tick,day:tick,changed_count:tick?4000:0,changed_share:tick?.
 function harness(){
  const els=[],pending=[],saved=new Map(),map={setEvolution(v){this.evolution=v;}};
  const document={body:{append(e){els.push(e)},classList:{add(){},remove(){}}},createElement:element,addEventListener(){}};
- const ctx=vm.createContext({document,console,AbortController,BASE:'',workspaceHeaders:()=>({'X-Simtra-Workspace':'test'}),sessionStorage:{getItem:k=>saved.get(k),setItem:(k,v)=>saved.set(k,v),removeItem:k=>saved.delete(k)},setTimeout:()=>1,clearTimeout(){},setInterval(){},fetch:(url)=>new Promise(resolve=>pending.push({url,resolve:data=>resolve({ok:true,json:async()=>data})}))});
+ const ctx=vm.createContext({document,console,AbortController,BASE:'',workspaceHeaders:()=>({'X-Simtra-Workspace':'test'}),sessionStorage:{getItem:k=>saved.get(k),setItem:(k,v)=>saved.set(k,v),removeItem:k=>saved.delete(k)},setTimeout:()=>1,clearTimeout(){},setInterval(){},fetch:(url,options)=>new Promise(resolve=>pending.push({url,body:JSON.parse(options.body||'null'),resolve:data=>resolve({ok:!data.error,json:async()=>data})}))});
  vm.runInContext(source+'\nglobalThis.init=initEvolution;',ctx);
  const controller=ctx.init({map,getBranch:()=> 'main',getCity:()=> 'sf',isReady:()=>true});
  const [root,transport]=els,q=s=>root.querySelector(s),t=s=>transport.querySelector(s);
@@ -52,4 +52,37 @@ test('an event starts playback without a launcher or another scenario submission
  assert.equal(h.pending.length,1);h.pending.shift().resolve(fixture());await flush();
  assert.equal(h.pending.length,1);h.resolveStep(1);await flush();
  assert.equal(h.map.evolution.frame.tick,1);
+});
+
+test('selected experiment carries frozen research into its timeline',async()=>{
+ const h=harness();h.controller.start('Chipotle bowls +10%',{id:'panel',version:2,content_hash:'hash'},{newsContext:'Frozen dated news',asOf:'2026-09-19'});
+ assert.deepEqual(h.pending[0].body.research_panel,{id:'panel',version:2,content_hash:'hash'});
+ assert.equal(h.pending[0].body.pinned_news,'Frozen dated news');
+ assert.equal(h.pending[0].body.as_of_date,'2026-09-19');
+});
+test('update waits for pending day and starts at the next uncomputed day',async()=>{
+ const h=harness();await h.start();h.q('#evo-message').value='Competitor cuts bowl prices';
+ h.q('[data-composer]').fire('submit',{preventDefault(){}});assert.equal(h.pending.length,1);
+ h.resolveStep(1);await flush();
+ const sent=h.q('[data-composer]').fire('submit',{preventDefault(){}});
+ assert.equal(h.pending[0].url,'/evolution/run/event');assert.equal(h.pending[0].body.expected_tick,1);
+ h.pending.shift().resolve({text:'Competitor cuts bowl prices',effective_day:2});await sent;
+ assert.equal(h.q('#evo-message').value,'');assert.equal(h.pending[0].url,'/evolution/run/step');
+ assert.equal(h.map.evolution.frame.tick,1);
+});
+test('question reads the viewed recorded day without advancing it',async()=>{
+ const h=harness();await h.start();h.resolveStep(1);await flush();h.t('[data-reset]').fire();
+ h.q('#evo-message').value='Would residents buy bowls?';
+ const sent=h.q('[data-composer]').fire('submit',{preventDefault(){}});
+ assert.equal(h.pending[0].url,'/evolution/run/question');assert.equal(h.pending[0].body.tick,0);
+ h.pending.shift().resolve({question:'Would residents buy bowls?',tick:0,shares:{yes:.4,no:.3,unsure:.3}});await sent;
+ assert.equal(h.map.evolution.frame.tick,0);assert.equal(h.pending.length,0);assert.match(h.q('[data-updates]').innerHTML,/modeled agreement/);
+});
+test('failed timeline question retains the draft and recorded frame',async()=>{
+ const h=harness();await h.start();h.resolveStep(1);await flush();
+ h.q('#evo-message').value='Why would residents change?';
+ const sent=h.q('[data-composer]').fire('submit',{preventDefault(){}});
+ h.pending.shift().resolve({error:'Ask a yes/no question'});await sent;
+ assert.equal(h.q('#evo-message').value,'Why would residents change?');
+ assert.equal(h.map.evolution.frame.tick,1);assert.equal(h.pending.length,0);
 });

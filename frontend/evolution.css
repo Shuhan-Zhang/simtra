@@ -200,3 +200,14 @@
 .evo-chart .pc-rows { margin-top: 0; gap: 10px; }
 .evo-chart.pc .evo-bar.pc-row { padding: 0; margin: 0; }
 .evo-scenario-text { margin-bottom: 14px; }
+.evo-composer { border-top: 1px solid var(--sep); padding-top: 12px; margin-top: 12px; }
+.evo-composer[hidden] { display: none; }
+.evo-composer label, .evo-composer small { display: block; color: var(--ink-2); font-size: var(--fs-caption2); }
+.evo-composer > div { display: flex; gap: 8px; margin: 7px 0; }
+.evo-composer input { min-width: 0; flex: 1; border: 1px solid var(--sep); border-radius: var(--r-sm); padding: 10px; font: inherit; color: var(--ink); background: var(--fill); }
+.evo-composer button { border: 0; border-radius: var(--r-sm); width: 36px; background: var(--accent); color: white; font: 20px var(--font); cursor: pointer; }
+.evo-composer button:disabled { opacity: .4; cursor: wait; }
+.evo-updates article { border-top: 1px solid var(--sep); padding: 12px 0; }
+.evo-updates small { color: var(--ink-2); font-size: var(--fs-caption2); }
+.evo-updates p { margin: 4px 0; }
+.evo-updates b { font-weight: var(--fw-med); color: var(--accent); }

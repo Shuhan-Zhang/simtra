@@ -1,3 +1,4 @@
+import { factorText } from "./model-display.js";
 // ─────────────────────────────────────────────────────────────────────────
 // Persona chart · the demographic view of a poll, drawn from the simulation.
 //
@@ -271,7 +272,7 @@ export function createPersonaChart(host, opts) {
     const own = r.personal;
     const a = answerLabel(own || r.answer, o);
     const meta = [r.resident.occupation, r.resident.neighborhood, Number.isFinite(r.resident.age) ? `${r.resident.age}` : null].filter(Boolean).join(" · ");
-    const why = own?.why || r.answer?.why || "";
+    const why = factorText(own?.why || r.answer?.why);
     const quote = r.pending
       ? `<span class="pc-person-why pending">asking ${esc(firstName(r.resident))}…</span>`
       : why ? `<span class="pc-person-why">${esc(why)}${own ? "" : `<span class="pc-archetype">archetype view</span>`}</span>` : "";

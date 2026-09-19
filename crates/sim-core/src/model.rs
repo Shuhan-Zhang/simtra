@@ -170,6 +170,8 @@ pub struct ModelClient {
     jev_key: String,
     jev_url: String,
     gemini_key: String,
+    voice_url: String,
+    voice_model: String,
     sem: Arc<Semaphore>,
     max_retries: u32,
     cache: Option<Arc<Cache>>,
@@ -209,6 +211,7 @@ impl ModelClient {
             .unwrap_or_else(|_| "https://api.typesafe.ai".to_string());
         let jev_url = format!("{}/v1/systemone", jev_url.trim_end_matches('/'));
         let gemini_key = std::env::var("GEMINI_API_KEY").unwrap_or_default().trim().to_string();
+        let voice_model = std::env::var("GEMINI_MODEL").ok().filter(|m| m.starts_with("gemini-") && m.chars().all(|c| c.is_ascii_alphanumeric() || c=='-' || c=='.')).unwrap_or_else(|| "gemini-3.5-flash-lite".into());
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(180))
             .connect_timeout(Duration::from_secs(15))
@@ -222,6 +225,8 @@ impl ModelClient {
             jev_key,
             jev_url,
             gemini_key,
+            voice_url: std::env::var("GEMINI_VOICE_API_URL").unwrap_or_else(|_| format!("https://generativelanguage.googleapis.com/v1beta/models/{voice_model}:generateContent")),
+            voice_model,
             sem: Arc::new(Semaphore::new(max_inflight.max(1))),
             max_retries: 5,
             cache,
@@ -313,6 +318,43 @@ impl ModelClient {
         if let Some(c) = &self.cache {
             c.put(&key, model.id(), &text);
         }
+        Ok(text)
+    }
+
+    /// Optional narrative surface only. Never used for quantitative predictions.
+    pub fn has_voice_provider(&self) -> bool { !self.gemini_key.is_empty() }
+
+    /// One bounded native Gemini request for a sparse batch of synthetic voices.
+    /// No retries: ambient text must not hold up the experiment or multiply cost.
+    pub async fn complete_voice(&self, system: &str, user: &str, max_tokens: u32) -> Result<String> {
+        use sha2::{Digest, Sha256};
+        if system.len() > 8000 || user.len() > 64000 { return Err(anyhow!("voice batch exceeds context limit")); }
+        let max_tokens = max_tokens.clamp(128, 4096);
+        let mut hash = Sha256::new();
+        for part in ["resident-voice-v1", &self.voice_url, &self.voice_model, system, user] { hash.update(part.as_bytes()); hash.update(b"\0"); }
+        hash.update(max_tokens.to_le_bytes());
+        let key = hex::encode(hash.finalize());
+        if let Some(hit) = self.cache.as_ref().and_then(|c| c.get(&key)) {
+            self.usage.cache_hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(hit);
+        }
+        if self.offline || !self.has_voice_provider() { return Err(anyhow!("Resident voice provider unavailable")); }
+        let _permit = self.sem.acquire().await?;
+        self.usage.calls.fetch_add(1, Ordering::Relaxed);
+        let response = self.http.post(&self.voice_url).header("x-goog-api-key", &self.gemini_key)
+            .timeout(Duration::from_secs(12)).json(&json!({
+                "system_instruction":{"parts":[{"text":system}]},
+                "contents":[{"role":"user","parts":[{"text":user}]}],
+                "generationConfig":{"maxOutputTokens":max_tokens,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"low"}}
+            })).send().await.map_err(|_| anyhow!("Resident voice request failed"))?;
+        if !response.status().is_success() { return Err(anyhow!("Resident voice HTTP {}", response.status().as_u16())); }
+        let body:Value = response.json().await.map_err(|_| anyhow!("Resident voice response was not JSON"))?;
+        let text = body.pointer("/candidates/0/content/parts").and_then(Value::as_array)
+            .map(|parts| parts.iter().filter(|p| p.get("thought").and_then(Value::as_bool) != Some(true))
+                .filter_map(|p|p.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("")).unwrap_or_default();
+        let parsed:Value=serde_json::from_str(&text).map_err(|_|anyhow!("Resident voice returned invalid JSON"))?;
+        if !parsed.is_array() || text.len()>32000 { return Err(anyhow!("Resident voice returned an invalid batch")); }
+        if let Some(cache)=&self.cache { cache.put(&key, &self.voice_model, &text); }
         Ok(text)
     }
 
@@ -850,6 +892,8 @@ mod tests {
             anthropic_url: "https://api.anthropic.com/v1/messages".to_string(),
             jev_key: String::new(),
             gemini_key: String::new(),
+            voice_url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent".into(),
+            voice_model: "gemini-3.5-flash-lite".into(),
             jev_url: "https://api.typesafe.ai/v1/systemone".to_string(),
             sem: Arc::new(Semaphore::new(1)),
             max_retries: 0,

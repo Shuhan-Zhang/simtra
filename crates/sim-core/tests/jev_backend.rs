@@ -101,24 +101,11 @@ async fn features(client: ModelClient, live: bool) {
         .unwrap();
     assert!((delta - (exposed.p_yes - base.p_yes)).abs() < 1e-9);
     let ids = vec![0, 1, 2];
-    let chatter = engine.chatter(&pop, &ids).await;
-    assert_eq!(chatter.len(), 3);
-    assert!(chatter
-        .iter()
-        .all(|(_, s)| s.contains("Jev-selected template")));
-    let reactions = engine
-        .react_to_event(
-            &pop,
-            "The city proposes more frequent bus service.",
-            &poll.as_of_date,
-            &ids,
-        )
-        .await;
-    assert_eq!(reactions.len(), 3);
-    assert!(reactions
-        .iter()
-        .all(|(_, t, s)| t.contains("Jev-selected template")
-            && simfrancisco::memory::SENTIMENTS.contains(&s.as_str())));
+    // Narrative is optional Gemini-only; a Jev-only backend never invents voices.
+    if !engine.client.has_voice_provider() {
+        assert!(engine.chatter(&pop, &ids).await.is_empty());
+        assert!(engine.react_to_event(&pop, "The city proposes more frequent bus service.", &poll.as_of_date, &ids).await.is_empty());
+    }
     let personal = engine
         .personal_answers(
             &pop,
