@@ -91,6 +91,14 @@
   --nums: tabular-nums lining-nums;
 }
 
+.location-context { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 10px; width: 100%; align-items: center; font-size: 12px; }
+.location-context label { font-weight: 600; }
+.location-context select { min-width: 0; padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 8px; background: white; color: #182333; font: inherit; }
+.location-context p { grid-column: 1 / -1; margin: 0; line-height: 1.4; color: #526174; }
+.res-location { padding: 12px; margin: 12px 0; background: #eef5fc; border-radius: 10px; font-size: 12px; line-height: 1.5; }
+.res-location summary { cursor: pointer; font-weight: 600; }
+.res-location p { margin: 8px 0; }
+
 * { box-sizing: border-box; }
 
 html, body { margin: 0; height: 100%; overflow: hidden; }

@@ -115,7 +115,7 @@
             </svg>
             <span id="ask-label" class="ask-label">ask</span>
             <textarea id="ask-input" class="ask-input" rows="1" autocomplete="off" spellcheck="false"
-                      placeholder="Ask a question — for choices, list options: bus, train, or bicycle"
+                      placeholder="Would you try a new local service offering $5 off your first order?"
                       aria-label="Predict anything"></textarea>
             <button id="ask-submit" class="ask-send" type="button" aria-label="Send">
               <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
@@ -126,6 +126,11 @@
           </div>
           <!-- question type + the extra fields each type needs; shown while composing -->
           <div class="ask-extra">
+            <div id="location-context" class="location-context">
+              <label for="location-area">Launch area</label>
+              <select id="location-area" aria-describedby="location-note" disabled><option value="">Loading mapped places…</option></select>
+              <p id="location-note" role="status">Loading geographic context…</p>
+            </div>
             <div class="ask-modes" role="radiogroup" aria-label="Question type">
               <button type="button" class="ask-mode" role="radio" data-mode="predict" aria-checked="true">Predict</button>
               <button type="button" class="ask-mode" role="radio" data-mode="ab" aria-checked="false">A/B</button>
