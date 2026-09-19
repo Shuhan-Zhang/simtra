@@ -81,3 +81,16 @@ test('compact result shows supported attributes first without hiding that unknow
   assert.ok(html.indexOf('Audience profiles') < html.indexOf('Missing information'));
   assert.match(html, /Unknown — no supported value/);
 });
+
+test('identified context preserves provenance, unknowns and safe excerpts without an input form', () => {
+  const html = renderResearchPanel({ version: 1, question_context: {
+    business: { value: '<Chipotle>', provenance: 'inferred', excerpt: '<Chipotle>' },
+    audience: { value: null, provenance: 'unknown' },
+    topic: { value: 'pricing', provenance: 'inferred' },
+    market: { value: 'San Francisco', provenance: 'founder-provided' },
+  } });
+  assert.match(html, /Understood from your question/);
+  assert.match(html, /&lt;Chipotle&gt;/);
+  assert.match(html, /Unknown — not identified/);
+  assert.doesNotMatch(html, /<form|<input|<textarea|data-pr-action="revise"/);
+});

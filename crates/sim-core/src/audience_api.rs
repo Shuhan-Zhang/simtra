@@ -4,7 +4,7 @@ use crate::{audience_sources, model::ModelClient};
 use axum::{
     extract::{DefaultBodyLimit, Path, Query, State},
     http::StatusCode,
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use serde::Deserialize;
@@ -31,6 +31,7 @@ impl ResearchState {
 pub fn router(state: ResearchState) -> Router {
     Router::new()
         .route("/audience-research/config", get(config))
+        .route("/audience-research/automatic", post(automatic))
         .route("/audience-research/panels", get(list).post(create))
         .route("/audience-research/panels/:id", get(detail))
         .layer(DefaultBodyLimit::max(128 * 1024))
@@ -77,8 +78,8 @@ fn validate(req: &BuildRequest) -> Result<(), &'static str> {
     if !(8..=2000).contains(&req.question.trim().chars().count()) {
         return Err("Enter a research question between 8 and 2000 characters.");
     }
-    if !(2..=160).contains(&req.business.trim().chars().count()) {
-        return Err("Enter a business or product name between 2 and 160 characters.");
+    if !(1..=160).contains(&req.business.trim().chars().count()) {
+        return Err("Enter a business or product name between 1 and 160 characters.");
     }
     if req.location.chars().count() > 200 {
         return Err("Location must be at most 200 characters.");
@@ -187,5 +188,77 @@ async fn create(
         },
         Ok(Err(_))=>error(StatusCode::BAD_GATEWAY,"Audience research could not finish. Check server Jev configuration and source availability; no panel version was saved."),
         Err(_)=>error(StatusCode::GATEWAY_TIMEOUT,"Audience research exceeded its time limit. No panel version was saved; try fewer sources."),
+    }
+}
+
+#[derive(Deserialize)]
+struct AutomaticRequest {
+    question: String,
+    #[serde(default)]
+    market: String,
+}
+async fn automatic(
+    State(st): State<ResearchState>,
+    payload: Result<Json<AutomaticRequest>, axum::extract::rejection::JsonRejection>,
+) -> Reply {
+    let Ok(Json(input)) = payload else {
+        return error(StatusCode::BAD_REQUEST, "Provide a question to research.");
+    };
+    let question = input.question.trim();
+    let market = input.market.trim();
+    if !(8..=2000).contains(&question.chars().count()) || market.chars().count() > 200 {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "Question must be 8–2000 characters; market must be at most 200 characters.",
+        );
+    }
+    let Ok(_permit) = st.gate.try_acquire() else {
+        return error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Audience research is already running. Wait for it to finish.",
+        );
+    };
+    // Reuse only panels made by the context-aware pipeline and pin their stored version.
+    match st.panels.list() {
+        Ok(panels) => {
+            if let Some(panel) = panels.into_iter().find(|p| {
+                p.question == question
+                    && p.status == "draft"
+                    && !p.personas.is_empty()
+                    && p.question_context
+                        .as_ref()
+                        .is_some_and(|c| c.requested_market == market)
+            }) {
+                return (StatusCode::OK, Json(json!(panel)));
+            }
+        }
+        Err(_) => {
+            return error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Could not read saved audience research.",
+            )
+        }
+    }
+    if !st.client.has_key() || !audience_sources::search_configured() {
+        return error(StatusCode::SERVICE_UNAVAILABLE, "Automatic research requires server-side Jev and Brave Search configuration. No profile was invented.");
+    }
+    let result = tokio::time::timeout(std::time::Duration::from_secs(150), async {
+        let context = crate::audience_context::identify(&st.client, question, market).await?;
+        let req = BuildRequest {
+            question: question.into(), business: context.business.value.clone().unwrap_or_else(|| "Unspecified business".into()),
+            location: context.market.value.clone().unwrap_or_default(), panel_size: 4,
+            sources: vec![], discover: true, founder_context: String::new(), panel_id: None,
+        };
+        let (sources, warnings) = audience_sources::collect_automatic(&req).await?;
+        let mut panel = build_panel(&st.client, &req, sources, warnings).await?;
+        if context.business.value.is_none() { panel.gaps.push("The question does not identify a business or product unambiguously; none was invented.".into()); }
+        if context.audience.value.is_none() { panel.gaps.push("No explicit audience was identified in the question. Profiles are inferred from the discovered evidence.".into()); }
+        panel.question_context = Some(context);
+        st.panels.save(panel)
+    }).await;
+    match result {
+        Ok(Ok(panel)) => (StatusCode::CREATED, Json(json!(panel))),
+        Ok(Err(_)) => error(StatusCode::BAD_GATEWAY, "Automatic audience research could not finish. No new panel was confirmed; retry your question when the research services are available."),
+        Err(_) => error(StatusCode::GATEWAY_TIMEOUT, "Automatic audience research timed out. Retry the question; unsupported profiles will not be invented."),
     }
 }

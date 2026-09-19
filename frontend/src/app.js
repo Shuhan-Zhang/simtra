@@ -10,6 +10,8 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { SIM, PREDICT, TIMING, MAP, BASE, BACKEND_SETUP_MESSAGE } from "./config.js";
+import { prepareAutomaticAudience, researchReference } from "./automatic-audience.js";
+import { personaResearchUI, renderResearchSummary } from "./persona-research.js";
 import { rationaleLabel, estimateLabel } from "./model-display.js";
 import { SFMap } from "./map.js";
 import { assignVerdicts } from "./verdict.js";
@@ -1122,7 +1124,33 @@ function looksLikeVerifiedQuestion(question) {
   return VERIFIED_QUESTION.test(question || "");
 }
 
+// Research is automatic data preparation; it never changes the evaluator population.
+async function prepareQuestionAudience(question, signal) {
+  if (api.isDemo) {
+    personaResearchUI.updateAutomatic({ stage: 'demo', question });
+    return null; // Explicit offline demo never performs live discovery.
+  }
+  const cancelled = () => { personaResearchUI.updateAutomatic({ stage: 'cancelled', question }); };
+  signal.addEventListener('abort', cancelled, { once: true });
+  try {
+    return await prepareAutomaticAudience(question, {
+      location: state.city?.display || '', signal,
+      onProgress: progress => {
+        personaResearchUI.updateAutomatic(progress);
+        els.askLabel.textContent = progress.stage === 'ready' ? 'audience ready…' : 'researching audience…';
+        els.progressLabel.textContent = progress.stage === 'ready'
+          ? 'audience research saved; continuing simulation…'
+          : 'finding evidence and building audience profiles… (esc to cancel)';
+      },
+    });
+  } catch (error) {
+    if (!signal.aborted) personaResearchUI.updateAutomatic({ stage: 'failed', question, message: error.message });
+    throw error;
+  } finally { signal.removeEventListener('abort', cancelled); }
+}
+
 async function runPrediction(question) {
+  if (isBusy() || state.switching) return;
   question = (question || "").trim();
   if (!question) return;
   if (state.askMode === "ab") return runAbTest();
@@ -1152,6 +1180,8 @@ async function runPrediction(question) {
   map.setWaiting();
 
   try {
+    const researchPanel = await prepareQuestionAudience(question, signal);
+    if (myReq !== state.reqId) return;
     // Typed routing must succeed before polling; never invent binary framing
     // when the Jev router is unavailable or asks for explicit option labels.
     const parsed = await api.parseQuestion(citySlug(), question, signal);
@@ -1182,7 +1212,7 @@ async function runPrediction(question) {
     }, signal);
     if (myReq !== state.reqId) return;
 
-    state.lastResult = { ...result, framing, question: pollQuestion, audience };
+    state.lastResult = { ...result, framing, question: pollQuestion, audience, research_panel: researchReference(researchPanel), audience_research: researchPanel };
     setTimeout(() => refreshFeedPanel({ quiet: true }), 1500); // the poll is now a post in the feed
 
     // p_yes drives the on-map green/red reveal for both paths; for options it is the
@@ -1256,6 +1286,8 @@ async function runMarketingTest() {
   setMarketingBusy(true);
 
   try {
+    const researchPanel = await prepareQuestionAudience(input.question, signal);
+    if (myReq !== state.reqId) return;
     const parsed = await api.parseQuestion(citySlug(), input.question, signal);
     if (myReq !== state.reqId) return;
     if (parsed?.supported === false) {
@@ -1321,7 +1353,7 @@ async function runMarketingTest() {
     if (completedBranch) api.deleteBranch(completedBranch);
     closeMarketing(false);
 
-    state.lastResult = { ...result, kind: "marketing", framing: parsed.framing, question: pollQuestion, audience };
+    state.lastResult = { ...result, kind: "marketing", framing: parsed.framing, question: pollQuestion, audience, research_panel: researchReference(researchPanel), audience_research: researchPanel };
     const exposed = result.exposed || {};
     const verdicts = assignVerdicts(map.agents, exposed.p_yes, `${pollQuestion}\n${input.marketingText}`, map.proj.planarSize);
     map.setRationales(exposed.sample_rationales || []);
@@ -1400,6 +1432,8 @@ async function runAbTest() {
   map.setWaiting();
 
   try {
+    const researchPanel = await prepareQuestionAudience(input.question, signal);
+    if (myReq !== state.reqId) return;
     const result = await api.abTest(state.mainBranch, {
       ...input,
       as_of_date: PREDICT.as_of_date,
@@ -1407,7 +1441,7 @@ async function runAbTest() {
       population: "all",
     }, signal);
     if (myReq !== state.reqId) return;
-    state.lastResult = { ...result, audience };
+    state.lastResult = { ...result, audience, research_panel: researchReference(researchPanel), audience_research: researchPanel };
     setTimeout(() => refreshFeedPanel({ quiet: true }), 1500); // the A/B test is now a post in the feed
     const verdicts = assignVerdicts(map.agents, result.a_share, input.question, map.proj.planarSize);
     map.setRationales(result.sample_rationales || []);
@@ -1505,6 +1539,7 @@ function showMarketingResults(result) {
     </div>
     <div class="res-scope">${audienceScope(result.audience)} · same audience in both arms</div>
     ${hydraMeta(exposed)}
+    ${renderResearchSummary(result.audience_research)}
     <div class="res-cf-note">Model-based comparison under simulated exposure of every sampled resident to the planned copy—not an estimate of organic reach. Each arm has its own 95% CI; no separate CI was estimated for the delta, so treat small shifts cautiously.</div>
     ${rationales.length ? `<div class="res-why"><div class="res-why-label">${rationaleLabel(rationales, true)}</div><ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul></div>` : ""}
     <div class="res-actions"><button id="res-edit-marketing" class="btn btn-primary">Edit test</button><button id="res-dismiss" class="btn">Dismiss</button></div>`;
@@ -1570,6 +1605,7 @@ function showResults(result) {
       <div class="res-scope">${audienceScope(result.audience)}</div>
       ${result.past ? pastMeta(result) : `<div class="res-meta">${estimateLabel(result)} · 95% interval ${ciLow}–${ciHigh}%</div>`}
       ${hydraMeta(result)}
+      ${renderResearchSummary(result.audience_research)}
       ${breakdowns.length ? abAdvancedSection({ a_share: yesShare }, segments, breakdowns) : ""}
       ${rationales.length ? `<div class="res-why">
         <div class="res-why-label">${rationaleLabel(rationales)}</div>
@@ -1635,6 +1671,7 @@ function showOptionResults(result) {
     <div class="res-scope">${audienceScope(result.audience)}</div>
     ${result.past ? pastMeta(result) : `<div class="res-meta">${estimateLabel(result)}</div>`}
     ${hydraMeta(result)}
+      ${renderResearchSummary(result.audience_research)}
     ${rationales.length ? `<div class="res-why">
       <div class="res-why-label">${rationaleLabel(rationales)}</div>
       <ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>
@@ -1905,6 +1942,7 @@ function showAbResults(result) {
       <div class="res-scope">${audienceScope(result.audience)}</div>
       <div class="res-meta">A · 95% model interval ${pct(aCi[0])}–${pct(aCi[1])}%</div>
       ${hydraMeta(result)}
+      ${renderResearchSummary(result.audience_research)}
       ${breakdowns.length ? abAdvancedSection(result, segments, breakdowns) : ""}
       ${rationales.length ? `<div class="res-why"><div class="res-why-label">${rationaleLabel(rationales)}</div><ul>${rationales.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul></div>` : ""}
       <p class="ab-note">Simulated, PUMS-weighted preference under full exposure. Segment and cross-tab figures are model estimates with no per-group significance test — read them as direction, not proof. Not causal proof or organic reach.</p>
@@ -2051,6 +2089,7 @@ function topIssues(v, n = 2) {
   return Object.keys(ISSUE_LABEL).map((k) => [ISSUE_LABEL[k], v[k] ?? 0]).sort((a, b) => b[1] - a[1]).slice(0, n).map((x) => x[0]);
 }
 function showCharCard(s) {
+  els.charCard.setAttribute("aria-label", "Resident details");
   if (!s || !s.name) return;                 // offline-preview agents have no persona
   const v = s.values || {};
   const dem = [

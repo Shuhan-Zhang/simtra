@@ -86,6 +86,8 @@ pub struct Conflict {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Panel {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question_context: Option<crate::audience_context::QuestionContext>,
     pub schema_version: u32,
     pub id: String,
     pub version: u32,
@@ -267,7 +269,7 @@ pub fn validate_request(request: &BuildRequest) -> Result<()> {
     if request.question.trim().chars().count() < 8 || request.question.chars().count() > 2000 {
         bail!("question must contain 8–2000 characters");
     }
-    if request.business.trim().chars().count() < 2 || request.business.chars().count() > 160 {
+    if request.business.trim().is_empty() || request.business.chars().count() > 160 {
         bail!("business must contain 2–160 characters");
     }
     if !(2..=12).contains(&request.panel_size) {
@@ -961,6 +963,7 @@ fn assemble(
         format!("panel-{}", &digest(key.to_string().as_bytes())[..24])
     });
     let mut panel = Panel {
+        question_context: None,
         schema_version:1, id, version: 0, created_at: Utc::now().to_rfc3339(), question: request.question.trim().into(),
         business: request.business.trim().into(), location: request.location.trim().into(),
         status: if personas.is_empty() { "needs_evidence".into() } else { "draft".into() },

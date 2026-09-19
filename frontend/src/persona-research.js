@@ -33,23 +33,47 @@ export function retainedResearchInputs(panel) {
   };
 }
 
-export async function researchRequest(path, { body, base = BASE, fetcher = globalThis.fetch, timeout = 165000 } = {}) {
+export async function researchRequest(path, { body, base = BASE, fetcher = globalThis.fetch, timeout = 165000, signal } = {}) {
   if (!base) throw new Error(BACKEND_SETUP_MESSAGE);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
+  const abort = () => controller.abort();
+  signal?.addEventListener('abort', abort, { once: true });
+  if (signal?.aborted) abort();
+  const timer = setTimeout(abort, timeout);
   try {
     const response = await fetcher(`${base}/audience-research${path}`, { method: body ? 'POST' : 'GET', signal: controller.signal, ...(body ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}) });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(typeof data.error === 'string' ? data.error : `Research request failed (${response.status}). Check the research backend and retry.`);
     return data;
   } catch (error) {
+    if (signal?.aborted) throw new DOMException('Audience research cancelled', 'AbortError');
     if (error.name === 'AbortError') throw new Error('Research is taking longer than expected. Refresh saved panels before retrying; a version may already have been saved.');
     throw error;
-  } finally { clearTimeout(timer); }
+  } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
 }
 
 const list = (items) => `<ul>${items.map(item => `<li>${escapeText(item)}</li>`).join('')}</ul>`;
 const provenanceLabels = new Set(['sourced', 'founder-provided', 'inferred', 'unknown']);
+export function renderResearchSummary(panel) {
+  if (!panel?.id || !panel.question) return '';
+  const sources = new Map((panel.sources || []).map(source => [source.id, source]));
+  const labels = { needs: 'Need', objections: 'Objection', decision_criteria: 'Decision criterion', alternatives: 'Alternative', price_sensitivity: 'Price sensitivity', buying_situation: 'Buying situation', purchase_frequency: 'Purchase frequency', switching_conditions: 'Switching condition' };
+  const profiles = (panel.personas || []).map(profile => {
+    const attributes = (profile.attributes || []).flatMap(attribute => {
+      if (!labels[attribute.key] || attribute.value == null || !provenanceLabels.has(attribute.provenance) || attribute.provenance === 'unknown') return [];
+      const evidence = (attribute.evidence || []).filter(item => item.excerpt?.trim() && sources.get(item.source_id)?.text?.includes(item.excerpt));
+      if (!evidence.length) return [];
+      return [`<li><strong>${escapeText(labels[attribute.key])}:</strong> ${escapeText(attribute.value)} <span class="pr-tag">${escapeText(attribute.provenance)}</span><details><summary>Supporting evidence</summary>${evidence.map(item => {
+        const source = sources.get(item.source_id), url = sourceUrl(source.url);
+        return `<blockquote>${escapeText(item.excerpt)}</blockquote><p>${url ? `<a href="${escapeText(url)}" target="_blank" rel="noopener noreferrer">${escapeText(source.title || 'Source')}</a>` : escapeText(source.title || 'Saved evidence')} · ${escapeText(source.retrieved_at || 'Date unavailable')}</p>`;
+      }).join('')}</details></li>`];
+    });
+    const unknowns = (profile.attributes || []).filter(a => a.value == null || a.provenance === 'unknown' || !provenanceLabels.has(a.provenance));
+    return `<article><h4>${escapeText(profile.label)}</h4>${attributes.length ? `<ul>${attributes.join('')}</ul>` : '<p>No source-backed attributes available.</p>'}${unknowns.length ? `<p class="pr-muted">Unknown: ${unknowns.map(a => escapeText(a.key.replaceAll('_', ' '))).join(', ')}.</p>` : ''}</article>`;
+  });
+  return `<section class="research-summary" aria-label="Audience research summary"><h3>Audience research summary</h3><p>${escapeText(panel.business)} · saved panel v${escapeText(panel.version)}</p><p class="pr-muted">${escapeText(panel.question)}</p><p class="pr-muted">Synthetic research profiles, not verified customers. Context only; these profiles were not used to calculate the simulation results.</p>${profiles.length ? profiles.join('') : '<p>No supported audience profiles available.</p>'}${(panel.conflicts || []).length ? `<details open><summary>Conflicting evidence</summary>${panel.conflicts.map(c => `<p><strong>${escapeText(c.attribute)}</strong></p>${list(c.values || [])}`).join('')}</details>` : ''}${(panel.gaps || []).length ? `<details><summary>Missing information</summary>${list(panel.gaps)}</details>` : ''}${(panel.warnings || []).length ? `<details><summary>Research limitations</summary>${list(panel.warnings)}</details>` : ''}</section>`;
+}
+
 export function renderResearchPanel(panel, latestVersion = panel.version) {
   const sources = panel.sources || [];
   const byId = new Map(sources.map(s => [s.id, s]));
@@ -66,10 +90,15 @@ export function renderResearchPanel(panel, latestVersion = panel.version) {
     const known = (p.attributes || []).filter(a => !unknown.includes(a));
     return `<article class="pr-persona"><h4>${escapeText(p.label)}</h4><dl>${known.map(attributeHtml).join('')}</dl>${unknown.length ? `<details class="pr-unknown"><summary>${unknown.length} unknown ${unknown.length === 1 ? 'attribute' : 'attributes'}</summary><dl>${unknown.map(attributeHtml).join('')}</dl></details>` : ''}</article>`;
   };
-  return `<header class="pr-result-header"><span class="pr-kicker">Saved panel · version ${escapeText(panel.version)}</span><h3>${escapeText(panel.business)}</h3><p>${escapeText(panel.question)}</p><p class="pr-muted">${escapeText(panel.location || 'Location not specified')} · ${personas.length} research ${personas.length === 1 ? 'profile' : 'profiles'} · ${escapeText(panel.status === 'needs_evidence' ? 'Needs evidence' : 'Draft — review before use')}</p><label>Saved version<select id="pr-version" aria-label="Saved panel version">${versionNumbers.map(v => `<option value="${v}"${v === panel.version ? ' selected' : ''}>Version ${v}${v === maxVersion ? ' · latest' : ''}</option>`).join('')}</select></label><div class="pr-actions"><button type="button" data-pr-action="export">Export JSON</button><button type="button" data-pr-action="revise">Create next version</button></div></header>
-  <p class="pr-notice">Synthetic research profiles, not verified individual customers or a representative population sample. No scenario has been evaluated.</p>
+  const context = panel.question_context;
+  const contextHtml = context ? `<section class="pr-notice"><h4>Understood from your question</h4><dl>${['business', 'topic', 'audience', 'market'].map(key => {
+    const a = context[key] || {};
+    return `<div class="pr-attribute"><dt>${escapeText(key)} <span class="pr-tag">${escapeText(a.provenance || 'unknown')}</span></dt><dd>${escapeText(a.value || 'Unknown — not identified')}${a.excerpt ? `<details><summary>Basis</summary><blockquote>${escapeText(a.excerpt)}</blockquote></details>` : ''}</dd></div>`;
+  }).join('')}</dl></section>` : '';
+  return `<header class="pr-result-header"><span class="pr-kicker">Saved panel · version ${escapeText(panel.version)}</span><h3>${escapeText(panel.business)}</h3><p>${escapeText(panel.question)}</p><p class="pr-muted">${escapeText(panel.location || 'Location not specified')} · ${personas.length} research ${personas.length === 1 ? 'profile' : 'profiles'} · ${escapeText(panel.status === 'needs_evidence' ? 'Needs evidence' : 'Draft — review before use')}</p><label>Saved version<select id="pr-version" aria-label="Saved panel version">${versionNumbers.map(v => `<option value="${v}"${v === panel.version ? ' selected' : ''}>Version ${v}${v === maxVersion ? ' · latest' : ''}</option>`).join('')}</select></label><div class="pr-actions"><button type="button" data-pr-action="export">Export JSON</button></div></header>
+  ${renderResearchSummary(panel)}${contextHtml}<p class="pr-notice">Synthetic research profiles, not verified individual customers or a representative population sample. No scenario has been evaluated.</p>
   ${(panel.conflicts || []).length ? `<section class="pr-warning"><h4>Conflicting evidence</h4>${panel.conflicts.map(c => `<p><strong>${escapeText(c.attribute)}</strong></p>${list(c.values || [])}<p>Sources: ${(c.source_ids || []).map(id => escapeText(sourceIndex.has(id) ? `[${sourceIndex.get(id)}]` : id)).join(', ')}</p>`).join('')}</section>` : ''}
-  <section><h4>Audience profiles</h4>${personas.length ? personas.map(personaHtml).join('') : '<p>No supported profiles yet. Add customer evidence to create the next version.</p>'}</section>
+  <section><h4>Audience profiles</h4>${personas.length ? personas.map(personaHtml).join('') : '<p>No supported profiles yet. Review the gaps below and make your question more specific in the main input.</p>'}</section>
   ${(panel.gaps || []).length ? `<details class="pr-warning"><summary>Missing information · ${panel.gaps.length}</summary>${list(panel.gaps)}</details>` : ''}
   ${(panel.warnings || []).length ? `<details class="pr-method"><summary>Research limitations · ${panel.warnings.length}</summary>${list(panel.warnings)}</details>` : ''}
   <section><h4>Sources &amp; lineage</h4>${sources.length ? sources.map((s, i) => `<details class="pr-source"><summary>[${i + 1}] ${escapeText(s.title || s.url || s.kind)}</summary><p>${escapeText(s.kind)} · retrieved ${escapeText(s.retrieved_at || 'date unavailable')}</p>${sourceUrl(s.url) ? `<a href="${escapeText(sourceUrl(s.url))}" target="_blank" rel="noopener noreferrer">Open original source ↗</a>` : '<p>Supplied excerpt; no public URL.</p>'}<blockquote>${escapeText(s.text)}</blockquote><small>Content hash: ${escapeText(s.content_hash)}</small></details>`).join('') : '<p>No sources collected.</p>'}</section>
@@ -78,75 +107,83 @@ export function renderResearchPanel(panel, latestVersion = panel.version) {
 
 export function mountPersonaResearch() {
   const trigger = document.createElement('button');
-  trigger.className = 'pr-trigger'; trigger.type = 'button'; trigger.textContent = '＋ Build audience'; trigger.setAttribute('aria-haspopup', 'dialog');
-  const dialog = document.createElement('dialog'); dialog.className = 'pr-dialog'; dialog.setAttribute('aria-labelledby', 'pr-title');
-  dialog.innerHTML = `<header class="pr-head"><div><span class="pr-kicker">Simtra · audience research</span><h2 id="pr-title">Build the right audience.</h2></div><button type="button" data-pr-action="close" aria-label="Close audience research">×</button></header><p class="pr-intro">Turn a business question and customer evidence into a reusable research panel. Keep facts, assumptions, and gaps visible.</p>
-  <p id="pr-config" class="pr-notice" role="status">Checking research services…</p><div class="pr-layout"><section><form id="pr-form"><fieldset id="pr-fields"><label>Research question<textarea name="question" required minlength="8" maxlength="2000" rows="3" placeholder="What matters to Chipotle customers when choosing a lunch option?"></textarea></label><div class="pr-row"><label>Business / product<input name="business" required maxlength="160" placeholder="Chipotle"></label><label>Location / market<input name="location" maxlength="200" placeholder="San Francisco"></label></div><label>Maximum panel size<input name="panel_size" type="number" min="2" max="12" value="6" required></label><p class="pr-muted">We only create profiles supported by the available evidence; the panel may be smaller.</p>
-  <p id="pr-retained" class="pr-muted"></p><button type="button" data-pr-action="clear-evidence" hidden>Remove retained evidence</button><label>Source URLs · one per line<textarea name="urls" rows="3" placeholder="https://…"></textarea></label><p class="pr-muted">Use relevant menu/pricing pages, public discussions, or reviews. Some sites block access; paste an excerpt when needed. Up to 8 sources total.</p>
-  <details class="pr-input-details"><summary>Add customer evidence</summary><label>Source description<input name="evidence_title" maxlength="240" placeholder="Customer interviews, September 2026"></label><label>Evidence type<select name="evidence_kind"><option value="interview">Customer interview</option><option value="review">Review</option><option value="reddit">Reddit discussion</option><option value="x">X post</option><option value="web">Web page</option></select></label><label>Verbatim evidence<textarea name="evidence" rows="5" maxlength="12000" placeholder="Paste relevant excerpts; remove names, handles, emails, and other personal details."></textarea></label></details>
-  <label>Founder / owner context<textarea name="founder_context" rows="3" maxlength="8000" placeholder="What you know about your customers. This stays labeled founder-provided."></textarea></label><label class="pr-check"><input name="discover" type="checkbox" disabled> Discover additional public sources</label><p id="pr-search-status" class="pr-muted">Checking search configuration…</p><p id="pr-version-note" class="pr-muted"></p><button class="pr-primary" id="pr-build" type="submit">Build research panel</button><button type="button" data-pr-action="new" hidden>Start a separate panel</button></fieldset></form><p id="pr-progress" role="status" aria-live="polite"></p><p id="pr-error" role="alert" hidden></p><section class="pr-history"><div class="pr-actions"><h3>Saved panels</h3><button type="button" data-pr-action="refresh">Refresh</button></div><p id="pr-history-status" class="pr-muted"></p><div id="pr-history"></div></section></section><section id="pr-result" aria-label="Research panel"><div class="pr-empty"><span aria-hidden="true">▦</span><h3>Evidence before personas.</h3><p>Your saved panel will show relevant customer attributes, source excerpts, conflicting information, and what we still don’t know.</p><p>Research only. This does not change the city’s residents or run a prediction.</p></div></section></div>`;
+  trigger.className = 'pr-trigger'; trigger.type = 'button'; trigger.textContent = 'Audience research · automatic'; trigger.setAttribute('aria-haspopup', 'dialog');
+  const dialog = document.createElement('dialog'); dialog.className = 'pr-dialog pr-readonly'; dialog.setAttribute('aria-labelledby', 'pr-title');
+  dialog.innerHTML = `<header class="pr-head"><div><span class="pr-kicker">Simtra · audience research</span><h2 id="pr-title">Your audience research.</h2></div><button type="button" data-pr-action="close" aria-label="Close audience research">×</button></header>
+    <p class="pr-intro">One question is enough. Simtra identifies its business, topic and audience, discovers public evidence, and saves supported profiles automatically.</p>
+    <p id="pr-auto-status" class="pr-notice" role="status">Ask your question in the main city input. No research form to fill out.</p>
+    <p class="pr-muted">Research profiles are context only. The current simulation still evaluates Census residents; these profiles do not replace them. Discovery powered by <a href="https://brave.com/search/api/" target="_blank" rel="noopener noreferrer">Brave Search</a>.</p>
+    <p id="pr-error" role="alert" hidden></p>
+    <section id="pr-result" aria-label="Research panel"><p class="pr-empty">Your audience, citations and missing information will appear here after you ask a question.</p></section>
+    <details class="pr-history"><summary>Saved research</summary><p id="pr-history-status" class="pr-muted"></p><div id="pr-history"></div></details>`;
   document.body.append(trigger, dialog);
   const q = selector => dialog.querySelector(selector);
-  const form = q('#pr-form');
-  const lockIdentity = locked => { for (const name of ['question', 'business', 'location']) form.elements[name].readOnly = locked; };
-  let config = null; let selected = null; let panelId; let busy = false; let carriedSources = []; const latestVersions = new Map();
+  let selected = null;
+  const latestVersions = new Map();
   const error = message => { q('#pr-error').textContent = message || ''; q('#pr-error').hidden = !message; };
-  const showPanel = panel => { selected = panel; latestVersions.set(panel.id, Math.max(latestVersions.get(panel.id) || 1, panel.version)); q('#pr-result').innerHTML = renderResearchPanel(panel, latestVersions.get(panel.id)); };
+  const showPanel = panel => {
+    selected = panel;
+    latestVersions.set(panel.id, Math.max(latestVersions.get(panel.id) || 1, panel.version));
+    q('#pr-result').innerHTML = renderResearchPanel(panel, latestVersions.get(panel.id));
+  };
   async function loadHistory() {
-    q('#pr-history-status').textContent = 'Loading saved panels…';
     try {
-      const data = await researchRequest('/panels');
-      const panels = data.panels || []; q('#pr-history').replaceChildren();
-      for (const panel of panels) { latestVersions.set(panel.id, Math.max(latestVersions.get(panel.id) || 1, panel.version)); const button = document.createElement('button'); button.type = 'button'; button.textContent = `${panel.business} · v${panel.version} · ${(panel.personas || []).length} ${(panel.personas || []).length === 1 ? 'profile' : 'profiles'}`; button.title = panel.question; button.addEventListener('click', async () => { error(''); try { showPanel(await researchRequest(`/panels/${encodeURIComponent(panel.id)}?version=${panel.version}`)); } catch (e) { error(e.message); } }); q('#pr-history').append(button); }
-      q('#pr-history-status').textContent = panels.length ? `${panels.length} saved ${panels.length === 1 ? 'panel' : 'panels'}` : 'No saved panels yet.';
+      const { panels = [] } = await researchRequest('/panels');
+      q('#pr-history').replaceChildren();
+      for (const panel of panels) {
+        latestVersions.set(panel.id, Math.max(latestVersions.get(panel.id) || 1, panel.version));
+        const button = document.createElement('button'); button.type = 'button';
+        button.textContent = `${panel.business} · v${panel.version}`; button.title = panel.question;
+        button.addEventListener('click', async () => {
+          error('');
+          try {
+            showPanel(await researchRequest(`/panels/${encodeURIComponent(panel.id)}?version=${panel.version}`));
+            q('#pr-auto-status').textContent = 'Viewing saved research. Original source dates and limitations still apply.';
+          } catch (e) { error(e.message); }
+        });
+        q('#pr-history').append(button);
+      }
+      q('#pr-history-status').textContent = `${panels.length} saved panels`;
     } catch (e) { q('#pr-history-status').textContent = `Saved panels unavailable: ${e.message}`; }
   }
-  async function loadConfig() {
-    try {
-      config = await researchRequest('/config');
-      q('#pr-config').textContent = config.jev_configured ? 'Jev available for structured attribute classification. Research profiles require review.' : 'Jev is not configured. Evidence can still be collected; unsupported attributes remain unknown.';
-      form.elements.discover.disabled = !config.search_configured;
-      q('#pr-search-status').textContent = config.search_configured ? 'Automatic discovery is ready. Powered by ' : 'Automatic discovery is not configured. Add source URLs or paste evidence to begin.';
-      if (config.search_configured) {
-        const attribution = document.createElement('a'); attribution.href = 'https://brave.com/search/api/'; attribution.textContent = 'Brave Search'; attribution.target = '_blank'; attribution.rel = 'noopener noreferrer';
-        q('#pr-search-status').append(attribution, '. Discovery is optional and does not bypass site restrictions.');
-      }
-    } catch (e) { config = null; q('#pr-config').textContent = `Research service unavailable: ${e.message}`; q('#pr-search-status').textContent = 'Discovery unavailable until the research backend is connected.'; }
-  }
-  trigger.addEventListener('click', () => { dialog.showModal(); if (!config) loadConfig(); loadHistory(); });
-  form.addEventListener('submit', async event => {
-    event.preventDefault(); if (busy) return; error('');
-    let body; try { body = makeResearchRequest(Object.fromEntries(new FormData(form)), { maxSources: config?.max_sources || 8, panelId, carriedSources }); } catch (e) { error(e.message); return; }
-    busy = true; q('#pr-fields').disabled = true; q('#pr-build').textContent = 'Building…'; q('#pr-progress').textContent = 'Collecting sources, assembling supported attributes, and saving the panel. This can take a minute.';
-    try { const panel = await researchRequest('/panels', { body }); showPanel(panel); q('#pr-progress').textContent = `Saved version ${panel.version}. Review the evidence and gaps before handing off this panel.`; panelId = panel.id; lockIdentity(true); q('#pr-version-note').textContent = `Next build saves a new version of this panel. Question, business, and location stay fixed; start a separate panel to change them.`; q('[data-pr-action="new"]').hidden = false; await loadHistory(); } catch (e) { error(e.message); q('#pr-progress').textContent = 'Panel creation was not confirmed. Your inputs are preserved.'; } finally { busy = false; q('#pr-fields').disabled = false; form.elements.discover.disabled = !config?.search_configured; q('#pr-build').textContent = panelId ? 'Save next panel version' : 'Build research panel'; }
-  });
+  trigger.addEventListener('click', () => { dialog.showModal(); loadHistory(); });
   dialog.addEventListener('change', async event => {
     if (event.target.id === 'pr-version' && selected) {
-      error(''); const id = selected.id; const version = event.target.value;
-      try { showPanel(await researchRequest(`/panels/${encodeURIComponent(id)}?version=${version}`)); } catch (e) { error(e.message); }
+      error('');
+      try { showPanel(await researchRequest(`/panels/${encodeURIComponent(selected.id)}?version=${event.target.value}`)); } catch (e) { error(e.message); }
     }
   });
   dialog.addEventListener('click', event => {
     const action = event.target.closest('[data-pr-action]')?.dataset.prAction;
     if (action === 'close') dialog.close();
-    if (action === 'refresh') loadHistory();
-    if (action === 'clear-evidence' && !busy) { carriedSources = []; q('#pr-retained').textContent = ''; q('[data-pr-action="clear-evidence"]').hidden = true; }
-    if (action === 'new' && !busy) { panelId = undefined; lockIdentity(false); carriedSources = []; q('#pr-retained').textContent = ''; q('[data-pr-action="clear-evidence"]').hidden = true; q('#pr-version-note').textContent = ''; q('#pr-build').textContent = 'Build research panel'; q('[data-pr-action="new"]').hidden = true; }
-    if (action === 'revise' && selected && !busy) {
-      panelId = selected.id; lockIdentity(true);
-      const retained = retainedResearchInputs(selected); carriedSources = retained.sources;
-      for (const name of ['question', 'business', 'location']) form.elements[name].value = selected[name] || '';
-      form.elements.urls.value = ''; form.elements.evidence.value = ''; form.elements.evidence_title.value = '';
-      form.elements.founder_context.value = retained.founderContext;
-      form.elements.panel_size.value = Math.max(2, selected.personas?.length || 6);
-      form.elements.discover.checked = false;
-      q('#pr-retained').textContent = `${carriedSources.length} source snapshots retained from version ${selected.version}. These are saved excerpts, not freshly fetched pages. Add URLs below for new research, or remove retained evidence to start fresh.`;
-      q('[data-pr-action="clear-evidence"]').hidden = !carriedSources.length;
-      q('#pr-version-note').textContent = `Next build creates an immutable new version of panel ${selected.id}. Existing versions are preserved. Start a separate panel to change the question, business, or location.`;
-      q('[data-pr-action="new"]').hidden = false; q('#pr-build').textContent = 'Save next panel version'; form.elements.question.focus();
+    if (action === 'export' && selected) {
+      const url = URL.createObjectURL(new Blob([JSON.stringify(selected, null, 2)], { type: 'application/json' }));
+      const a = document.createElement('a'); a.href = url; a.download = `simtra-audience-${String(selected.id).replace(/[^a-zA-Z0-9_-]/g, '')}-v${selected.version}.json`; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
-    if (action === 'export' && selected) { const url = URL.createObjectURL(new Blob([JSON.stringify(selected, null, 2)], { type: 'application/json' })); const a = document.createElement('a'); a.href = url; a.download = `simtra-audience-${String(selected.id).replace(/[^a-zA-Z0-9_-]/g, '')}-v${selected.version}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
   });
-  return { dialog, trigger };
+  function updateAutomatic({ stage, question, panel, reused, message }) {
+    const count = panel?.personas?.length || 0;
+    const label = `${count} ${count === 1 ? 'profile' : 'profiles'}`;
+    const labels = {
+      demo: 'Offline demo: automatic audience research is not run.',
+      checking: 'Checking saved audience research…',
+      researching: 'Identifying business, topic and audience → discovering evidence → saving profiles…',
+      ready: `${reused ? 'Reusing' : 'Saved'} audience · ${label} · version ${panel?.version || ''}`,
+      needs_evidence: 'Research saved · insufficient evidence for profiles. See the gaps below; refine your question in the main input.',
+      failed: message || 'Audience research could not finish.',
+      cancelled: 'Audience research cancelled. No simulation started from this request.',
+    };
+    q('#pr-auto-status').textContent = labels[stage] || '';
+    trigger.textContent = stage === 'demo' ? 'Audience · offline demo' : stage === 'ready' ? `Audience · ${label}` : stage === 'researching' || stage === 'checking' ? 'Audience · researching…' : stage === 'cancelled' ? 'Audience · cancelled' : 'Audience · needs attention';
+    trigger.title = question || ''; trigger.setAttribute('aria-live', 'polite');
+    if (stage === 'checking' || stage === 'demo') {
+      error(''); selected = null;
+      q('#pr-result').innerHTML = `<p class="pr-empty">${stage === 'demo' ? 'Offline fixture demonstration. No audience research was performed.' : 'Preparing research for your current question…'}</p>`;
+    }
+    if (panel) showPanel(panel);
+  }
+  const controller = { dialog, trigger, updateAutomatic };
+  return controller;
 }
-if (typeof document !== 'undefined') mountPersonaResearch();
+export const personaResearchUI = typeof document !== 'undefined' ? mountPersonaResearch() : null;

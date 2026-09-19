@@ -22,6 +22,21 @@ pub fn search_configured() -> bool {
 }
 
 pub async fn collect(request: &BuildRequest) -> Result<(Vec<EvidenceSource>, Vec<String>)> {
+    collect_pass(request, false).await
+}
+
+// One bounded alternative-source search if the initial pages are all unreadable.
+pub async fn collect_automatic(request: &BuildRequest) -> Result<(Vec<EvidenceSource>, Vec<String>)> {
+    let (sources, mut warnings) = collect_pass(request, false).await?;
+    if !sources.is_empty() || !request.discover || !search_configured() { return Ok((sources, warnings)); }
+    warnings.push("The initial search yielded no readable evidence. One alternate-source search excluded commonly blocked discussion/review hosts. No search snippets were substituted for source text.".into());
+    let (sources, extra) = collect_pass(request, true).await?;
+    warnings.extend(extra);
+    warnings.sort(); warnings.dedup();
+    Ok((sources, warnings))
+}
+
+async fn collect_pass(request: &BuildRequest, alternate: bool) -> Result<(Vec<EvidenceSource>, Vec<String>)> {
     let mut warnings = Vec::new();
     let mut inputs = request
         .sources
@@ -34,10 +49,10 @@ pub async fn collect(request: &BuildRequest) -> Result<(Vec<EvidenceSource>, Vec
     }
     if request.discover && inputs.len() < MAX_SOURCES {
         if search_configured() {
-            match discover(request).await {
+            match discover(request, alternate).await {
                 Ok(discovered) => {
                     if discovered.is_empty() {
-                        warnings.push("Web discovery returned no source URLs. Try a more specific business or question, or add your own sources.".into());
+                        warnings.push("Web discovery returned no source URLs. Try a more specific business or question, in the main question input.".into());
                     }
                     let mut known = inputs.iter().filter_map(|s| s.url.clone()).collect::<HashSet<_>>();
                     for input in discovered {
@@ -47,7 +62,7 @@ pub async fn collect(request: &BuildRequest) -> Result<(Vec<EvidenceSource>, Vec
                         if inputs.len() == MAX_SOURCES { break; }
                     }
                 }
-                Err(_) => warnings.push("Public web discovery was unavailable. Add public source URLs or paste attributed excerpts.".into()),
+                Err(_) => warnings.push("Public web discovery was unavailable. Retry your question when the search service is available.".into()),
             }
         } else {
             warnings.push("Automatic web discovery is not configured (BRAVE_SEARCH_API_KEY). Submitted public URLs and pasted excerpts can still be processed.".into());
@@ -74,7 +89,7 @@ pub async fn collect(request: &BuildRequest) -> Result<(Vec<EvidenceSource>, Vec
                 if hashes.insert(source.content_hash.clone()) { sources.push(source); }
                 else { warnings.push(format!("Duplicate evidence from {label} was omitted; repeated text is not independent corroboration.")); }
             }
-            Err(error) => warnings.push(format!("Could not collect {label}: {error}. For unavailable Reddit/X or other pages, paste an attributed public excerpt; no substitute evidence was invented.")),
+            Err(error) => warnings.push(format!("Could not collect {label}: {error}. The unavailable source was skipped; no substitute evidence was invented.")),
         }
     }
     Ok((sources, warnings))
@@ -85,7 +100,7 @@ pub async fn collect(request: &BuildRequest) -> Result<(Vec<EvidenceSource>, Vec
 fn discovery_query(request: &BuildRequest) -> String {
     let query = format!(
         "{} {} {} customer experiences reviews",
-        truncate(request.business.trim(), 80),
+        truncate(if request.business == "Unspecified business" { "" } else { request.business.trim() }, 80),
         truncate(request.question.trim(), 180),
         truncate(request.location.trim(), 50)
     );
@@ -99,9 +114,11 @@ fn discovery_query(request: &BuildRequest) -> String {
     )
 }
 
-async fn discover(request: &BuildRequest) -> Result<Vec<SourceInput>> {
+async fn discover(request: &BuildRequest, alternate: bool) -> Result<Vec<SourceInput>> {
     let key = std::env::var("BRAVE_SEARCH_API_KEY").context("Search not configured")?;
-    let query = discovery_query(request);
+    let query = if alternate {
+        format!("{} -site:reddit.com -site:yelp.com -site:tripadvisor.com", truncate(&discovery_query(request), 270))
+    } else { discovery_query(request) };
     let client = reqwest::Client::builder()
         .no_proxy()
         .redirect(Policy::none())
