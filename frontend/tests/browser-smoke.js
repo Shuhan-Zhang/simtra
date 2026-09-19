@@ -13,7 +13,7 @@ async (page) => {
   });
   const report = async (name, evidence = {}) => { cases.push({name,status:'passed',...evidence}); await page.evaluate(result=>{window.__smokeEvidence=result;},{cases,errors,external}); };
   const summary = () => page.evaluate(async () => {
-    const {map} = await import('/src/app.js');
+    const {map} = await import(document.querySelector('script[type="module"]').src);
     const el = document.querySelector('[data-evidence-summary]');
     return {...map.getSegmentSelectionSummary(),text:el?.textContent,domRaw:Number(el?.dataset.rawCount),domWeight:Number(el?.dataset.weightedCount)};
   });
@@ -34,10 +34,10 @@ async (page) => {
     await page.setViewportSize({width:1440,height:1000});
     await page.emulateMedia({reducedMotion:'no-preference'});
     await page.goto('http://localhost:5173/?demo=1');
-    await page.waitForFunction(async()=> (await import('/src/app.js')).state.phase==='idle');
+    await page.waitForFunction(async()=> (await import(document.querySelector('script[type="module"]').src)).state.phase==='idle');
     check(errors.length===0,'boot console errors',errors); await report('a. app boot without console errors');
     await ask('Should the city expand public transit?');
-    const result = await page.evaluate(async()=>{ const {map,state}=await import('/src/app.js'); return {mode:map.mode,verdicts:map.agents.filter(a=>a.verdict).length,n:state.rawResidents.length,fixture:state.lastResult.fixture_mode}; });
+    const result = await page.evaluate(async()=>{ const {map,state}=await import(document.querySelector('script[type="module"]').src); return {mode:map.mode,verdicts:map.agents.filter(a=>a.verdict).length,n:state.rawResidents.length,fixture:state.lastResult.fixture_mode}; });
     check(result.mode==='results' && result.verdicts===256 && result.fixture,'fixture prediction and reveal',result);
     await report('b. deterministic local binary result and resident reveal',result);
     await openChart(); await report('c. open demographic chart');
@@ -51,7 +51,7 @@ async (page) => {
     await page.emulateMedia({reducedMotion:'reduce'});
     if (await page.getByRole('button',{name:'Return to the whole city'}).isVisible()) await page.getByRole('button',{name:'Return to the whole city'}).click();
     const drawing = await page.evaluate(async()=>{
-      const {map}=await import('/src/app.js');
+      const {map}=await import(document.querySelector('script[type="module"]').src);
       map._draw(performance.now());
       const c=map.ctx, calls=[], originals={};
       for(const method of ['drawImage','fillRect','strokeRect']) { originals[method]=c[method]; c[method]=function(...args){calls.push({method,alpha:this.globalAlpha,stroke:this.strokeStyle});return originals[method].apply(this,args);}; }
@@ -66,7 +66,7 @@ async (page) => {
     await report('g. Clear',selected);
     await choose('gender','women'); await choose('age','25-34',{modifiers:['Shift']});
     const combined=await summary();
-    const independent=await page.evaluate(async()=>{const {state}=await import('/src/app.js');const rows=state.rawResidents.filter(a=>a.segments.gender==='women'||a.segments.age==='25-34');return {count:rows.length,weight:rows.reduce((s,a)=>s+a.pums_weight,0)};});
+    const independent=await page.evaluate(async()=>{const {state}=await import(document.querySelector('script[type="module"]').src);const rows=state.rawResidents.filter(a=>a.segments.gender==='women'||a.segments.age==='25-34');return {count:rows.length,weight:rows.reduce((s,a)=>s+a.pums_weight,0)};});
     check(combined.rawMatchingAgents===independent.count && combined.weightedPumsCount===independent.weight && combined.text.includes('age = 25-34 OR gender = women'),'combined OR totals',{combined,independent});
     await report('h. Shift-click union deduplicates weighted residents',{combined,independent});
     await page.getByRole('button',{name:'Clear selection',exact:true}).click();
@@ -75,7 +75,7 @@ async (page) => {
     check((await summary()).weightedPumsCount===independent.weight,'touch combine control'); await report('touch-accessible Combine control');
     await page.locator('#evidence-combine').uncheck();
     // Click a visible map resident, taking geometry from the same drawn map.
-    const tap=await page.evaluate(async()=>{const {map}=await import('/src/app.js');const a=map.agents.find(a=>{const p=map.worldToScreen(a.wx,a.wy);return p.x>50&&p.x<innerWidth-50&&p.y>160&&p.y<350&&document.elementFromPoint(p.x,p.y-3)?.id==='map';}); if(!a) throw Error('No visible resident');const p=map.worldToScreen(a.wx,a.wy);const hit=map._hitSprite(p.x,p.y-3,true);return {x:p.x,y:p.y-3,id:hit.seed,key:hit.segments.age};});
+    const tap=await page.evaluate(async()=>{const {map}=await import(document.querySelector('script[type="module"]').src);const a=map.agents.find(a=>{const p=map.worldToScreen(a.wx,a.wy);return p.x>50&&p.x<innerWidth-50&&p.y>160&&p.y<350&&document.elementFromPoint(p.x,p.y-3)?.id==='map';}); if(!a) throw Error('No visible resident');const p=map.worldToScreen(a.wx,a.wy);const hit=map._hitSprite(p.x,p.y-3,true);return {x:p.x,y:p.y-3,id:hit.seed,key:hit.segments.age};});
     await page.mouse.click(tap.x,tap.y);
     selected=await summary();
     check(selected.text.includes(`age = ${tap.key}`) && selected.text.includes(`Resident ${tap.id} selected`),'resident updates active age dimension',{selected,tap});
@@ -94,7 +94,7 @@ async (page) => {
     await page.locator('#evidence-dimension').selectOption('education');await page.locator('button[data-dimension="education"]').first().click();
     check((await summary()).rawMatchingAgents>0,'expanded canonical map dimension');await report('Education dimension integration');
     await page.getByText('Explore demographic evidence',{exact:true}).click();
-    await page.waitForFunction(async()=>!(await import('/src/app.js')).map.getSegmentSelectionSummary().active);
+    await page.waitForFunction(async()=>!(await import(document.querySelector('script[type="module"]').src)).map.getSegmentSelectionSummary().active);
     await report('closing chart clears selection');
     await openChart(); await choose('gender','women');
     await page.getByRole('button',{name:'Dismiss',exact:true}).click(); check(!(await summary()).active,'dismiss resets map');await report('dismiss clears selection');
@@ -105,10 +105,10 @@ async (page) => {
     check((await page.locator('button[data-key="women"]').innerText()).includes('Parks: 50.0%'),'options chart uses real distribution');await report('multi-option result and chart');
     await page.getByRole('button',{name:'Switch city'}).click();
     await page.getByRole('option',{name:'New York City',exact:false}).click();
-    await page.waitForFunction(async()=>{const {state}=await import('/src/app.js');return state.city.slug==='neu_york'&&!state.switching;});
+    await page.waitForFunction(async()=>{const {state}=await import(document.querySelector('script[type="module"]').src);return state.city.slug==='neu_york'&&!state.switching;});
     check(!(await summary()).active && !await page.locator('#result-card').isVisible(),'city reset');await report('switch city clears stale state');
     await ask('Should the city expand public transit?');await openChart();await choose('gender','women');
-    await page.evaluate(async()=>{const {state}=await import('/src/app.js');const api=await import('/src/api.js');await api.deleteBranch(state.branchId);});
+    await page.evaluate(async()=>{const {state}=await import(document.querySelector('script[type="module"]').src);const api=await import('/src/api.js');await api.deleteBranch(state.branchId);});
     check(!(await summary()).active && await page.locator('#evidence-panel').count()===0,'deleting branch clears chart');await report('deleting prediction branch clears selection');
     await page.getByRole('button',{name:'Dismiss',exact:true}).click();
     // A/B is a mode of the one composer: open it, pick A/B, fill the question and variants, send.
@@ -126,7 +126,7 @@ async (page) => {
     await page.getByLabel('Target question',{exact:true}).fill('Should the city expand public transit?');await page.locator('#marketing-copy').fill('More frequent buses for every neighborhood.');
     await page.getByRole('button',{name:'Send',exact:true}).click();await page.locator('#result-card').waitFor({state:'visible',timeout:15000});
     check(await page.locator('.res-cf-grid').isVisible(),'counterfactual result');await openChart();await choose('gender','women');check((await summary()).active,'exposed chart selection');await report('counterfactual result and exposed-arm chart');
-    const positions=await page.evaluate(async()=>{const {map}=await import('/src/app.js');const before=map.agents.map(a=>[a.wx,a.wy,a.frameClock]);map._draw(performance.now()+5000);return {reduced:map.reducedMotion,frozen:JSON.stringify(before)===JSON.stringify(map.agents.map(a=>[a.wx,a.wy,a.frameClock]))};});
+    const positions=await page.evaluate(async()=>{const {map}=await import(document.querySelector('script[type="module"]').src);const before=map.agents.map(a=>[a.wx,a.wy,a.frameClock]);map._draw(performance.now()+5000);return {reduced:map.reducedMotion,frozen:JSON.stringify(before)===JSON.stringify(map.agents.map(a=>[a.wx,a.wy,a.frameClock]))};});
     check(positions.reduced && positions.frozen,'reduced motion map frozen',positions);await report('reduced-motion map and reveal',positions);
     await page.emulateMedia({forcedColors:'active',reducedMotion:'reduce'});
     const forced=await page.locator('button[data-key="women"]').evaluate(el=>({border:getComputedStyle(el).borderTopWidth,pressed:el.getAttribute('aria-pressed'),text:el.firstElementChild.textContent}));

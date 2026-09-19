@@ -278,6 +278,8 @@ scripts/                       City build helpers
 
 ## 7. Model providers and credentials
 
+**jevdev backend update (2026-09-19):** Live backend defaults now use Jev via TypeSafe native typed evaluations. Read `JEV_BACKEND.md` for module interfaces, credentials, and verification. Gemini transport is removed. Azure/Anthropic entries below are retained for explicit historical backtests. The frontend now selects Jev and defaults to the local backend for local pages. Hosted pages require an explicit HTTPS origin in `frontend/backend-config.js`; the original public API is not a fallback.
+
 `Model` currently maps to:
 
 | Model input | Provider path | Credential |

@@ -23,7 +23,7 @@ async (page) => {
   await page.emulateMedia({reducedMotion:'reduce'});
   await page.setViewportSize({width:1440,height:1000});
   await page.goto(base+'/?backend=local&port=5188');
-  await page.waitForFunction(async()=> (await import('/src/app.js')).state.phase==='idle');
+  await page.waitForFunction(async()=> (await import(document.querySelector('script[type="module"]').src)).state.phase==='idle');
   await page.getByRole('radio',{name:'Verified data',exact:true}).check();
   async function ask(question) {
     if(await page.getByRole('button',{name:'Dismiss',exact:true}).isVisible()) await page.getByRole('button',{name:'Dismiss',exact:true}).click();
@@ -45,7 +45,7 @@ async (page) => {
     const bar=page.locator(`.verified-bars button[data-key="${key}"]`);
     await bar.click();
     const result=await page.evaluate(async({dimension,key})=>{
-      const {map,state}=await import('/src/app.js');
+      const {map,state}=await import(document.querySelector('script[type="module"]').src);
       const residents=state.rawResidents;
       const expected=residents.filter(r=>r.segments[dimension]===key).length;
       map.returnToOverview();map._draw(performance.now());

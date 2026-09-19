@@ -109,7 +109,7 @@ export function createPersonaChart(host, opts) {
   const o = {
     question: "", framing: "vote", options: [], topIndex: 0,
     testId: null,
-    // (agentIds) => Map<agentId, {p_yes, dist, why}> | null — asks these residents in their own words
+    // (agentIds) => Map<agentId, {p_yes, dist, why}> | null — evaluates these residents with labeled factor templates
     fetchPersonal: null,
     model: { breakdowns: [], options: [] },
     residents: [], answers: null, answersNote: "",
@@ -272,7 +272,7 @@ export function createPersonaChart(host, opts) {
     const why = own?.why || r.answer?.why || "";
     const quote = r.pending
       ? `<span class="pc-person-why pending">asking ${esc(firstName(r.resident))}…</span>`
-      : why ? `<span class="pc-person-why">“${esc(why)}”${own ? "" : `<span class="pc-archetype">archetype view</span>`}</span>` : "";
+      : why ? `<span class="pc-person-why">${esc(why)}${own ? "" : `<span class="pc-archetype">archetype view</span>`}</span>` : "";
     return `<li class="pc-person" data-agent="${r.resident.id}" tabindex="0" role="button">
       <canvas class="pc-person-portrait" width="28" height="28" data-agent="${r.resident.id}"></canvas>
       <span class="pc-person-main">

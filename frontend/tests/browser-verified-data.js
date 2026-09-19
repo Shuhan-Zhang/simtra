@@ -16,7 +16,7 @@ async (page) => {
     const request=route.request(),url=request.url();
     if(url.startsWith(base+'/'))return route.continue();
     const path='/'+url.split('/').slice(3).join('/').split('?')[0];
-    if (!url.includes('sf-digital-twin-tp.fly.dev')) return route.fulfill({status:200,contentType:'text/css',body:''});
+    if (new URL(url).origin !== 'http://localhost:8080') return route.fulfill({status:200,contentType:'text/css',body:''});
     calls.push({path,method:request.method(),body:request.postData()});
     let result;
     if(path==='/cities')result={cities:demo.cities.map(r=>r.city)};
@@ -32,7 +32,7 @@ async (page) => {
     return route.fulfill({status:200,contentType:'application/json',headers:{'access-control-allow-origin':'*'},body:JSON.stringify(result)});
   });
   const summary=()=>page.evaluate(async()=>{
-    const {map}=await import('/src/app.js');return {...map.getSegmentSelectionSummary(),text:document.querySelector('[data-verified-summary]')?.textContent};
+    const {map}=await import(document.querySelector('script[type="module"]').src);return {...map.getSegmentSelectionSummary(),text:document.querySelector('[data-verified-summary]')?.textContent};
   });
   const ask=async()=>{
     await page.getByRole('group',{name:'Ask a prediction question'}).click();
@@ -43,7 +43,7 @@ async (page) => {
   };
   try {
     await page.setViewportSize({width:1440,height:1000});await page.emulateMedia({reducedMotion:'reduce'});
-    await page.goto(base);await page.waitForFunction(async()=> (await import('/src/app.js')).state.phase==='idle');
+    await page.goto(base);await page.waitForFunction(async()=> (await import(document.querySelector('script[type="module"]').src)).state.phase==='idle');
     // Verified-data questions are routed automatically by their shape; there is no mode switch.
     const before=calls.length;await ask();
     const query=calls.slice(before).filter(c=>!c.path.endsWith('/news'));
@@ -59,7 +59,7 @@ async (page) => {
     check(result.rawMatchingAgents===independent && result.active,'exact map predicate matches');
     check(result.text.includes('123,456')&&result.text.includes('1,234')&&result.text.includes(`resident count: ${independent}`),'three distinct counts');
     const drawing=await page.evaluate(async()=>{
-      const {map}=await import('/src/app.js');map.returnToOverview();map._draw(performance.now());
+      const {map}=await import(document.querySelector('script[type="module"]').src);map.returnToOverview();map._draw(performance.now());
       const c=map.ctx,calls=[],originals={};
       for(const method of ['drawImage','fillRect','strokeRect']){originals[method]=c[method];c[method]=function(...args){calls.push({method,alpha:this.globalAlpha,stroke:this.strokeStyle});return originals[method].apply(this,args);};}
       try{map._drawSprites(performance.now(),0);}finally{for(const [key,value] of Object.entries(originals))c[key]=value;}
@@ -104,9 +104,9 @@ async (page) => {
     response=fixture;await page.getByRole('button',{name:'Dismiss',exact:true}).click();
     let release;hold=new Promise(resolve=>{release=resolve;});
     await page.getByRole('group',{name:'Ask a prediction question'}).click();await page.getByRole('textbox',{name:'Predict anything',exact:true}).fill(fixture.question);await page.keyboard.press('Enter');
-    await page.waitForFunction(async()=> (await import('/src/app.js')).state.phase==='waiting');
+    await page.waitForFunction(async()=> (await import(document.querySelector('script[type="module"]').src)).state.phase==='waiting');
     await page.keyboard.press('Escape');release();hold=null;
-    await page.waitForFunction(async()=> (await import('/src/app.js')).state.queryMode==='simulation');
+    await page.waitForFunction(async()=> (await import(document.querySelector('script[type="module"]').src)).state.queryMode==='simulation');
     check(!await page.locator('#result-card').isVisible(),'cancelled response cannot resurface');
     report('mode change cancels in-flight query and discards stale response');
     check(errors.length===0,`page errors: ${errors.join(';')}`);

@@ -352,7 +352,7 @@ Reaction object:
 
 `GET /cities/{city}/events/{event_id}/reactions?limit=50` → `{"event": {…}, "reactions": [ …newest first… ], "sentiment": {…}}`; `404` when the event does not belong to that city.
 
-`POST /branches/{id}/events/{event_id}/react` body `{"n": 12}` (optional, 1–24) → `{"event_id": "evt-…", "reactions": [ … ]}`. Picks `n` residents spread evenly across archetypes, asks the model (Gemini Flash when `GEMINI_API_KEY` is set, otherwise Claude Sonnet) for one in-character post and sentiment each, stores them (re-reacting overwrites), and returns them. `404` branch or event not found; `502 {"error":"reaction model request failed"}` when the model yields no reactions.
+`POST /branches/{id}/events/{event_id}/react` body `{"n": 12}` (optional, 1–24) → `{"event_id": "evt-…", "reactions": [ … ]}`. Picks `n` residents spread evenly across archetypes, asks the model (Jev, using labeled illustrative templates) for one in-character post and sentiment each, stores them (re-reacting overwrites), and returns them. `404` branch or event not found; `502 {"error":"reaction model request failed"}` when the model yields no reactions.
 
 ### Lineage (events, tests and data queries in order)
 
@@ -364,7 +364,7 @@ Reaction object:
    "as_of_date": "2026-09-12", "created_at": "2026-09-12T18:16:40Z",
    "reaction_count": 8, "sentiment": {"angry": 1, "sad": 2, "worried": 5}},
   {"type": "test", "id": "test-…", "kind": "poll", "question": "Should the city increase police funding by 10%?",
-   "description": "…", "framing": "vote", "as_of_date": "2026-09-12", "model": "gemini-3.5-flash",
+   "description": "…", "framing": "vote", "as_of_date": "2026-09-12", "model": "jev-1.13.0",
    "p_yes": 0.46, "options": [], "p_distribution": [], "n_agents": 300, "n_archetypes": 135,
    "simulation_id": "sim-sf-42-300-…", "branch_id": "sim-sf-42-300-…:main", "population_key": "sf:42:300",
    "created_at": "2026-09-12T18:24:03Z", "events_known": 2, "under_event": null, "stimuli": [],

@@ -688,7 +688,7 @@ function fillTest(post, item) {
   const dist = Array.isArray(item.p_distribution) ? item.p_distribution : [];
   const isOptions = options.length > 0 && dist.length > 0;
   let p = Number.isFinite(item.p_yes) ? item.p_yes : 0;
-  let framing = item.framing === "belief" ? "say it will happen" : "would vote yes";
+  let framing = item.framing === "belief" ? "estimated likelihood" : "would vote yes";
   if (isOptions) {
     let best = 0; dist.forEach((v, i) => { if (v > dist[best]) best = i; });
     p = dist[best] ?? 0;

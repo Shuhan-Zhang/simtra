@@ -65,9 +65,7 @@ pub struct Poll {
 
 impl Poll {
     pub fn model(&self) -> Model {
-        // Live default is Claude Sonnet; the rubric pins gpt-4o per entry for the
-        // leakage-free 2024 backtest (a later-cutoff model would recall those results).
-        Model::parse(self.model.as_deref().unwrap_or("claude-sonnet-4-6"))
+        self.model.as_deref().map(Model::parse).unwrap_or_else(Model::default_live)
     }
     pub fn pop(&self) -> Population0 {
         match self.population.as_deref() {
@@ -558,8 +556,18 @@ p_yes is a probability between 0 and 1. Be realistic and calibrated to {city_nam
             let client = self.client.clone();
             let sys2 = sys.clone();
             let idxs: Vec<usize> = (batch_start..end).collect();
+            let city = pop.profile.prompt_name.clone();
+            let poll = poll.clone();
+            let news = news_block.clone();
+            let evidence = hydra_block.clone();
+            let stimuli = ab_stimuli.map(|s| (s.variant_a.to_string(), s.variant_b.to_string()));
             futs.push(async move {
-                let resp = client.complete(model, &sys2, &user, 1600).await;
+                let resp = if model.is_jev() {
+                    crate::jev::poll_batch(&client, model, &poll, &profiles, &city, &sys2,
+                        &news, &evidence, stimuli.as_ref().map(|(a,b)| (a.as_str(),b.as_str()))).await
+                } else {
+                    client.complete(model, &sys2, &user, 1600).await.and_then(|text| extract_json(&text))
+                };
                 (idxs, resp)
             });
             calls += 1;
@@ -579,8 +587,8 @@ p_yes is a probability between 0 and 1. Be realistic and calibrated to {city_nam
         let mut answered = vec![false; clusters.len()];
         for (idxs, resp) in results {
             match resp {
-                Ok(text) => {
-                    if let Ok(v) = extract_json(&text) {
+                Ok(v) => {
+                    {
                         if let Some(arr) = v.as_array() {
                             for (k, item) in arr.iter().enumerate() {
                                 if k >= idxs.len() {
@@ -985,6 +993,11 @@ p_yes is a probability between 0 and 1. Be realistic and calibrated to {city_nam
         if people.is_empty() {
             return vec![];
         }
+        if default_live_model().is_jev() {
+            return crate::jev::voices(&self.client, default_live_model(), &people,
+                &pop.profile.prompt_name, None).await.unwrap_or_default()
+                .into_iter().map(|(id,text,_)| (id,text)).collect();
+        }
         let sys = format!(
             "You voice the private inner monologue of real {city} residents for an ambient \
 city simulation. For each resident, write the one short thought running through their head \
@@ -1050,18 +1063,8 @@ fn salvage_json_array(text: &str) -> Result<serde_json::Value> {
     Ok(serde_json::Value::Array(items))
 }
 
-/// Model for ambient, best-effort calls (chatter, reactions): Gemini Flash when a
-/// Gemini key is configured, otherwise Claude Sonnet.
-pub fn default_live_model() -> Model {
-    if std::env::var("GEMINI_API_KEY").map(|k| !k.trim().is_empty()).unwrap_or(false) {
-        // GEMINI_MODEL picks the variant; flash-lite by default because the free
-        // tier caps gemini-3.5-flash at 20 requests per day per project.
-        let name = std::env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-3.5-flash-lite".into());
-        Model::parse(&name)
-    } else {
-        Model::parse("claude-sonnet-4-6")
-    }
-}
+/// All live features default to Jev; legacy models remain explicit backtest options.
+pub fn default_live_model() -> Model { Model::default_live() }
 
 /// `n` agent ids spread evenly across the population's archetypes, deterministic
 /// for a given population (clusters are sorted by representative index).
@@ -1096,6 +1099,10 @@ impl Engine {
             .collect();
         if people.is_empty() {
             return vec![];
+        }
+        if default_live_model().is_jev() {
+            return crate::jev::voices(&self.client, default_live_model(), &people,
+                &pop.profile.prompt_name, Some((event_text, as_of_date))).await.unwrap_or_default();
         }
         let sys = format!(
             "You voice real {city} residents reacting to a news event on a local social feed. \
@@ -1235,6 +1242,16 @@ impl Engine {
             .collect();
         if people.is_empty() {
             return Ok(vec![]);
+        }
+        if default_live_model().is_jev() {
+            let poll = Poll { question: question.into(), description: description.into(), framing,
+                as_of_date: as_of_date.into(), model: None, population: None, event: None, options: options.to_vec() };
+            let profiles: Vec<(usize, String)> = people.iter().enumerate().map(|(i,(_,p))| (i,p.clone())).collect();
+            let rows = crate::jev::poll_batch(&self.client, default_live_model(), &poll, &profiles,
+                &pop.profile.prompt_name, &Self::system_prompt(framing, &pop.profile, false), "", "", None).await?;
+            let n_opts = if framing == Framing::Options { options.len() } else { 0 };
+            return Ok(parse_personal_answers(&rows.to_string(), people.len(), n_opts).into_iter()
+                .map(|(i,p,dist,why)| (people[i].0,p,dist,why)).collect());
         }
         let n_opts = if matches!(framing, Framing::Options) { options.len() } else { 0 };
         let sys = format!(

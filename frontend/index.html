@@ -16,7 +16,6 @@
       }
     }
   </script>
-  <link rel="preconnect" href="https://sf-digital-twin-tp.fly.dev" />
 </head>
 <body>
   <!-- the pixel-art city fills the entire page -->
@@ -115,7 +114,7 @@
             </svg>
             <span id="ask-label" class="ask-label">ask</span>
             <textarea id="ask-input" class="ask-input" rows="1" autocomplete="off" spellcheck="false"
-                      placeholder="predict anything — e.g. will a Democrat win the 2026 California governor race?"
+                      placeholder="Ask a question — for choices, list options: bus, train, or bicycle"
                       aria-label="Predict anything"></textarea>
             <button id="ask-submit" class="ask-send" type="button" aria-label="Send">
               <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
@@ -129,6 +128,7 @@
             <div class="ask-modes" role="radiogroup" aria-label="Question type">
               <button type="button" class="ask-mode" role="radio" data-mode="predict" aria-checked="true">Predict</button>
               <button type="button" class="ask-mode" role="radio" data-mode="ab" aria-checked="false">A/B</button>
+              <button type="button" class="ask-mode" role="radio" data-mode="marketing" aria-checked="false">Post test</button>
             </div>
             <div id="ab-fields" class="ask-fields" hidden>
               <textarea id="ab-a" class="ask-field" rows="2" maxlength="4000" placeholder="Variant A" aria-label="Variant A"></textarea>
@@ -221,7 +221,7 @@
       <p>It now spans <b>five US cities</b> — San Francisco plus <b>New York City</b>, <b>Los Angeles</b>, <b>Chicago</b>, and <b>Miami</b> — each its own Census-sampled population. Switch between them from the title in the top-left.</p>
 
       <div class="about-h">Historically predictive</div>
-      <p>How do we know if our simulation of SF is accurate? The honest test needs a model whose knowledge cutoff <i>predates</i> the event, so it can't have just memorized the outcome. The older Claude models with a 2023 cutoff have since been <b>retired</b> — so for this leakage-free backtest we ran <b>GPT-4o</b> (knowledge cutoff <b>October 2023</b>) and asked the twin city to predict results it had never seen. (The live app you're using runs the current <b>Claude Sonnet 4.6</b>.)</p>
+      <p>How do we know if our simulation of SF is accurate? The honest test needs a model whose knowledge cutoff <i>predates</i> the event, so it can't have just memorized the outcome. The older Claude models with a 2023 cutoff have since been <b>retired</b> — so for this leakage-free backtest we ran <b>GPT-4o</b> (knowledge cutoff <b>October 2023</b>) and asked the twin city to predict results it had never seen. The live app now uses <b>Jev</b>; the historical scores below do not validate Jev's predictions. Jev selects structured decisions and factors; resident chatter and reactions use labeled illustrative templates.</p>
 
       <div class="about-ex">
         <div class="about-ex-title"><i>2024 Presidency</i></div>
