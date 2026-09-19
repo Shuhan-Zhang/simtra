@@ -2,4 +2,4 @@
 // Local pages use http://localhost:8080 by default (?port= overrides its port).
 // An empty value on a hosted page shows setup guidance; it does not call the old API.
 // API keys belong only in the Rust server environment, never in this file.
-window.SIMTRA_BACKEND = "https://playroom-immunize-saturate.ngrok-free.dev";
+window.SIMTRA_BACKEND = "";

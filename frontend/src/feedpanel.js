@@ -41,6 +41,11 @@ const TEST_KINDS = {
 
 // ── http ───────────────────────────────────────────────────────────────────
 async function req(path, { method = "GET", body, timeout = 30000 } = {}) {
+  if (new URLSearchParams(globalThis.location?.search || "").get("demo") === "1") {
+    const error = new Error("Live timeline is unavailable in the offline demo.");
+    error.status = 503;
+    throw error;
+  }
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeout);
   try {

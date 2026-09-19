@@ -23,7 +23,7 @@ import { createPersonaChart, answerLabel } from "./persona-chart.js?v=5";
 import { buildVerifiedDataModel, renderVerifiedData, bindVerifiedData, reduceVerifiedSelection, verifiedMapSelection } from "./verified-data.js";
 import { snapshotAudience, describeAudience, audienceHeader, audienceScope } from "./audience.js";
 import { initFeedPanel, refreshFeedPanel, lineageItems } from "./feedpanel.js?v=18";
-import { initTour, startTour } from "./tour.js?v=1";
+import { startTour } from "./tour.js?v=1";
 import { isFreshWorkspace } from "./workspace.js?v=2";
 import { prepareImage, stimulusText, attributesLine, MAX_STIMULI, esc as escStim } from "./stimulus.js?v=1";
 
@@ -550,7 +550,7 @@ async function boot() {
   }
 
   await loadCity(initial);
-  if (state.phase !== "error") initTour();
+  // Tips are available from Help; let the demo open directly into the city.
 }
 
 // Create (or re-create) the simulation for a city, point the map base/bbox at it,
@@ -564,7 +564,7 @@ async function loadCity(city, { filters = state.filters, preserveOnError = false
   const maskBase = `assets/${city.slug}_tiles.png`;
   if (city.bbox) MAP.bbox = { ...city.bbox };
   MAP.base = maskBase;
-  map.setSatellite(true);           // satellite imagery on (PR 3 had switched to flat local tiles)
+  map.setSatellite(!api.isDemo);    // offline demos use the bundled city tiles
   map.setBase(maskBase);
   syncActiveTitle();
 
