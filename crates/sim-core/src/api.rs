@@ -18,6 +18,7 @@ use crate::sim::{SimEngine, SimEvent};
 use crate::state::{AgentState, SimState};
 use crate::store::{SimMeta, Store};
 use axum::{
+    http::HeaderMap,
     extract::{Path, Query, State},
     http::StatusCode,
     response::sse::{Event as SseEvent, Sse},
@@ -89,9 +90,12 @@ pub fn router(state: AppState) -> Router {
         .allow_headers(Any);
     Router::new()
         .route("/health", get(health))
+        .route("/workspace", get(workspace_info))
+        .route("/workspace/seed", post(workspace_seed))
         .route("/", get(root))
         .route("/cities", get(list_cities))
         .route("/cities/:city/parse", post(parse_question_handler))
+        .route("/cities/:city/stimulus", post(describe_stimulus_handler))
         .route("/cities/:city/news", get(city_news))
         .route("/cities/:city/events", post(create_city_event))
         .route("/cities/:city/events", get(list_city_events))
@@ -121,11 +125,14 @@ pub fn router(state: AppState) -> Router {
         // answered question is remembered in the city's timeline when memory is on.
         .route("/data-query", post(data_query_handler))
         .with_state(state)
+        // image uploads: two downscaled JPEGs as base64 fit well under this
+        .layer(axum::extract::DefaultBodyLimit::max(24 * 1024 * 1024))
         .layer(cors)
 }
 
 async fn data_query_handler(
     State(st): State<AppState>,
+    headers: HeaderMap,
     payload: Result<Json<Value>, axum::extract::rejection::JsonRejection>,
 ) -> Json<Value> {
     let Json(input) = match payload {
@@ -177,6 +184,7 @@ async fn data_query_handler(
     let answered = response.get("status").and_then(|v| v.as_str()) == Some("ok");
     if let (Some(mem), true, false) = (st.memory.clone(), answered && record, city.is_empty()) {
         let snapshot = response.clone();
+        let city = crate::memory::city_key(&workspace_of(&headers), &city);
         tokio::spawn(async move {
             match mem.record_data_query(&city, &question, &snapshot).await {
                 Ok(rec) => tracing::info!("persona memory: recorded data query '{}' ({})", rec.question, rec.id),
@@ -185,6 +193,65 @@ async fn data_query_handler(
         });
     }
     Json(response)
+}
+
+/// Memory workspace of a request: the validated `X-Simtra-Workspace` header, else
+/// `public`. Workspaces scope events, reactions, tests, answers and data queries;
+/// simulations themselves are deterministic and shared.
+fn workspace_of(headers: &HeaderMap) -> String {
+    crate::memory::normalize_workspace(
+        headers
+            .get("x-simtra-workspace")
+            .and_then(|v| v.to_str().ok()),
+    )
+}
+
+/// Seed a brand-new workspace with example surveys and events copied from the
+/// public workspace (the sf / seed 42 / 10,000 population), so it never starts empty.
+async fn workspace_seed(State(st): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    let ws = workspace_of(&headers);
+    let Some(mem) = st.memory.as_ref() else {
+        return memory_not_configured();
+    };
+    if ws == crate::memory::PUBLIC_WORKSPACE {
+        return Json(json!({"workspace": ws, "seeded": false, "tests": 0, "events": 0})).into_response();
+    }
+    let Some(rt) = st.cities.get("sf") else {
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"error": "sf is not loaded"}))).into_response();
+    };
+    let pop = build_population_with(&rt.records, 10_000, 42, Some(&rt.tiles), rt.profile.clone());
+    match mem.seed_workspace(&ws, crate::memory::PUBLIC_WORKSPACE, &pop, 3).await {
+        Ok((tests, events)) => {
+            if tests + events > 0 {
+                tracing::info!("persona memory: seeded workspace {ws} with {tests} surveys and {events} events");
+            }
+            Json(json!({"workspace": ws, "seeded": tests + events > 0, "tests": tests, "events": events})).into_response()
+        }
+        Err(e) => {
+            tracing::warn!("persona memory: seeding {ws} failed: {e:#}");
+            (StatusCode::BAD_GATEWAY, Json(json!({"error": "workspace seeding failed"}))).into_response()
+        }
+    }
+}
+
+/// What the current workspace remembers, for the UI.
+async fn workspace_info(State(st): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    let ws = workspace_of(&headers);
+    let Some(mem) = st.memory.as_ref() else {
+        return Json(json!({"workspace": ws, "memory_configured": false, "events": 0, "tests": 0, "data_queries": 0}))
+            .into_response();
+    };
+    match mem.workspace_summary(&ws).await {
+        Ok((events, tests, data_queries)) => Json(json!({
+            "workspace": ws, "memory_configured": true,
+            "events": events, "tests": tests, "data_queries": data_queries,
+        }))
+        .into_response(),
+        Err(e) => {
+            tracing::warn!("persona memory: workspace summary failed: {e:#}");
+            (StatusCode::BAD_GATEWAY, Json(json!({"error":"persona memory read failed"}))).into_response()
+        }
+    }
 }
 
 async fn root() -> impl IntoResponse {
@@ -357,6 +424,7 @@ fn default_commit() -> u64 {
 
 async fn create_sim(
     State(st): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<CreateSimReq>,
 ) -> impl IntoResponse {
     let n = req.n.clamp(1, 50_000);
@@ -433,12 +501,13 @@ async fn create_sim(
     // Register personas in the memory graph (idempotent, best-effort, off the request path).
     if let Some(mem) = st.memory.clone() {
         let pop_for_mem = pop_arc.clone();
+        let ws = workspace_of(&headers);
         tokio::spawn(async move {
-            match mem.ensure_population(&pop_for_mem).await {
+            match mem.ensure_population(&ws, &pop_for_mem).await {
                 Ok(()) => tracing::info!(
                     "persona memory: registered {} personas for {}",
                     pop_for_mem.agents.len(),
-                    crate::memory::population_key_of(&pop_for_mem)
+                    crate::memory::population_key_in(&ws, &pop_for_mem)
                 ),
                 Err(e) => tracing::warn!("persona memory: population registration failed: {e:#}"),
             }
@@ -850,6 +919,7 @@ async fn branch_chatter(
 
 async fn branch_poll(
     State(st): State<AppState>,
+    headers: HeaderMap,
     Path(bid): Path<String>,
     Json(req): Json<Value>,
 ) -> impl IntoResponse {
@@ -869,7 +939,7 @@ async fn branch_poll(
     };
     match st
         .engine
-        .run_poll_tagged(&ctx.population, &poll, &TestTag::poll().on_branch(&ctx.id, &bid))
+        .run_poll_tagged(&ctx.population, &poll, &TestTag::poll().on_branch(&ctx.id, &bid).in_workspace(&workspace_of(&headers)))
         .await
     {
         Ok(res) => {
@@ -976,6 +1046,7 @@ struct CounterfactualResponse {
 
 async fn branch_counterfactual(
     State(st): State<AppState>,
+    headers: HeaderMap,
     Path(bid): Path<String>,
     Json(req): Json<CounterfactualReq>,
 ) -> impl IntoResponse {
@@ -999,7 +1070,7 @@ async fn branch_counterfactual(
             &ctx.population,
             &poll,
             event,
-            &TestTag::kind("counterfactual").on_branch(&ctx.id, &bid),
+            &TestTag::kind("counterfactual").on_branch(&ctx.id, &bid).in_workspace(&workspace_of(&headers)),
         )
         .await
     {
@@ -1099,6 +1170,7 @@ fn counterfactual_inputs(req: CounterfactualReq) -> Result<(Poll, Event), String
         population,
         event: None,
         options: Vec::new(),
+        stimulus: None,
     };
     let event = Event {
         text: marketing_event_text(&req.marketing_text),
@@ -1296,6 +1368,7 @@ fn map_ab_result(result: PollResult, profile: &CityProfile) -> AbTestResponse {
 
 async fn branch_ab_test(
     State(st): State<AppState>,
+    headers: HeaderMap,
     Path(bid): Path<String>,
     Json(req): Json<AbTestReq>,
 ) -> impl IntoResponse {
@@ -1325,7 +1398,7 @@ async fn branch_ab_test(
             &req.as_of_date,
             model,
             population,
-            &TestTag::kind("ab_test").on_branch(&ctx.id, &bid),
+            &TestTag::kind("ab_test").on_branch(&ctx.id, &bid).in_workspace(&workspace_of(&headers)),
         )
         .await
     {
@@ -1340,6 +1413,7 @@ async fn branch_ab_test(
 
 async fn predict_market(
     State(st): State<AppState>,
+    headers: HeaderMap,
     Path(bid): Path<String>,
     Json(req): Json<Value>,
 ) -> impl IntoResponse {
@@ -1394,13 +1468,14 @@ async fn predict_market(
         population: None,
         event: None,
         options: Vec::new(),
+        stimulus: None,
     };
     match st
         .engine
         .run_poll_tagged(
             &ctx.population,
             &poll,
-            &TestTag::kind("predict_market").on_branch(&ctx.id, &bid),
+            &TestTag::kind("predict_market").on_branch(&ctx.id, &bid).in_workspace(&workspace_of(&headers)),
         )
         .await
     {
@@ -1541,7 +1616,9 @@ fn poll_from_json(req: &Value) -> Result<Poll, String> {
         || options.iter().enumerate().any(|(i,s)| options[..i].contains(s))) {
         return Err("options framing requires 2–255 distinct nonempty choices".into());
     }
+    let stimulus = req.get("stimulus").and_then(crate::stimulus::Stimulus::from_value);
     Ok(Poll {
+        stimulus,
         question,
         description,
         framing,
@@ -1697,6 +1774,46 @@ fn short_hash(s: &str) -> String {
     hex::encode(&h.finalize()[..4])
 }
 
+/// Turn up to two uploaded images into neutral, editable stimulus attributes with
+/// a vision model. Residents later react to the confirmed attributes via
+/// `state.stimulus`; the pixels never reach Jev.
+async fn describe_stimulus_handler(
+    State(st): State<AppState>,
+    Path(_city): Path<String>,
+    Json(req): Json<Value>,
+) -> impl IntoResponse {
+    use crate::stimulus::{extract, ImageInput, MAX_IMAGES};
+    if !st.client.has_vision() {
+        return (StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error":"image input needs a vision model: set ANTHROPIC_API_KEY or GEMINI_API_KEY on the server"}))).into_response();
+    }
+    let images: Vec<ImageInput> = match req.get("images").cloned().map(serde_json::from_value) {
+        Some(Ok(v)) => v,
+        _ => return (StatusCode::BAD_REQUEST, Json(json!({"error":"images: [{media_type, data}] required"}))).into_response(),
+    };
+    if images.is_empty() || images.len() > MAX_IMAGES {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error": format!("send 1–{MAX_IMAGES} images")}))).into_response();
+    }
+    for image in &images {
+        if let Err(e) = image.validate() {
+            return (StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))).into_response();
+        }
+    }
+    let hint = req.get("question").and_then(Value::as_str).unwrap_or("");
+    let results = futures::future::join_all(images.iter().map(|img| extract(&st.client, img, hint))).await;
+    let mut stimuli = Vec::with_capacity(results.len());
+    for r in results {
+        match r {
+            Ok(s) => stimuli.push(s),
+            Err(e) => {
+                tracing::warn!("stimulus extraction failed: {e:#}");
+                return (StatusCode::BAD_GATEWAY, Json(json!({"error": format!("could not read the image: {e}")}))).into_response();
+            }
+        }
+    }
+    Json(json!({"stimuli": stimuli, "provider": st.client.vision_provider()})).into_response()
+}
+
 /// Parse a free-text question into a pollable spec (framing + options), or return a
 /// "not supported" reason with example phrasings. One LLM call.
 async fn parse_question_handler(
@@ -1809,6 +1926,7 @@ fn validate_event_request(req: &CreateEventReq) -> Result<(String, String, Strin
 /// Throw an event into a city's world. Every persona in that city remembers it.
 async fn create_city_event(
     State(st): State<AppState>,
+    headers: HeaderMap,
     Path(city): Path<String>,
     Json(req): Json<CreateEventReq>,
 ) -> impl IntoResponse {
@@ -1826,6 +1944,7 @@ async fn create_city_event(
     let Some(mem) = st.memory.as_ref() else {
         return memory_not_configured();
     };
+    let city = crate::memory::city_key(&workspace_of(&headers), &city);
     match mem.add_city_event(&city, &kind, &text, &as_of_date).await {
         Ok(event) => (StatusCode::CREATED, Json(json!({"event": event}))).into_response(),
         Err(e) => {
@@ -1846,6 +1965,7 @@ struct EventListQuery {
 
 async fn list_city_events(
     State(st): State<AppState>,
+    headers: HeaderMap,
     Path(city): Path<String>,
     Query(query): Query<EventListQuery>,
 ) -> impl IntoResponse {
@@ -1860,6 +1980,7 @@ async fn list_city_events(
         return memory_not_configured();
     };
     let limit = query.limit.unwrap_or(25).clamp(1, 100);
+    let city = crate::memory::city_key(&workspace_of(&headers), &city);
     match mem.list_city_events(&city, limit).await {
         Ok(events) => Json(json!({"events": events})).into_response(),
         Err(e) => {
@@ -1878,6 +1999,7 @@ async fn list_city_events(
 /// run of the same question.
 async fn city_lineage(
     State(st): State<AppState>,
+    headers: HeaderMap,
     Path(city): Path<String>,
     Query(query): Query<EventListQuery>,
 ) -> impl IntoResponse {
@@ -1892,7 +2014,7 @@ async fn city_lineage(
         return memory_not_configured();
     };
     let limit = query.limit.unwrap_or(100).clamp(1, 500);
-    match mem.lineage(&city, limit).await {
+    match mem.lineage(&workspace_of(&headers), &city, limit).await {
         Ok(items) => Json(json!({"items": items})).into_response(),
         Err(e) => {
             tracing::warn!("persona memory: lineage failed: {e:#}");
@@ -1908,6 +2030,7 @@ async fn city_lineage(
 /// One event with every stored resident reaction, newest first.
 async fn event_reactions(
     State(st): State<AppState>,
+    headers: HeaderMap,
     Path((city, event_id)): Path<(String, String)>,
     Query(query): Query<EventListQuery>,
 ) -> impl IntoResponse {
@@ -1922,6 +2045,7 @@ async fn event_reactions(
         return memory_not_configured();
     };
     let limit = query.limit.unwrap_or(50).clamp(1, 200);
+    let city = crate::memory::city_key(&workspace_of(&headers), &city);
     match mem.event_reactions(&city, &event_id, limit).await {
         Ok(Some((event, reactions))) => {
             let sentiment = crate::memory::sentiment_tally(&reactions);
@@ -1953,6 +2077,7 @@ struct ReactReq {
 /// social feed. Reactions are generated by the model, stored in memory, and returned.
 async fn react_to_event(
     State(st): State<AppState>,
+    headers: HeaderMap,
     Path((bid, event_id)): Path<(String, String)>,
     Json(req): Json<ReactReq>,
 ) -> impl IntoResponse {
@@ -1969,7 +2094,8 @@ async fn react_to_event(
     let Some(mem) = st.memory.as_ref() else {
         return memory_not_configured();
     };
-    let city = ctx.city.profile.slug.clone();
+    let ws = workspace_of(&headers);
+    let city = crate::memory::city_key(&ws, &ctx.city.profile.slug);
     let event = match mem.event_reactions(&city, &event_id, 1).await {
         Ok(Some((event, _))) => event,
         Ok(None) => {
@@ -2021,7 +2147,10 @@ async fn react_to_event(
             })
         })
         .collect();
-    let pop_key = crate::memory::population_key_of(&pop);
+    let pop_key = crate::memory::population_key_in(&ws, &pop);
+    if let Err(e) = mem.ensure_population(&ws, &pop).await {
+        tracing::warn!("persona memory: population registration failed: {e:#}");
+    }
     if let Err(e) = mem.record_reactions(&pop_key, &event_id, &reactions).await {
         tracing::warn!("persona memory: reactions write failed: {e:#}");
     }
@@ -2137,6 +2266,7 @@ struct PersonalAnswersReq {
 /// model call (capped per request) and written to their ANSWERED edge.
 async fn test_personal_answers(
     State(st): State<AppState>,
+    headers: HeaderMap,
     Path(test_id): Path<String>,
     Json(req): Json<PersonalAnswersReq>,
 ) -> impl IntoResponse {
@@ -2162,7 +2292,7 @@ async fn test_personal_answers(
         }
     };
     let (question, description, framing_name, options, as_of_date, population_key) = test;
-    let pop_key = crate::memory::population_key_of(&ctx.population);
+    let pop_key = crate::memory::population_key_in(&workspace_of(&headers), &ctx.population);
     if !population_key.is_empty() && population_key != pop_key {
         return (
             StatusCode::CONFLICT,
@@ -2197,7 +2327,10 @@ async fn test_personal_answers(
             "options" => Framing::Options,
             _ => Framing::Vote,
         };
-        let fragments: HashMap<u32, String> = match mem.recall(&pop_key, &missing, &as_of_date).await {
+        let fragments: HashMap<u32, String> = match mem
+            .recall(&workspace_of(&headers), &ctx.city.profile.slug, &pop_key, &missing, &as_of_date)
+            .await
+        {
             Ok(recalled) => recalled
                 .into_iter()
                 .map(|(id, m)| (id, crate::memory::prompt_fragment(&m)))
@@ -2243,6 +2376,7 @@ async fn test_personal_answers(
 
 async fn agent_memory(
     State(st): State<AppState>,
+    headers: HeaderMap,
     Path((bid, id)): Path<(String, u32)>,
 ) -> impl IntoResponse {
     let (ctx, _bs) = match find_branch(&st, &bid) {
@@ -2265,8 +2399,11 @@ async fn agent_memory(
     let Some(mem) = st.memory.as_ref() else {
         return memory_not_configured();
     };
-    let pop_key = crate::memory::population_key_of(&ctx.population);
-    match mem.persona_view(&pop_key, id).await {
+    let pop_key = crate::memory::population_key_in(&workspace_of(&headers), &ctx.population);
+    match mem
+        .persona_view(&workspace_of(&headers), &ctx.city.profile.slug, &pop_key, id)
+        .await
+    {
         Ok(view) => Json(view).into_response(),
         Err(e) => {
             tracing::warn!("persona memory: persona view failed: {e:#}");

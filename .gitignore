@@ -46,3 +46,4 @@ data/*.aux.xml
 .roo
 .trae
 .windsurf
+.vercel
