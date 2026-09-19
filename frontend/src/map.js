@@ -629,7 +629,27 @@ export class SFMap {
   setResearchResponses(groups, options) {
     const labels = residentResponseLabels(groups, options);
     this.hasResearchResponses = labels.size > 0;
-    for (const a of this.agents) a.response = labels.get(Number(a.seed)) || null;
+    // A head dot describes the resident's modeled response group, not an
+    // independently sampled vote. Only binary groups with a clear preference
+    // receive a color; missing estimates and ties stay neutral.
+    const verdicts = new Map();
+    if (options?.length === 2) {
+      for (const group of groups || []) {
+        const probabilities = group.probabilities;
+        const valid = residentResponseLabels([group], options).size > 0;
+        if (!valid) continue;
+        const verdict = probabilities[0] === probabilities[1] ? null : probabilities[0] > probabilities[1] ? "yes" : "no";
+        for (const id of group.agent_ids || []) verdicts.set(Number(id), verdict);
+      }
+    }
+    const now = performance.now();
+    for (const a of this.agents) {
+      a.response = labels.get(Number(a.seed)) || null;
+      a.verdict = verdicts.get(Number(a.seed)) || null;
+      a.activateAt = now - POP_MS;
+    }
+    this.clearFade = 1;
+    this.mode = this.hasResearchResponses ? "results" : "idle";
     this.bubbleT = 0;
   }
 

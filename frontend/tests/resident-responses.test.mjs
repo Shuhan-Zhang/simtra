@@ -42,3 +42,46 @@ test('map factors omit stored provider/debug labels',()=>{
  const labels=residentResponseLabels([{agent_ids:[1],probabilities:[.7,.3],factor:'Jev-selected factor (template): affordability. [Jev-selected template]'}],['Would buy','Would not buy']);
  assert.equal(labels.get(1),'Would buy · 70% · affordability.');
 });
+
+
+test('research head dots show exact group preferences and replace stale scenario colors', async()=>{
+ const {SFMap}=await import('../src/map.js');
+ const map={agents:[{seed:7},{seed:9},{seed:11},{seed:12}],mode:'clearing',clearFade:0};
+ SFMap.prototype.setResearchResponses.call(map,[
+  {agent_ids:[7],probabilities:[.8,.2]},
+  {agent_ids:[9],probabilities:[.1,.9]},
+  {agent_ids:[11],probabilities:[.5,.5]},
+ ],['Would buy','Would not buy']);
+ assert.deepEqual(map.agents.map(a=>a.verdict),['yes','no',null,null]);
+ assert.equal(map.mode,'results');assert.equal(map.clearFade,1);
+ assert.ok(map.agents.every(a=>a.activateAt<=performance.now()));
+ SFMap.prototype.setResearchResponses.call(map,[{agent_ids:[7],probabilities:[.2,.8]}],['Would buy','Would not buy']);
+ assert.deepEqual(map.agents.map(a=>a.verdict),['no',null,null,null]);
+ SFMap.prototype.setResearchResponses.call(map,[{agent_ids:[7],probabilities:[.2,.2]}],['Would buy','Would not buy']);
+ assert.ok(map.agents.every(a=>a.verdict===null));assert.equal(map.mode,'idle');
+});
+
+test('nonbinary response groups never imply red/green yes-no preferences',async()=>{
+ const {SFMap}=await import('../src/map.js');
+ const map={agents:[{seed:7}]};
+ SFMap.prototype.setResearchResponses.call(map,[{agent_ids:[7],probabilities:[.1,.7,.2]}],['A','B','C']);
+ assert.equal(map.agents[0].verdict,null);
+ assert.equal(map.agents[0].response,'B · 70%');
+});
+
+test('research results render green and red head markers, not merely labels',async()=>{
+ const {SFMap}=await import('../src/map.js');
+ const fills=[];
+ const ctx={beginPath(){},arc(){},fill(){fills.push(this.fillStyle)},stroke(){},fillRect(){}};
+ const map=Object.assign(Object.create(SFMap.prototype),{
+  ctx,cam:{zoom:1},cssW:400,cssH:400,reducedMotion:true,spriteReady:false,
+  _segmentResult:{summary:{active:false}},worldToScreen:(x,y)=>({x,y}),_isLand:()=>true,
+  agents:[7,9,11].map((seed,i)=>({seed,wx:50+i*50,wy:100,ang:0,speed:0,turnClock:1,frameClock:0,char:0})),
+ });
+ map.setResearchResponses([{agent_ids:[7],probabilities:[.8,.2]},{agent_ids:[9],probabilities:[.2,.8]}],['Yes','No']);
+ map._drawSprites(performance.now(),0);
+ assert.equal(fills.length,2);
+ assert.notEqual(fills[0],fills[1]);
+ map.clearVerdicts();fills.length=0;map._drawSprites(performance.now(),0);
+ assert.deepEqual(fills,[]);
+});

@@ -128,3 +128,72 @@
 .ex-factor-grid span,.ex-factor-grid small{display:block;font-size:11px;line-height:1.5;overflow-wrap:anywhere}
 .ex-factor-grid strong{display:block;font-size:36px;font-weight:500;margin:8px 0}
 .ex-impact{margin:24px 0}.ex-impact h3{font-size:14px}.ex-impact>div{display:flex;justify-content:space-between;border-bottom:1px solid #8882;padding:10px 0;font-size:13px}.ex-impact small{display:block;font-size:11px;color:#888;margin-top:3px}
+
+
+/* A readable, nonmodal workspace alongside the city. */
+.experiment-card {
+  --ink-2: #414851;
+  --ink-3: #59616c;
+  position: fixed; z-index: 8; inset: 16px 16px 16px auto;
+  width: min(560px, 44vw); max-height: none;
+  padding: 24px; font-size: 16px; line-height: 1.5;
+  border-radius: 24px; background: #fcfcfd;
+}
+.ex-header { position: sticky; top: -24px; z-index: 2; background: #fcfcfd; padding: 14px 0; margin-top: -14px; }
+.ex-header-tools { min-width: 0; }
+.ex-header select { width: 120px; font-size: 14px; color: var(--ink-2); }
+.ex-close { width: 36px; height: 36px; }
+.ex-kicker { font-size: 13px; }
+.experiment-card h2 { font-size: 30px; line-height: 1.15; }
+.ex-question { font-size: 18px; }
+.ex-audience, .ex-context, .ex-note, .ex-demo, .ex-foot, .ex-details,
+.ex-selected small, .ex-faces > span, .ex-metrics span, .ex-chart-label,
+.ex-curve-controls label, .ex-curve-controls select, .ex-person-head small,
+.ex-person-result, .ex-rank-main small, .ex-rank-number, .ex-impact small,
+.ex-next, .ex-plan-summary > span, .ex-steer > span, .ex-steer small { font-size: 14px; }
+.ex-details { padding: 16px 0; }
+.ex-rank-main strong, .ex-person-story, .ex-selected, .ex-impact > div { font-size: 16px; }
+.ex-impact h3 { font-size: 20px; }
+.ex-impact small { color: var(--ink-3); }
+.ex-metrics strong { font-size: 32px; }
+.ex-metrics { gap: 14px; margin: 24px 0; }
+.ex-chart-label { font-weight: 600; margin: 22px 0 10px; }
+.ex-curve-controls { grid-template-columns: 1fr; gap: 10px; }
+.ex-curve-controls select { padding: 10px 12px; }
+.ex-curve .pc-axis { font-size: 18px; fill: #49515c; }
+.ex-curve { overflow: visible; }
+.ex-map-key { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 20px 0; font-size: 14px; }
+.ex-map-key > span { display: inline-flex; align-items: center; gap: 7px; }
+.ex-map-key i { width: 9px; height: 9px; border-radius: 50%; background: #e25359; }
+.ex-map-key i.yes { background: #299967; }
+.ex-map-key small { width: 100%; color: var(--ink-3); font-size: 14px; }
+body.experiment-open .feed-panel { visibility: hidden; pointer-events: none; }
+@media (min-width: 901px) {
+  body.experiment-open .dock { left: 16px; transform: none; width: calc(100vw - min(560px, 44vw) - 48px); }
+  body.experiment-open .dock-row { width: 100%; justify-content: center; }
+  body.experiment-open .ask { max-width: 100%; min-width: 0; }
+  body.experiment-open .dock-tool-spacer { display: none; }
+}
+@media (max-width: 900px) {
+  .experiment-card { top: 148px; bottom: 170px; right: 12px; width: min(540px, calc(100vw - 24px)); padding: 20px; }
+  body.offline-demo .experiment-card { top: 190px; max-height: none; }
+  .ex-header { top: -20px; }
+}
+@media (max-width: 600px) {
+  .experiment-card { border-radius: 20px; padding: 18px; font-size: 16px; }
+  .ex-header { top: -18px; flex-wrap: wrap; gap: 4px; }
+  .ex-header-tools { margin-left: auto; }
+  .experiment-card h2 { font-size: 28px; }
+  .ex-metrics strong { font-size: 28px; }
+  .ex-metrics span { font-size: 14px; }
+  .ex-rank-value { font-size: 18px; }
+  .ex-curve .pc-axis { font-size: 22px; }
+  .ex-factor-grid { grid-template-columns: 1fr; }
+}
+
+.ex-history-list { display: grid; gap: 12px; margin: 20px 0; }
+.ex-history-entry { width: 100%; text-align: left; padding: 16px; border: 1px solid var(--sep); border-radius: 14px; background: white; color: var(--ink); }
+.ex-history-entry:hover { border-color: var(--accent); background: #f2f7ff; }
+.ex-history-entry strong { display: block; font-size: 18px; line-height: 1.4; }
+.ex-history-entry span, .ex-history-entry time { display: block; margin-top: 6px; font-size: 14px; color: var(--ink-2); }
+.ex-history-trigger { font-size: 15px !important; white-space: nowrap; }

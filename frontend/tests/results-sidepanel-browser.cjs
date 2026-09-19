@@ -1,0 +1,36 @@
+// Verify the result panel and map remain one interactive workspace.
+const {chromium}=require(process.env.SIMTRA_PLAYWRIGHT || 'playwright');
+const assert=require('node:assert/strict');
+(async()=>{const browser=await chromium.launch({channel:'chrome',headless:true});try{
+ const page=await browser.newPage({viewport:{width:1440,height:1000},reducedMotion:'reduce'});
+ const errors=[];page.on('pageerror',e=>errors.push(String(e)));
+ await page.goto((process.env.SIMTRA_TEST_BASE||'http://127.0.0.1:5198')+'/?demo=1');
+ await page.evaluate(async()=>{window.panelTestApp=await import(document.querySelector('script[type=module]').src);});
+ await page.waitForFunction(()=>panelTestApp.state.phase==='idle');
+ await page.locator('#ask-input').fill('I want to raise Chipotle bowl prices in SF by 20%');
+ await page.locator('#ask-submit').click();
+ await page.locator('.ex-rank').first().waitFor({timeout:30000});
+ const geometry=await page.locator('#research-workspace').evaluate(el=>({rect:el.getBoundingClientRect().toJSON(),body:parseFloat(getComputedStyle(el).fontSize),label:parseFloat(getComputedStyle(el.querySelector('.ex-curve .pc-axis')).fontSize)}));
+ assert.ok(geometry.rect.x>800 && geometry.rect.width<=560,'results dock on the right, exposing the map');
+ assert.ok(geometry.body>=16 && geometry.label>=18,'body and chart labels are readable');
+ const hit=await page.evaluate(()=>{
+  const {map,state}=panelTestApp;
+  const a=map.agents[Math.floor(map.agents.length/2)];
+  for(const sprite of map.agents)sprite.speed=0;
+  map.cam={x:a.wx,y:a.wy,zoom:4};map.camTarget={...map.cam};map.zoomedIn=true;
+  const point=map.worldToScreen(a.wx,a.wy),x=point.x,y=point.y-8;
+  const sprite=map._hitSprite(x,y);if(!sprite)throw Error('No resident under test pointer');
+  const r=map.canvas.getBoundingClientRect();
+  return {x:r.left+x,y:r.top+y,name:state.rawResidents.find(p=>p.id===sprite.seed).name};
+ });
+ await page.mouse.click(hit.x,hit.y);
+ await page.locator('#experiment-person:not([hidden])').waitFor();
+ assert.equal(await page.locator('.ex-person-head strong').innerText(),hit.name);
+ assert.equal(await page.locator('.ex-person-result').count(),24);
+ await page.setViewportSize({width:390,height:844});
+ await page.locator('#research-workspace').evaluate(el=>el.scrollTop=0);
+ const mobile=await page.locator('#research-workspace').evaluate(el=>({rect:el.getBoundingClientRect().toJSON(),scroll:el.scrollWidth,client:el.clientWidth}));
+ assert.equal(mobile.scroll,mobile.client);assert.ok(mobile.rect.x>=0&&mobile.rect.right<=390&&mobile.rect.bottom<=844);
+ assert.deepEqual(errors,[]);
+ console.log('PASS right results panel, larger text, actual map click selects matching resident, 24 scenario details and mobile bounds');
+}finally{await browser.close();}})().catch(e=>{console.error(e);process.exit(1)});

@@ -204,15 +204,25 @@ function syncFilterButton() {
   els.returnBtn.setAttribute("aria-label", count ? "Return to the sampled audience overview" : "Return to the whole city");
 }
 
-// Sparse, cached resident voices are returned with exact resident IDs.
+// Share in-flight requests between ambient bubbles and the selected resident.
+const pendingChatter = new Map();
 async function requestChatter(ids) {
   if (state.queryMode === "verified" || !state.mainBranch || !ids?.length) return;
-  const branch=state.mainBranch;
-  try {
-    const data=await api.getChatter(branch,ids);
-    if(branch!==state.mainBranch)return;
-    for(const [id,text] of Object.entries(data?.chatter || {})) map.setThought(Number(id),text);
-  } catch { /* No invented voice replaces a failed provider response. */ }
+  const branch = state.mainBranch;
+  const key = id => `${branch}:${id}`;
+  const missing = [...new Set(ids)].filter(id => !map.thoughts.has(Number(id)) && !pendingChatter.has(key(id)));
+  if (missing.length) {
+    const request = (async () => {
+      try {
+        const data = await api.getChatter(branch, missing);
+        if (branch !== state.mainBranch) return;
+        for (const [id, text] of Object.entries(data?.chatter || {})) map.setThought(Number(id), text);
+      } catch { /* No invented voice replaces a failed provider response. */ }
+      finally { for (const id of missing) pendingChatter.delete(key(id)); }
+    })();
+    for (const id of missing) pendingChatter.set(key(id), request);
+  }
+  await Promise.all(ids.map(id => pendingChatter.get(key(id))));
 }
 map.onNeedChatter=requestChatter;
 
@@ -2191,8 +2201,11 @@ els.returnBtn.addEventListener("click", () => { map.returnToOverview(); });
 
 // ── character inspector (tap a character when zoomed in) ────────────────────
 const charOpen = () => !els.charCard.classList.contains("hidden");
+let charCardRevision = 0;
 function closeCharCard() {
-  clearEvidenceSelection(); stopTyping(); hide(els.charCard); }
+  charCardRevision++;
+  clearEvidenceSelection(); stopTyping(); hide(els.charCard);
+}
 
 // ── typewriter ──
 // After a poll a resident "speaks" their rationale into a speech bubble. Only
@@ -2234,6 +2247,8 @@ function showCharCard(s) {
   if (research?.showingResults) return;
   els.charCard.setAttribute("aria-label", "Resident details");
   if (!s || !s.name) return;                 // offline-preview agents have no persona
+  const revision = ++charCardRevision;
+  const branch = state.mainBranch;
   const v = s.values || {};
   const dem = [
     s.age != null ? `${s.age}` : null,
@@ -2246,7 +2261,7 @@ function showCharCard(s) {
   const isPoll = Boolean(s.response);
   const label = isPoll ? "Modeled group response" : "thinking";
   const labelClass = isPoll ? (s.verdict === "yes" ? "yes" : "no") : "";
-  const thought = s.response || s.thought;
+  const thought = s.response || map.thoughts.get(Number(s.seed)) || s.thought;
   const speech = thought || "…";
   const identity = (extra = "") => `
     <div class="char-id">
@@ -2288,13 +2303,30 @@ function showCharCard(s) {
       ${tagRow}
       <div class="char-think">
         <div class="char-label ${labelClass}">${label}</div>
-        <div class="char-thought">“${escapeHtml(speech)}”</div>
+        <div class="char-thought" role="status" aria-busy="true">Thinking…</div>
       </div>`;
 
   show(els.charCard);
   $("char-close").addEventListener("click", closeCharCard);
   map.drawCharTo($("char-portrait"), s.char);
   if (isPoll) typeInto($("char-typed"), speech, $("char-caret"));
+  else {
+    const reveal = text => {
+      if (revision !== charCardRevision || branch !== state.mainBranch || !charOpen()) return;
+      const el = els.charCard.querySelector(".char-thought");
+      el.setAttribute("aria-busy", "false");
+      els.charCard.querySelector(".char-label").textContent = text ? "Recent thought" : "Thought unavailable";
+      if (!text) {
+        el.textContent = "Couldn't load this thought. Open this resident again to retry.";
+        return;
+      }
+      el.setAttribute("aria-label", text);
+      el.innerHTML = '“<span id="char-typed" aria-hidden="true"></span><span id="char-caret" class="char-caret" aria-hidden="true"></span>”';
+      typeInto($("char-typed"), text, $("char-caret"));
+    };
+    if (thought) reveal(thought);
+    else requestChatter([Number(s.seed)]).then(() => reveal(map.thoughts.get(Number(s.seed))));
+  }
 }
 map.onSpriteTap = showCharCard;
 map.onEmptyTap = () => { if (charOpen()) { closeCharCard(); return true; } return false; };
