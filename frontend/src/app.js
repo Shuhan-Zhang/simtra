@@ -2242,13 +2242,72 @@ function topIssues(v, n = 2) {
   if (!v) return [];
   return Object.keys(ISSUE_LABEL).map((k) => [ISSUE_LABEL[k], v[k] ?? 0]).sort((a, b) => b[1] - a[1]).slice(0, n).map((x) => x[0]);
 }
-function showCharCard(sprite) {
-  if (!sprite) return;
-  if (research?.showingResults) { void research.inspect(sprite.id); return; }
-  const resident=state.rawResidents.find(r=>r.id===sprite.id);
-  if(resident) void openPersonaModal(resident,null,{thought:sprite.thought});
-}
+function showCharCard(s) {
+  if (research?.showingResults) return;
+  els.charCard.setAttribute("aria-label", "Resident details");
+  if (!s || !s.name) return;                 // offline-preview agents have no persona
+  const v = s.values || {};
+  const dem = [
+    s.age != null ? `${s.age}` : null,
+    RACE_LABEL[s.race] || s.race,
+    EDUC_LABEL[s.educ] || s.educ,
+    s.job,
+  ].filter(Boolean).join(" · ");
+  const tags = [leanLabel(v.economic, "economically left", "economically right"), leanLabel(v.social, "socially progressive", "socially conservative")].filter(Boolean);
+  const issues = topIssues(v, 2);
+  const isPoll = Boolean(s.response);
+  const label = isPoll ? "Modeled group response" : "thinking";
+  const labelClass = isPoll ? (s.verdict === "yes" ? "yes" : "no") : "";
+  const thought = s.response || s.thought;
+  const speech = thought || "…";
+  const identity = (extra = "") => `
+    <div class="char-id">
+      <div class="char-name">${escapeHtml(s.name)}</div>
+      <div class="char-sub">${escapeHtml(dem)}${s.hood ? " · " + escapeHtml(s.hood) : ""}</div>
+      ${extra}
+    </div>`;
+  const tagRow = `
+    <div class="char-tags">
+      ${tags.map((t) => `<span class="char-tag">${escapeHtml(t)}</span>`).join("")}
+      ${issues.map((i) => `<span class="char-tag issue">cares about ${escapeHtml(i)}</span>`).join("")}
+    </div>`;
 
+  stopTyping();
+  els.charCard.classList.toggle("char-card--spotlight", isPoll);
+
+  // After a poll the resident is the subject: a big portrait, and the
+  // rationale delivered as speech rather than as a quoted field.
+  els.charCard.innerHTML = isPoll
+    ? `
+      <button id="char-close" class="char-close" aria-label="Close">×</button>
+      <div class="char-speech" role="note" aria-label="${escapeHtml(speech)}">
+        <p class="char-speech-text" aria-hidden="true">
+          <span class="char-speech-ghost">${escapeHtml(speech)}</span>
+          <span class="char-speech-typed"><span id="char-typed"></span><span id="char-caret" class="char-caret"></span></span>
+        </p>
+      </div>
+      <div class="char-head">
+        <canvas id="char-portrait" class="char-portrait" width="96" height="96"></canvas>
+        ${identity(`<span class="char-verdict ${labelClass}">${escapeHtml(label)}</span>`)}
+      </div>
+      ${tagRow}`
+    : `
+      <button id="char-close" class="char-close" aria-label="Close">×</button>
+      <div class="char-head">
+        <canvas id="char-portrait" class="char-portrait" width="46" height="46"></canvas>
+        ${identity()}
+      </div>
+      ${tagRow}
+      <div class="char-think">
+        <div class="char-label ${labelClass}">${label}</div>
+        <div class="char-thought">“${escapeHtml(speech)}”</div>
+      </div>`;
+
+  show(els.charCard);
+  $("char-close").addEventListener("click", closeCharCard);
+  map.drawCharTo($("char-portrait"), s.char);
+  if (isPoll) typeInto($("char-typed"), speech, $("char-caret"));
+}
 map.onSpriteTap = showCharCard;
 map.onEmptyTap = () => { if (charOpen()) { closeCharCard(); return true; } return false; };
 
